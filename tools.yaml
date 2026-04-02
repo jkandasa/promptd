@@ -1,0 +1,14 @@
+# Remote tool servers to load at startup.
+# Each entry must point to a running toolserver-compatible HTTP server.
+# The chatbot will call GET /describe on startup to fetch tool metadata,
+# then POST /execute at runtime to invoke the tool.
+#
+# Unreachable or misconfigured entries are skipped with a warning — they
+# will not prevent the chatbot from starting.
+#
+# Example:
+# tools:
+#   - url: http://localhost:9001   # wordcount
+#   - url: http://localhost:9002   # your custom tool
+
+tools: []
