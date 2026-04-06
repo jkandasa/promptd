@@ -1,0 +1,51 @@
+# Server configuration for chatbot
+#
+# Usage: ./chatbot -config ./config.yaml
+
+server:
+  # HTTP port the chatbot listens on
+  port: "8080"
+
+llm:
+  # Required: API key for your LLM provider
+  api_key: ""
+
+  # Base URL of OpenAI-compatible API (default: OpenRouter)
+  base_url: "https://openrouter.ai/api/v1"
+
+  # Model identifier (default: claude-sonnet-4-6)
+  model: "claude-sonnet-4-6"
+
+log:
+  # Log level: debug, info, warn, error (default: info)
+  level: "info"
+
+mcp:
+  # List of MCP servers to connect at startup
+  servers:
+    # Example server (comment out or set disabled: true to skip)
+    # - name: "my-server"
+    #   url: "http://localhost:8081/mcp"
+    #   auth:
+    #     token: "your-auth-token"  # Optional: auth token
+    #   headers:
+    #     X-Custom-Header: "value"  # Optional: custom headers
+    #   disabled: false  # Optional: set to true to skip this server
+
+tools:
+  # Optional: path to a .txt file containing system prompt
+  # system_prompt_file: "/path/to/prompt.txt"
+
+ui:
+  # Optional: Welcome screen title
+  # welcome_title: "How can I help you today?"
+
+  # Optional: AI disclaimer shown below title (default: "AI can make mistakes. Verify important info.")
+  # ai_disclaimer: "AI can make mistakes. Verify important info."
+
+  # Optional: Quick prompt suggestions shown on welcome screen
+  prompt_suggestions:
+  #  - "Explain how this works"
+  #  - "Help me write code"
+  #   - "Summarize the key points"
+  #   - "What are best practices?"
