@@ -11,6 +11,7 @@ import (
 	"chatbot/internal/chat"
 	"chatbot/internal/handler"
 	"chatbot/internal/tools"
+	"chatbot/internal/ui"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -102,7 +103,7 @@ func main() {
 
 	systemPrompt := loadSystemPrompt(logger)
 	store := chat.NewSessionStore()
-	h := handler.New(apiKey, baseURL, model, systemPrompt, registry, store, logger)
+	h := handler.New(apiKey, baseURL, model, systemPrompt, registry, store, logger, ui.FS())
 	th := handler.NewToolsHandler(registry, monitor, logger)
 
 	mux := http.NewServeMux()

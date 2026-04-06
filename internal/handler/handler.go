@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"strings"
+	"time"
 
 	"chatbot/internal/chat"
 	"chatbot/internal/llmlog"
@@ -22,9 +25,10 @@ type Handler struct {
 	registry     *tools.Registry
 	store        *chat.SessionStore
 	log          *zap.Logger
+	staticFS     fs.FS
 }
 
-func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger) *Handler {
+func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
@@ -35,6 +39,7 @@ func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, 
 		registry:     registry,
 		store:        store,
 		log:          log,
+		staticFS:     staticFS,
 	}
 }
 
@@ -181,9 +186,31 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ServeUI is an SPA-aware static file handler.
+// Known assets (anything with a real file extension) are served directly.
+// All other paths fall back to index.html so client-side routing works.
 func (h *Handler) ServeUI(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+
+	// Try to open the requested path in the embedded FS.
+	f, err := h.staticFS.Open(path)
+	if err == nil {
+		f.Close()
+		// File exists — serve it directly.
+		http.FileServer(http.FS(h.staticFS)).ServeHTTP(w, r)
+		return
+	}
+
+	// Unknown path → serve index.html (SPA fallback).
+	index, err := h.staticFS.Open("index.html")
+	if err != nil {
+		http.Error(w, "ui not found", http.StatusNotFound)
+		return
+	}
+	defer index.Close()
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, htmlUI)
+	http.ServeContent(w, r, "index.html", time.Time{}, index.(io.ReadSeeker))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
