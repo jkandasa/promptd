@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,23 +12,83 @@ import (
 
 	"chatbot/internal/chat"
 	"chatbot/internal/handler"
+	"chatbot/internal/mcp"
 	"chatbot/internal/tools"
 	"chatbot/internal/ui"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v3"
 )
 
-func buildLogger() *zap.Logger {
-	level := zapcore.InfoLevel
-	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
-		if err := level.UnmarshalText([]byte(lvl)); err != nil {
-			level = zapcore.InfoLevel
-		}
+type Config struct {
+	Server struct {
+		Port string `yaml:"port"`
+	} `yaml:"server"`
+	LLM struct {
+		APIKey  string `yaml:"api_key"`
+		BaseURL string `yaml:"base_url"`
+		Model   string `yaml:"model"`
+	} `yaml:"llm"`
+	Log struct {
+		Level string `yaml:"level"`
+	} `yaml:"log"`
+	MCP struct {
+		Servers []MCPServerConfig `yaml:"servers"`
+	} `yaml:"mcp"`
+	Tools struct {
+		SystemPromptFile string `yaml:"system_prompt_file"`
+	} `yaml:"tools"`
+	UI struct {
+		WelcomeTitle      string   `yaml:"welcome_title"`
+		AIDisclaimer      string   `yaml:"ai_disclaimer"`
+		PromptSuggestions []string `yaml:"prompt_suggestions"`
+	} `yaml:"ui"`
+}
+
+type MCPServerConfig struct {
+	Name     string            `yaml:"name"`
+	URL      string            `yaml:"url"`
+	Auth     map[string]string `yaml:"auth"`
+	Headers  map[string]string `yaml:"headers"`
+	Disabled bool              `yaml:"disabled"`
+}
+
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	if cfg.Server.Port == "" {
+		cfg.Server.Port = "8080"
+	}
+	if cfg.LLM.BaseURL == "" {
+		cfg.LLM.BaseURL = "https://openrouter.ai/api/v1"
+	}
+	if cfg.LLM.Model == "" {
+		cfg.LLM.Model = "anthropic/claude-sonnet-4-6"
+	}
+	if cfg.Log.Level == "" {
+		cfg.Log.Level = "info"
+	}
+
+	return &cfg, nil
+}
+
+func buildLogger(level string) *zap.Logger {
+	lvl := zapcore.InfoLevel
+	if err := lvl.UnmarshalText([]byte(level)); err != nil {
+		lvl = zapcore.InfoLevel
 	}
 
 	cfg := zap.NewDevelopmentConfig()
-	cfg.Level = zap.NewAtomicLevelAt(level)
+	cfg.Level = zap.NewAtomicLevelAt(lvl)
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
@@ -34,91 +96,97 @@ func buildLogger() *zap.Logger {
 	return logger
 }
 
-func loadSystemPrompt(logger *zap.Logger) string {
-	path := os.Getenv("SYSTEM_PROMPT_FILE")
-	if path == "" {
-		logger.Info("no system prompt configured")
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		logger.Fatal("failed to read system prompt file", zap.String("path", path), zap.Error(err))
-	}
-	logger.Info("system prompt loaded", zap.String("path", path))
-	return string(data)
-}
-
-func buildRegistry(monitor *tools.Monitor, logger *zap.Logger) *tools.Registry {
+func buildRegistry(logger *zap.Logger) *tools.Registry {
 	registry := tools.NewRegistry()
-
-	// Built-in tools — always available, not health-checked.
 	registry.Register(tools.DateTimeTool{})
-	registry.Register(tools.CalculatorTool{})
-	logger.Info("built-in tools registered", zap.Strings("tools", []string{"get_current_datetime", "calculate"}))
-
-	// Static remote tools from tools.yaml (also health-checked by the monitor).
-	configPath := os.Getenv("TOOLS_CONFIG")
-	if configPath == "" {
-		configPath = "tools.yaml"
-	}
-	if err := tools.LoadFromConfig(configPath, registry, monitor, logger); err != nil {
-		logger.Fatal("failed to load remote tools", zap.Error(err))
-	}
-
+	logger.Info("built-in tools registered", zap.Strings("tools", []string{"get_current_datetime"}))
 	return registry
 }
 
 func main() {
-	logger := buildLogger()
+	configPath := flag.String("config", "./config.yaml", "Path to config file")
+	flag.Parse()
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger := buildLogger(cfg.Log.Level)
 	defer logger.Sync()
 
-	apiKey := os.Getenv("LLM_API_KEY")
-	if apiKey == "" {
-		logger.Fatal("LLM_API_KEY environment variable is required")
-	}
-
-	baseURL := os.Getenv("LLM_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://openrouter.ai/api/v1"
-	}
-
-	model := os.Getenv("MODEL")
-	if model == "" {
-		model = "anthropic/claude-sonnet-4-6"
-	}
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	if cfg.LLM.APIKey == "" {
+		logger.Fatal("LLM API key is required in config")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	monitor := tools.NewMonitor(nil, logger) // registry set after creation below
-	registry := buildRegistry(monitor, logger)
-	monitor.SetRegistry(registry)
+	registry := buildRegistry(logger)
 
-	go monitor.Run(ctx)
+	mcpManager := mcp.NewManager(registry, logger)
 
-	systemPrompt := loadSystemPrompt(logger)
+	for _, sc := range cfg.MCP.Servers {
+		if sc.Disabled {
+			logger.Info("MCP server skipped (disabled)", zap.String("name", sc.Name), zap.String("url", sc.URL))
+			continue
+		}
+		_, err := mcpManager.Register(ctx, sc.URL, sc.Auth, sc.Headers)
+		if err != nil {
+			logger.Warn("failed to register MCP server", zap.String("name", sc.Name), zap.String("url", sc.URL), zap.Error(err))
+		} else {
+			logger.Info("MCP server registered", zap.String("name", sc.Name), zap.String("url", sc.URL))
+		}
+	}
+
+	go mcpManager.StartHealthMonitor(ctx)
+
+	var systemPrompt string
+	if cfg.Tools.SystemPromptFile != "" {
+		data, err := os.ReadFile(cfg.Tools.SystemPromptFile)
+		if err != nil {
+			logger.Fatal("failed to read system prompt file", zap.String("path", cfg.Tools.SystemPromptFile), zap.Error(err))
+		}
+		systemPrompt = string(data)
+		logger.Info("system prompt loaded", zap.String("path", cfg.Tools.SystemPromptFile))
+	}
+
 	store := chat.NewSessionStore()
-	h := handler.New(apiKey, baseURL, model, systemPrompt, registry, store, logger, ui.FS())
-	th := handler.NewToolsHandler(registry, monitor, logger)
+	uiConfig := handler.UIConfig{
+		WelcomeTitle:      cfg.UI.WelcomeTitle,
+		AIDisclaimer:      cfg.UI.AIDisclaimer,
+		PromptSuggestions: cfg.UI.PromptSuggestions,
+	}
+	if uiConfig.WelcomeTitle == "" {
+		uiConfig.WelcomeTitle = "How can I help you today?"
+	}
+	if uiConfig.AIDisclaimer == "" {
+		uiConfig.AIDisclaimer = "AI can make mistakes. Verify important info."
+	}
+	if len(uiConfig.PromptSuggestions) == 0 {
+		uiConfig.PromptSuggestions = []string{
+			"Explain how this works",
+			"Help me write code",
+			"Summarize the key points",
+			"What are best practices?",
+		}
+	}
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, systemPrompt, registry, store, logger, ui.FS(), uiConfig)
+	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.ServeUI)
 	mux.HandleFunc("POST /chat", h.Chat)
 	mux.HandleFunc("POST /reset", h.Reset)
-	mux.HandleFunc("POST /tools/register", th.Register)
-	mux.HandleFunc("DELETE /tools/unregister", th.Unregister)
-	mux.HandleFunc("GET /tools", th.List)
+	mux.HandleFunc("GET /mcp", mcpHandler.List)
+	mux.HandleFunc("GET /ui-config", h.UIConfig)
 
-	addr := ":" + port
+	addr := ":" + cfg.Server.Port
 	srv := &http.Server{Addr: addr, Handler: mux}
 
 	go func() {
-		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.String("model", model), zap.String("baseUrl", baseURL))
+		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.String("model", cfg.LLM.Model), zap.String("baseUrl", cfg.LLM.BaseURL))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server error", zap.Error(err))
 		}
@@ -126,6 +194,8 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("shutting down...")
+
+	mcpManager.StopHealthMonitor()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

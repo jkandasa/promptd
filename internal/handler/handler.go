@@ -26,9 +26,16 @@ type Handler struct {
 	store        *chat.SessionStore
 	log          *zap.Logger
 	staticFS     fs.FS
+	uiConfig     UIConfig
 }
 
-func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS) *Handler {
+type UIConfig struct {
+	WelcomeTitle      string   `json:"welcomeTitle"`
+	AIDisclaimer      string   `json:"aiDisclaimer"`
+	PromptSuggestions []string `json:"promptSuggestions"`
+}
+
+func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
@@ -40,6 +47,7 @@ func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, 
 		store:        store,
 		log:          log,
 		staticFS:     staticFS,
+		uiConfig:     uiConfig,
 	}
 }
 
@@ -49,7 +57,8 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
-	Reply string `json:"reply"`
+	Reply     string  `json:"reply"`
+	TimeTaken float64 `json:"time_taken_ms"`
 }
 
 type errorResponse struct {
@@ -160,6 +169,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		req.SessionID = "default"
 	}
 
+	start := time.Now()
+
 	session := h.store.Get(req.SessionID)
 	session.Add(openai.ChatMessageRoleUser, req.Message)
 
@@ -170,8 +181,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply})
+	timeTaken := time.Since(start).Milliseconds()
+	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken))
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, TimeTaken: float64(timeTaken)})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -217,4 +229,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.uiConfig)
 }

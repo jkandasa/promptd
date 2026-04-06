@@ -1,9 +1,6 @@
-PORT               ?= 8080
-LOG_LEVEL          ?= info
-SYSTEM_PROMPT_FILE ?=
-TOOLS_CONFIG       ?= tools.yaml
-LLM_BASE_URL       ?=
-LLM_API_KEY        ?=
+# Makefile for chatbot
+
+CONFIG ?= ./config.yaml
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -17,15 +14,7 @@ ui:
 
 .PHONY: run
 run: ui
-	@export $(shell grep -v '^#' .env | xargs) && \
-	PORT=$(PORT) LOG_LEVEL=$(LOG_LEVEL) \
-	SYSTEM_PROMPT_FILE=$(SYSTEM_PROMPT_FILE) \
-	TOOLS_CONFIG=$(TOOLS_CONFIG) \
-	go run .
-
-.PHONY: wordcount
-wordcount:
-	go run ./examples/wordcount --addr :9001 --self http://localhost:9001 --chatbot http://localhost:8080
+	go run . -config $(CONFIG)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 

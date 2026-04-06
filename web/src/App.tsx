@@ -29,6 +29,8 @@ import {
   CopyOutlined,
   CheckOutlined,
   DownOutlined,
+  SunOutlined,
+  MoonOutlined,
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -49,16 +51,55 @@ interface Message {
   role: Role
   content: string
   ts: Date
+  timeTaken?: number
 }
 
 interface ToolInfo {
   name: string
   description: string
+  serverName?: string
+}
+
+interface MCPServer {
+  url: string
+  tools: string[]
+  name?: string
+}
+
+type MCPServersResponse = {
+  servers: MCPServer[]
+}
+
+interface UIConfig {
+  welcomeTitle?: string
+  aiDisclaimer?: string
+  promptSuggestions?: string[]
+}
+
+async function apiListTools(): Promise<ToolInfo[]> {
+  const res = await fetch('/mcp')
+  if (!res.ok) return []
+  const data: MCPServersResponse = await res.json()
+  return data.servers?.flatMap((s) => s.tools.map((t) => ({ 
+    name: t, 
+    description: t,
+    serverName: s.name || s.url 
+  }))) ?? []
+}
+
+async function apiGetUIConfig(): Promise<UIConfig> {
+  const res = await fetch('/ui-config')
+  return res.json()
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
 
-async function apiChat(sessionId: string, message: string): Promise<string> {
+type ChatResponse = {
+  reply: string
+  time_taken_ms: number
+}
+
+async function apiChat(sessionId: string, message: string): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,7 +107,7 @@ async function apiChat(sessionId: string, message: string): Promise<string> {
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Request failed')
-  return data.reply as string
+  return data as ChatResponse
 }
 
 async function apiReset(sessionId: string): Promise<void> {
@@ -75,13 +116,6 @@ async function apiReset(sessionId: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId }),
   })
-}
-
-async function apiListTools(): Promise<ToolInfo[]> {
-  const res = await fetch('/tools')
-  if (!res.ok) return []
-  const data = await res.json()
-  return (data.tools as ToolInfo[]) ?? []
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -174,7 +208,7 @@ function Bubble({ msg }: { msg: Message }) {
         maxWidth: '72%',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
-        lineHeight: 1.6,
+        lineHeight: 1.5,
         fontSize: 14,
         boxShadow: token.boxShadow,
       }
@@ -197,7 +231,7 @@ function Bubble({ msg }: { msg: Message }) {
         padding: '10px 16px',
         maxWidth: '72%',
         wordBreak: 'break-word',
-        lineHeight: 1.6,
+        lineHeight: 1.5,
         fontSize: 14,
         boxShadow: token.boxShadow,
       }
@@ -396,9 +430,16 @@ function Bubble({ msg }: { msg: Message }) {
             />
           )}
         </div>
-        <Text type="secondary" style={{ fontSize: 11, padding: '0 4px' }}>
-          {fmt(msg.ts)}
-        </Text>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            {fmt(msg.ts)}
+          </Text>
+          {msg.timeTaken !== undefined && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.timeTaken < 1000 ? `${msg.timeTaken}ms` : `${(msg.timeTaken / 1000).toFixed(1)}s`}
+            </Text>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -493,9 +534,16 @@ function ToolsDrawer({
                   />
                 }
                 title={
-                  <Tag color="blue" style={{ fontFamily: 'monospace', marginBottom: 4 }}>
-                    {t.name}
-                  </Tag>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Tag color="blue" style={{ fontFamily: 'monospace', marginBottom: 4 }}>
+                      {t.name}
+                    </Tag>
+                    {t.serverName && (
+                      <Tag color="purple" style={{ marginBottom: 4 }}>
+                        {t.serverName}
+                      </Tag>
+                    )}
+                  </div>
                 }
                 description={
                   <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.5 }}>
@@ -511,16 +559,14 @@ function ToolsDrawer({
   )
 }
 
-const PROMPT_SUGGESTIONS = [
-  'Explain how this works',
-  'Help me write code',
-  'Summarize the key points',
-  'What are best practices?',
-]
-
 // ── Main App ───────────────────────────────────────────────────────────────
 
-function ChatApp() {
+interface ChatAppProps {
+  isDark: boolean
+  onToggleDark: () => void
+}
+
+function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
 
@@ -532,6 +578,7 @@ function ChatApp() {
   const [toolsOpen, setToolsOpen] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [toolsLoading, setToolsLoading] = useState(false)
+  const [uiConfig, setUIConfig] = useState<UIConfig>({})
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<TextAreaRef>(null)
@@ -553,6 +600,11 @@ function ChatApp() {
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // Load UI config on mount
+  useEffect(() => {
+    apiGetUIConfig().then(setUIConfig).catch(() => {})
   }, [])
 
   const fetchTools = useCallback(async () => {
@@ -582,8 +634,8 @@ function ChatApp() {
     setLoading(true)
 
     try {
-      const reply = await apiChat(sessionId, text)
-      const assistantMsg: Message = { id: uid(), role: 'assistant', content: reply, ts: new Date() }
+      const response = await apiChat(sessionId, text)
+      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms }
       setMessages((prev) => [...prev, assistantMsg])
     } catch (err) {
       const errMsg: Message = {
@@ -651,6 +703,14 @@ function ChatApp() {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Tooltip title={isDark ? 'Light mode' : 'Dark mode'}>
+            <Button
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+              onClick={onToggleDark}
+              type="text"
+              style={{ color: token.colorTextSecondary }}
+            />
+          </Tooltip>
           <Tooltip title="Active tools">
             <Badge count={tools.length} size="small">
               <Button
@@ -687,7 +747,7 @@ function ChatApp() {
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '24px 0',
+          padding: '20px 0',
           display: 'flex',
           flexDirection: 'column',
           position: 'relative',
@@ -696,12 +756,12 @@ function ChatApp() {
         <div
           style={{
             width: '100%',
-            maxWidth: 760,
+            maxWidth: 900,
             margin: '0 auto',
             padding: '0 16px',
             display: 'flex',
             flexDirection: 'column',
-            gap: 8,
+            gap: 4,
             flex: 1,
           }}
         >
@@ -725,14 +785,11 @@ function ChatApp() {
               />
               <div style={{ textAlign: 'center' }}>
                 <Text style={{ fontSize: 18, display: 'block', fontWeight: 600, color: token.colorText }}>
-                  How can I help you today?
-                </Text>
-                <Text type="secondary" style={{ fontSize: 14, marginTop: 6, display: 'block' }}>
-                  Type a message below or press <kbd style={{ background: token.colorFillSecondary, padding: '1px 6px', borderRadius: 4 }}>Enter</kbd> to send
+                  {uiConfig.welcomeTitle || 'How can I help you today?'}
                 </Text>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 4 }}>
-                {PROMPT_SUGGESTIONS.map((prompt) => (
+                {(uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?']).map((prompt) => (
                   <Tag
                     key={prompt}
                     className="prompt-chip"
@@ -797,11 +854,11 @@ function ChatApp() {
       >
         <div
           style={{
-            maxWidth: 760,
+            maxWidth: 900,
             margin: '0 auto',
             display: 'flex',
             gap: 10,
-            alignItems: 'flex-end',
+            alignItems: 'center',
           }}
         >
           <TextArea
@@ -814,16 +871,15 @@ function ChatApp() {
             }}
             onKeyDown={handleKeyDown}
             placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-            autoSize={{ minRows: 1, maxRows: 6 }}
+            autoSize={{ minRows: 2, maxRows: 6 }}
             disabled={loading}
-            showCount
             autoFocus
             style={{
               flex: 1,
               borderRadius: 12,
               resize: 'none',
-              fontSize: 14,
-              padding: '10px 14px',
+              fontSize: 15,
+              padding: '12px 16px',
             }}
           />
           <Tooltip title="Send">
@@ -846,7 +902,7 @@ function ChatApp() {
         </div>
         <div style={{ textAlign: 'center', marginTop: 8 }}>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            AI can make mistakes. Verify important info.
+            {uiConfig.aiDisclaimer || 'AI can make mistakes. Verify important info.'}
           </Text>
         </div>
       </div>
@@ -866,25 +922,21 @@ function ChatApp() {
 // ── Root with ConfigProvider ───────────────────────────────────────────────
 
 export default function App() {
+  const [isDark, setIsDark] = useState(false)
+
   return (
     <ConfigProvider
       theme={{
+        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
           colorPrimary: '#5b21b6',
           borderRadius: 8,
           fontFamily: "'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         },
-        components: {
-          Layout: {
-            headerBg: '#ffffff',
-            bodyBg: '#f5f5f5',
-            footerBg: '#ffffff',
-          },
-        },
       }}
     >
       <AntApp>
-        <ChatApp />
+        <ChatApp isDark={isDark} onToggleDark={() => setIsDark(!isDark)} />
       </AntApp>
     </ConfigProvider>
   )

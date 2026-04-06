@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -28,10 +29,45 @@ func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
 }
 
-func (r *Registry) Register(t Tool) {
+// Register adds a tool to the registry. Returns error if tool name already exists.
+func (r *Registry) Register(t Tool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.tools[t.Name()]; exists {
+		return fmt.Errorf("tool %q already registered", t.Name())
+	}
 	r.tools[t.Name()] = t
+	return nil
+}
+
+// RegisterRaw registers a tool by its properties directly. Returns error if name conflicts.
+func (r *Registry) RegisterRaw(name, description string, parameters any, execute func(ctx context.Context, args string) (string, error)) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.tools[name]; exists {
+		return fmt.Errorf("tool %q already registered", name)
+	}
+	r.tools[name] = &wrappedTool{
+		name:        name,
+		description: description,
+		parameters:  parameters,
+		execute:     execute,
+	}
+	return nil
+}
+
+type wrappedTool struct {
+	name        string
+	description string
+	parameters  any
+	execute     func(ctx context.Context, args string) (string, error)
+}
+
+func (w *wrappedTool) Name() string        { return w.name }
+func (w *wrappedTool) Description() string { return w.description }
+func (w *wrappedTool) Parameters() any     { return w.parameters }
+func (w *wrappedTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	return w.execute(ctx, string(args))
 }
 
 func (r *Registry) Remove(name string) {
