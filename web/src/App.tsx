@@ -52,6 +52,8 @@ interface Message {
   content: string
   ts: Date
   timeTaken?: number
+  llmCalls?: number
+  toolCalls?: number
 }
 
 interface ToolInfo {
@@ -97,6 +99,8 @@ async function apiGetUIConfig(): Promise<UIConfig> {
 type ChatResponse = {
   reply: string
   time_taken_ms: number
+  llm_calls: number
+  tool_calls: number
 }
 
 async function apiChat(sessionId: string, message: string): Promise<ChatResponse> {
@@ -439,6 +443,16 @@ function Bubble({ msg }: { msg: Message }) {
               {msg.timeTaken < 1000 ? `${msg.timeTaken}ms` : `${(msg.timeTaken / 1000).toFixed(1)}s`}
             </Text>
           )}
+          {msg.llmCalls !== undefined && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.llmCalls} LLM call{msg.llmCalls !== 1 ? 's' : ''}
+            </Text>
+          )}
+          {msg.toolCalls !== undefined && msg.toolCalls > 0 && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.toolCalls} tool call{msg.toolCalls !== 1 ? 's' : ''}
+            </Text>
+          )}
         </div>
       </div>
     </div>
@@ -635,7 +649,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 
     try {
       const response = await apiChat(sessionId, text)
-      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms }
+      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls }
       setMessages((prev) => [...prev, assistantMsg])
     } catch (err) {
       const errMsg: Message = {

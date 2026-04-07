@@ -57,8 +57,10 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
-	Reply     string  `json:"reply"`
-	TimeTaken float64 `json:"time_taken_ms"`
+	Reply     string `json:"reply"`
+	TimeTaken int64  `json:"time_taken_ms"`
+	LLMCalls  int    `json:"llm_calls"`
+	ToolCalls int    `json:"tool_calls"`
 }
 
 type errorResponse struct {
@@ -77,9 +79,12 @@ func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMe
 }
 
 // runLLM sends the current session to the LLM and handles any tool calls in a loop
-// until the model returns a final text response.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session) (string, error) {
+// until the model returns a final text response. Returns the reply, number of LLM calls, and number of tool calls.
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session) (string, int, int, error) {
+	llmCalls := 0
+	toolCalls := 0
 	for {
+		llmCalls++
 		req := openai.ChatCompletionRequest{
 			Model:    h.model,
 			Messages: h.buildMessages(session),
@@ -96,7 +101,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 
 		resp, err := h.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			return "", fmt.Errorf("LLM error: %w", err)
+			return "", llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
 		}
 
 		choice := resp.Choices[0]
@@ -112,10 +117,10 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		// No tool calls — we have the final answer.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
 			session.AddMessage(choice.Message)
-			return choice.Message.Content, nil
+			return choice.Message.Content, llmCalls, toolCalls, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
@@ -123,6 +128,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 
 		// Execute each requested tool and append its result.
 		for _, tc := range choice.Message.ToolCalls {
+			toolCalls++
 			result, toolErr := h.executeTool(ctx, tc)
 			h.log.Debug("tool executed",
 				zap.String("tool", tc.Function.Name),
@@ -174,7 +180,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	session := h.store.Get(req.SessionID)
 	session.Add(openai.ChatMessageRoleUser, req.Message)
 
-	reply, err := h.runLLM(r.Context(), req.SessionID, session)
+	reply, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
@@ -182,8 +188,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, TimeTaken: float64(timeTaken)})
+	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls))
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
