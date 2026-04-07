@@ -245,12 +245,11 @@ function Bubble({ msg }: { msg: Message }) {
         background: token.colorPrimary,
         color: '#fff',
         borderRadius: '18px 18px 4px 18px',
-        padding: '10px 16px',
+        padding: '10px 18px 10px 16px',
         maxWidth: '72%',
         whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        lineHeight: 1.5,
         fontSize: 14,
+        lineHeight: 1.5,
         boxShadow: token.boxShadow,
       }
     : isError
@@ -259,8 +258,9 @@ function Bubble({ msg }: { msg: Message }) {
         color: token.colorError,
         border: `1px solid ${token.colorErrorBorder}`,
         borderRadius: 8,
-        padding: '8px 14px',
+        padding: '8px 12px',
         maxWidth: '80%',
+        whiteSpace: 'pre-wrap',
         fontSize: 13,
         lineHeight: 1.5,
       }
@@ -269,11 +269,11 @@ function Bubble({ msg }: { msg: Message }) {
         color: token.colorText,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: '18px 18px 18px 4px',
-        padding: '10px 16px',
+        padding: '10px 18px 10px 16px',
         maxWidth: '72%',
-        wordBreak: 'break-word',
-        lineHeight: 1.5,
+        whiteSpace: 'pre-wrap',
         fontSize: 14,
+        lineHeight: 1.5,
         boxShadow: token.boxShadow,
       }
 
@@ -324,129 +324,131 @@ function Bubble({ msg }: { msg: Message }) {
           } : undefined}
         >
           {!isUser && !isError ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ className, children, ...props }) {
-                  const match = /language-(\w+)/.exec(className || '')
-                  const codeStr = String(children).replace(/\n$/, '')
-                  if (match) {
-                    return <CodeBlock language={match[1]} code={codeStr} />
-                  }
-                  return (
-                    <code
-                      style={{
-                        background: token.colorFillSecondary,
-                        padding: '2px 6px',
-                        borderRadius: 4,
-                        fontSize: '0.9em',
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                      }}
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  )
-                },
-                pre({ children }) {
-                  return <>{children}</>
-                },
-                p({ children }) {
-                  return <p style={{ margin: '0.5em 0' }}>{children}</p>
-                },
-                ul({ children }) {
-                  return <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ul>
-                },
-                ol({ children }) {
-                  return <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ol>
-                },
-                li({ children }) {
-                  return <li style={{ margin: '0.25em 0' }}>{children}</li>
-                },
-                blockquote({ children }) {
-                  return (
-                    <blockquote
-                      style={{
-                        margin: '0.5em 0',
-                        paddingLeft: '1em',
-                        borderLeft: `3px solid ${token.colorPrimary}`,
-                        color: token.colorTextSecondary,
-                      }}
-                    >
-                      {children}
-                    </blockquote>
-                  )
-                },
-                table({ children }) {
-                  return (
-                    <div style={{ overflowX: 'auto', margin: '0.5em 0' }}>
-                      <table
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  code({ className, children, ...props }) {
+                    const match = /language-(\w+)/.exec(className || '')
+                    const codeStr = String(children).replace(/\n$/, '')
+                    if (match) {
+                      return <CodeBlock language={match[1]} code={codeStr} />
+                    }
+                    return (
+                      <code
                         style={{
-                          borderCollapse: 'collapse',
-                          width: '100%',
-                          fontSize: 13,
+                          background: token.colorFillSecondary,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          fontSize: '0.9em',
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        }}
+                        {...props}
+                      >
+                        {children}
+                      </code>
+                    )
+                  },
+                  pre({ children }) {
+                    return <>{children}</>
+                  },
+                  p({ children }) {
+                    return <p style={{ margin: '0.5em 0' }}>{children}</p>
+                  },
+                  ul({ children }) {
+                    return <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ul>
+                  },
+                  ol({ children }) {
+                    return <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ol>
+                  },
+                  li({ children }) {
+                    return <li style={{ margin: '0.25em 0' }}>{children}</li>
+                  },
+                  blockquote({ children }) {
+                    return (
+                      <blockquote
+                        style={{
+                          margin: '0.5em 0',
+                          paddingLeft: '1em',
+                          borderLeft: `3px solid ${token.colorPrimary}`,
+                          color: token.colorTextSecondary,
                         }}
                       >
                         {children}
-                      </table>
-                    </div>
-                  )
-                },
-                th({ children }) {
-                  return (
-                    <th
-                      style={{
-                        border: `1px solid ${token.colorBorder}`,
-                        padding: '6px 10px',
-                        background: token.colorFillSecondary,
-                        fontWeight: 600,
-                        textAlign: 'left',
-                      }}
-                    >
-                      {children}
-                    </th>
-                  )
-                },
-                td({ children }) {
-                  return (
-                    <td
-                      style={{
-                        border: `1px solid ${token.colorBorder}`,
-                        padding: '6px 10px',
-                      }}
-                    >
-                      {children}
-                    </td>
-                  )
-                },
-                a({ href, children }) {
-                  return (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: token.colorPrimary }}
-                    >
-                      {children}
-                    </a>
-                  )
-                },
-                h1({ children }) {
-                  return <h1 style={{ margin: '0.75em 0 0.4em', fontSize: '1.3em', fontWeight: 700 }}>{children}</h1>
-                },
-                h2({ children }) {
-                  return <h2 style={{ margin: '0.7em 0 0.35em', fontSize: '1.15em', fontWeight: 600 }}>{children}</h2>
-                },
-                h3({ children }) {
-                  return <h3 style={{ margin: '0.6em 0 0.3em', fontSize: '1.05em', fontWeight: 600 }}>{children}</h3>
-                },
-                hr() {
-                  return <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorder}`, margin: '0.75em 0' }} />
-                },
-              }}
-            >
-              {msg.content}
-            </ReactMarkdown>
+                      </blockquote>
+                    )
+                  },
+                  table({ children }) {
+                    return (
+                      <div style={{ overflowX: 'auto', margin: '0.5em 0' }}>
+                        <table
+                          style={{
+                            borderCollapse: 'collapse',
+                            width: '100%',
+                            fontSize: 13,
+                          }}
+                        >
+                          {children}
+                        </table>
+                      </div>
+                    )
+                  },
+                  th({ children }) {
+                    return (
+                      <th
+                        style={{
+                          border: `1px solid ${token.colorBorder}`,
+                          padding: '6px 10px',
+                          background: token.colorFillSecondary,
+                          fontWeight: 600,
+                          textAlign: 'left',
+                        }}
+                      >
+                        {children}
+                      </th>
+                    )
+                  },
+                  td({ children }) {
+                    return (
+                      <td
+                        style={{
+                          border: `1px solid ${token.colorBorder}`,
+                          padding: '6px 10px',
+                        }}
+                      >
+                        {children}
+                      </td>
+                    )
+                  },
+                  a({ href, children }) {
+                    return (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: token.colorPrimary }}
+                      >
+                        {children}
+                      </a>
+                    )
+                  },
+                  h1({ children }) {
+                    return <h1 style={{ margin: '0.75em 0 0.4em', fontSize: '1.3em', fontWeight: 700 }}>{children}</h1>
+                  },
+                  h2({ children }) {
+                    return <h2 style={{ margin: '0.7em 0 0.35em', fontSize: '1.15em', fontWeight: 600 }}>{children}</h2>
+                  },
+                  h3({ children }) {
+                    return <h3 style={{ margin: '0.6em 0 0.3em', fontSize: '1.05em', fontWeight: 600 }}>{children}</h3>
+                  },
+                  hr() {
+                    return <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorder}`, margin: '0.75em 0' }} />
+                  },
+                }}
+              >
+                {msg.content}
+              </ReactMarkdown>
+            </div>
           ) : (
             msg.content
           )}
