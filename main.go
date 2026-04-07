@@ -34,7 +34,9 @@ type Config struct {
 		Level string `yaml:"level"`
 	} `yaml:"log"`
 	MCP struct {
-		Servers []MCPServerConfig `yaml:"servers"`
+		HealthMaxFailures int               `yaml:"health_max_failures"`
+		HealthInterval    time.Duration     `yaml:"health_interval"`
+		Servers           []MCPServerConfig `yaml:"servers"`
 	} `yaml:"mcp"`
 	Tools struct {
 		SystemPromptFile string `yaml:"system_prompt_file"`
@@ -125,7 +127,7 @@ func main() {
 
 	registry := buildRegistry(logger)
 
-	mcpManager := mcp.NewManager(registry, logger)
+	mcpManager := mcp.NewManager(registry, logger, cfg.MCP.HealthMaxFailures, cfg.MCP.HealthInterval)
 
 	for _, sc := range cfg.MCP.Servers {
 		if sc.Disabled {

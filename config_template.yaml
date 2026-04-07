@@ -21,6 +21,12 @@ log:
   level: "info"
 
 mcp:
+  # Number of consecutive health check failures before unregistering (default: 3)
+  # health_max_failures: 3
+
+  # Health check interval (default: 15s)
+  # health_interval: 15s
+
   # List of MCP servers to connect at startup
   servers:
     # Example server (comment out or set disabled: true to skip)

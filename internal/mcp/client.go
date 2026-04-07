@@ -13,10 +13,12 @@ import (
 
 // MCPServer represents a single connected MCP server.
 type MCPServer struct {
-	URL    string
-	Client *client.Client
-	Tools  []mcp.Tool
-	mu     sync.RWMutex
+	URL     string
+	Client  *client.Client
+	Tools   []mcp.Tool
+	Auth    map[string]string
+	Headers map[string]string
+	mu      sync.RWMutex
 }
 
 // ToolNames returns the names of all tools from this server.
@@ -82,9 +84,11 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 	}
 
 	return &MCPServer{
-		URL:    url,
-		Client: c,
-		Tools:  tools,
+		URL:     url,
+		Client:  c,
+		Tools:   tools,
+		Auth:    auth,
+		Headers: headers,
 	}, nil
 }
 
