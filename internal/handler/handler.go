@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"chatbot/internal/chat"
@@ -20,16 +22,75 @@ import (
 	"go.uber.org/zap"
 )
 
+type ModelInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+type ModelSelector struct {
+	models          []ModelInfo
+	selectionMethod string
+	currentIndex    int
+	mu              sync.Mutex
+}
+
+func NewModelSelector(models []string, selectionMethod string) *ModelSelector {
+	if len(models) == 0 {
+		models = []string{"anthropic/claude-sonnet-4-6"}
+	}
+	if selectionMethod == "" {
+		selectionMethod = "auto"
+	}
+	info := make([]ModelInfo, len(models))
+	for i, m := range models {
+		info[i] = ModelInfo{ID: m}
+	}
+	return &ModelSelector{
+		models:          info,
+		selectionMethod: selectionMethod,
+		currentIndex:    0,
+	}
+}
+
+func (m *ModelSelector) GetModel(preferredModel string) (string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If user specified a model, use that
+	if preferredModel != "" {
+		for _, model := range m.models {
+			if model.ID == preferredModel {
+				return model.ID, model.Name
+			}
+		}
+	}
+
+	// Use selection method (random or round_robin)
+	switch m.selectionMethod {
+	case "random":
+		idx := rand.Intn(len(m.models))
+		return m.models[idx].ID, m.models[idx].Name
+	default: // round_robin
+		model := m.models[m.currentIndex]
+		m.currentIndex = (m.currentIndex + 1) % len(m.models)
+		return model.ID, model.Name
+	}
+}
+
+func (m *ModelSelector) GetAvailableModels() []ModelInfo {
+	return m.models
+}
+
 type Handler struct {
-	client       *openai.Client
-	model        string
-	systemPrompt string
-	registry     *tools.Registry
-	store        *chat.SessionStore
-	log          *zap.Logger
-	staticFS     fs.FS
-	uiConfig     UIConfig
-	uploadDir    string
+	client        *openai.Client
+	modelSelector *ModelSelector
+	systemPrompt  string
+	registry      *tools.Registry
+	store         *chat.SessionStore
+	log           *zap.Logger
+	staticFS      fs.FS
+	uiConfig      UIConfig
+	uploadDir     string
 }
 
 type UIConfig struct {
@@ -38,7 +99,7 @@ type UIConfig struct {
 	PromptSuggestions []string `json:"promptSuggestions"`
 }
 
-func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
+func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
@@ -48,15 +109,15 @@ func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, 
 	}
 
 	return &Handler{
-		client:       openai.NewClientWithConfig(cfg),
-		model:        model,
-		systemPrompt: systemPrompt,
-		registry:     registry,
-		store:        store,
-		log:          log,
-		staticFS:     staticFS,
-		uiConfig:     uiConfig,
-		uploadDir:    uploadDir,
+		client:        openai.NewClientWithConfig(cfg),
+		modelSelector: modelSelector,
+		systemPrompt:  systemPrompt,
+		registry:      registry,
+		store:         store,
+		log:           log,
+		staticFS:      staticFS,
+		uiConfig:      uiConfig,
+		uploadDir:     uploadDir,
 	}
 }
 
@@ -64,10 +125,12 @@ type chatRequest struct {
 	SessionID string   `json:"session_id"`
 	Message   string   `json:"message"`
 	Files     []string `json:"files,omitempty"`
+	Model     string   `json:"model,omitempty"`
 }
 
 type chatResponse struct {
 	Reply     string `json:"reply"`
+	Model     string `json:"model"`
 	TimeTaken int64  `json:"time_taken_ms"`
 	LLMCalls  int    `json:"llm_calls"`
 	ToolCalls int    `json:"tool_calls"`
@@ -89,14 +152,15 @@ func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMe
 }
 
 // runLLM sends the current session to the LLM and handles any tool calls in a loop
-// until the model returns a final text response. Returns the reply, number of LLM calls, and number of tool calls.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session) (string, int, int, error) {
+// until the model returns a final text response. Returns the reply, model used, number of LLM calls, and number of tool calls.
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, string, int, int, error) {
 	llmCalls := 0
 	toolCalls := 0
+	model, _ := h.modelSelector.GetModel(preferredModel)
 	for {
 		llmCalls++
 		req := openai.ChatCompletionRequest{
-			Model:    h.model,
+			Model:    model,
 			Messages: h.buildMessages(session),
 		}
 		if h.registry != nil && !h.registry.Empty() {
@@ -105,13 +169,13 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 
 		h.log.Debug("llm request",
 			zap.String("session_id", sessionID),
-			zap.String("model", h.model),
+			zap.String("model", model),
 			zap.Any("messages", req.Messages),
 		)
 
 		resp, err := h.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			return "", llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
+			return "", model, llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
 		}
 
 		choice := resp.Choices[0]
@@ -127,10 +191,10 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		// No tool calls — we have the final answer.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", model, llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
 			session.AddMessage(choice.Message)
-			return choice.Message.Content, llmCalls, toolCalls, nil
+			return choice.Message.Content, model, llmCalls, toolCalls, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
@@ -207,7 +271,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	session.Add(openai.ChatMessageRoleUser, userContent)
 
-	reply, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session)
+	reply, model, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
@@ -215,8 +279,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls})
+	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -266,6 +330,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.uiConfig)
+}
+
+func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
+	models := h.modelSelector.GetAvailableModels()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"models":           models,
+		"selection_method": h.modelSelector.selectionMethod,
+	})
 }
 
 type UploadedFile struct {

@@ -17,8 +17,14 @@ llm:
   # Base URL of OpenAI-compatible API (default: OpenRouter)
   base_url: "https://openrouter.ai/api/v1"
 
-  # Model identifier (default: claude-sonnet-4-6)
-  model: "claude-sonnet-4-6"
+  # Model selection method: random or round_robin
+  selection_method: "round_robin"
+
+  # List of models (string or object with id and optional name)
+  models:
+    # - "model-id"
+    # - id: "model-id"
+    #   name: "Display Name"
 
 log:
   # Log level: debug, info, warn, error (default: info)

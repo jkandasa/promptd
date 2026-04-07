@@ -21,6 +21,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type LLMModel struct {
+	ID   string `yaml:"id"`
+	Name string `yaml:"name,omitempty"`
+}
+
+func (m *LLMModel) UnmarshalYAML(value *yaml.Node) error {
+	var str string
+	if err := value.Decode(&str); err == nil {
+		m.ID = str
+		return nil
+	}
+	var obj struct {
+		ID   string `yaml:"id"`
+		Name string `yaml:"name,omitempty"`
+	}
+	if err := value.Decode(&obj); err != nil {
+		return err
+	}
+	m.ID = obj.ID
+	m.Name = obj.Name
+	return nil
+}
+
+func getModelIDs(models []LLMModel) []string {
+	ids := make([]string, len(models))
+	for i, m := range models {
+		ids[i] = m.ID
+	}
+	return ids
+}
+
 type Config struct {
 	Server struct {
 		Port string `yaml:"port"`
@@ -29,9 +60,10 @@ type Config struct {
 		Dir string `yaml:"dir"`
 	} `yaml:"upload"`
 	LLM struct {
-		APIKey  string `yaml:"api_key"`
-		BaseURL string `yaml:"base_url"`
-		Model   string `yaml:"model"`
+		APIKey          string     `yaml:"api_key"`
+		BaseURL         string     `yaml:"base_url"`
+		SelectionMethod string     `yaml:"selection_method"`
+		Models          []LLMModel `yaml:"models"`
 	} `yaml:"llm"`
 	Log struct {
 		Level string `yaml:"level"`
@@ -76,8 +108,11 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.LLM.BaseURL == "" {
 		cfg.LLM.BaseURL = "https://openrouter.ai/api/v1"
 	}
-	if cfg.LLM.Model == "" {
-		cfg.LLM.Model = "anthropic/claude-sonnet-4-6"
+	if cfg.LLM.SelectionMethod == "" {
+		cfg.LLM.SelectionMethod = "auto"
+	}
+	if len(cfg.LLM.Models) == 0 {
+		cfg.LLM.Models = []LLMModel{{ID: "anthropic/claude-sonnet-4-6"}}
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -181,7 +216,9 @@ func main() {
 	if uploadDir == "" {
 		uploadDir = "./uploads"
 	}
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, systemPrompt, registry, store, logger, ui.FS(), uiConfig, uploadDir)
+
+	modelSelector := handler.NewModelSelector(getModelIDs(cfg.LLM.Models), cfg.LLM.SelectionMethod)
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompt, modelSelector, registry, store, logger, ui.FS(), uiConfig, uploadDir)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
@@ -190,6 +227,7 @@ func main() {
 	mux.HandleFunc("POST /reset", h.Reset)
 	mux.HandleFunc("GET /mcp", mcpHandler.List)
 	mux.HandleFunc("GET /ui-config", h.UIConfig)
+	mux.HandleFunc("GET /models", h.ListModels)
 	mux.HandleFunc("POST /upload", h.Upload)
 	mux.HandleFunc("GET /files/", h.ServeFile)
 	mux.HandleFunc("DELETE /files/", h.DeleteFile)
@@ -198,7 +236,7 @@ func main() {
 	srv := &http.Server{Addr: addr, Handler: mux}
 
 	go func() {
-		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.String("model", cfg.LLM.Model), zap.String("baseUrl", cfg.LLM.BaseURL))
+		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.Strings("models", getModelIDs(cfg.LLM.Models)), zap.String("selection_method", cfg.LLM.SelectionMethod), zap.String("baseUrl", cfg.LLM.BaseURL))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server error", zap.Error(err))
 		}

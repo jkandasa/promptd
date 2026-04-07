@@ -17,6 +17,7 @@ import {
   theme,
   message as antdMessage,
   Modal,
+  Select,
 } from 'antd'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import {
@@ -65,6 +66,7 @@ interface Message {
   timeTaken?: number
   llmCalls?: number
   toolCalls?: number
+  model?: string
   files?: UploadedFile[]
 }
 
@@ -110,17 +112,28 @@ async function apiGetUIConfig(): Promise<UIConfig> {
 
 type ChatResponse = {
   reply: string
+  model: string
   time_taken_ms: number
   llm_calls: number
   tool_calls: number
   files?: UploadedFile[]
 }
 
-async function apiChat(sessionId: string, message: string, files?: string[]): Promise<ChatResponse> {
+interface ModelInfo {
+  id: string
+  name?: string
+}
+
+async function apiGetModels(): Promise<{ models: ModelInfo[]; selection_method: string }> {
+  const res = await fetch('/models')
+  return res.json()
+}
+
+async function apiChat(sessionId: string, message: string, files?: string[], model?: string): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message, files }),
+    body: JSON.stringify({ session_id: sessionId, message, files, model }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Request failed')
@@ -530,6 +543,11 @@ function Bubble({ msg }: { msg: Message }) {
           <Text type="secondary" style={{ fontSize: 10 }}>
             {fmt(msg.ts)}
           </Text>
+          {msg.model !== undefined && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.model}
+            </Text>
+          )}
           {msg.timeTaken !== undefined && (
             <Text type="secondary" style={{ fontSize: 10 }}>
               {msg.timeTaken < 1000 ? `${msg.timeTaken}ms` : `${(msg.timeTaken / 1000).toFixed(1)}s`}
@@ -680,6 +698,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>('auto')
 
   const [toolsOpen, setToolsOpen] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
@@ -713,6 +733,12 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   // Load UI config on mount
   useEffect(() => {
     apiGetUIConfig().then(setUIConfig).catch(() => {})
+    apiGetModels().then((data) => {
+      setModels(data.models)
+      if (data.models.length > 0) {
+        setSelectedModel(data.models[0].id)
+      }
+    }).catch(() => {})
   }, [])
 
   const fetchTools = useCallback(async () => {
@@ -744,21 +770,24 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 
     try {
       const fileUrls = uploadedFiles.map((f) => f.url)
-      const response = await apiChat(sessionId, text, fileUrls)
-      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls, files: response.files }
+      const modelToSend = selectedModel === 'auto' ? undefined : selectedModel
+      const response = await apiChat(sessionId, text, fileUrls, modelToSend)
+      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls, model: response.model, files: response.files }
       setMessages((prev) => [...prev, assistantMsg])
     } catch (err) {
+      const modelDisplay = selectedModel === 'auto' ? undefined : selectedModel
       const errMsg: Message = {
         id: uid(),
         role: 'error',
         content: err instanceof Error ? err.message : 'Something went wrong',
         ts: new Date(),
+        model: modelDisplay,
       }
       setMessages((prev) => [...prev, errMsg])
     } finally {
       setLoading(false)
     }
-  }, [input, loading, sessionId, uploadedFiles])
+  }, [input, loading, sessionId, uploadedFiles, selectedModel])
 
   const handleReset = useCallback(async () => {
     await apiReset(sessionId)
@@ -983,7 +1012,6 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
             placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
             autoSize={{ minRows: 2, maxRows: 6 }}
             disabled={loading}
-            autoFocus
             style={{
               flex: 1,
               borderRadius: 12,
@@ -992,6 +1020,18 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               padding: '12px 16px',
             }}
           />
+          {models.length > 0 && (
+            <Select
+              value={selectedModel}
+              onChange={setSelectedModel}
+              style={{ width: 160 }}
+              size="small"
+              options={[
+                { label: 'Auto', value: 'auto' },
+                ...models.map((m) => ({ label: m.name || m.id, value: m.id }))
+              ]}
+            />
+          )}
           <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
             <Button
               type="text"
