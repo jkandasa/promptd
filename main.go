@@ -25,6 +25,9 @@ type Config struct {
 	Server struct {
 		Port string `yaml:"port"`
 	} `yaml:"server"`
+	Upload struct {
+		Dir string `yaml:"dir"`
+	} `yaml:"upload"`
 	LLM struct {
 		APIKey  string `yaml:"api_key"`
 		BaseURL string `yaml:"base_url"`
@@ -174,7 +177,11 @@ func main() {
 			"What are best practices?",
 		}
 	}
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, systemPrompt, registry, store, logger, ui.FS(), uiConfig)
+	uploadDir := cfg.Upload.Dir
+	if uploadDir == "" {
+		uploadDir = "./uploads"
+	}
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, systemPrompt, registry, store, logger, ui.FS(), uiConfig, uploadDir)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
@@ -183,6 +190,9 @@ func main() {
 	mux.HandleFunc("POST /reset", h.Reset)
 	mux.HandleFunc("GET /mcp", mcpHandler.List)
 	mux.HandleFunc("GET /ui-config", h.UIConfig)
+	mux.HandleFunc("POST /upload", h.Upload)
+	mux.HandleFunc("GET /files/", h.ServeFile)
+	mux.HandleFunc("DELETE /files/", h.DeleteFile)
 
 	addr := ":" + cfg.Server.Port
 	srv := &http.Server{Addr: addr, Handler: mux}

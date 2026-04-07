@@ -7,6 +7,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,6 +29,7 @@ type Handler struct {
 	log          *zap.Logger
 	staticFS     fs.FS
 	uiConfig     UIConfig
+	uploadDir    string
 }
 
 type UIConfig struct {
@@ -35,10 +38,15 @@ type UIConfig struct {
 	PromptSuggestions []string `json:"promptSuggestions"`
 }
 
-func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig) *Handler {
+func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
+
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		log.Warn("failed to create upload directory", zap.String("dir", uploadDir), zap.Error(err))
+	}
+
 	return &Handler{
 		client:       openai.NewClientWithConfig(cfg),
 		model:        model,
@@ -48,12 +56,14 @@ func New(apiKey, baseURL, model, systemPrompt string, registry *tools.Registry, 
 		log:          log,
 		staticFS:     staticFS,
 		uiConfig:     uiConfig,
+		uploadDir:    uploadDir,
 	}
 }
 
 type chatRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
+	SessionID string   `json:"session_id"`
+	Message   string   `json:"message"`
+	Files     []string `json:"files,omitempty"`
 }
 
 type chatResponse struct {
@@ -167,8 +177,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
-	if req.Message == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "message is required"})
+	if req.Message == "" && len(req.Files) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "message or files is required"})
 		return
 	}
 	if req.SessionID == "" {
@@ -178,7 +188,24 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	session := h.store.Get(req.SessionID)
-	session.Add(openai.ChatMessageRoleUser, req.Message)
+
+	// Build user message content - include file info if files are attached
+	var userContent string
+	if len(req.Files) > 0 {
+		fileInfo := "Attached files:\n"
+		for _, f := range req.Files {
+			fileInfo += "- " + f + "\n"
+		}
+		if req.Message != "" {
+			userContent = fileInfo + "\nUser request: " + req.Message
+		} else {
+			userContent = fileInfo
+		}
+	} else {
+		userContent = req.Message
+	}
+
+	session.Add(openai.ChatMessageRoleUser, userContent)
 
 	reply, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session)
 	if err != nil {
@@ -239,4 +266,84 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.uiConfig)
+}
+
+type UploadedFile struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	Size      int64  `json:"size"`
+	URL       string `json:"url"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to parse form"})
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "no file uploaded"})
+		return
+	}
+	defer file.Close()
+
+	fileID := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(header.Filename))
+	filePath := filepath.Join(h.uploadDir, fileID)
+
+	out, err := os.Create(filePath)
+	if err != nil {
+		h.log.Error("failed to create file", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save file"})
+		return
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, file); err != nil {
+		h.log.Error("failed to write file", zap.Error(err))
+		os.Remove(filePath)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save file"})
+		return
+	}
+
+	uploadedFile := UploadedFile{
+		ID:        fileID,
+		Filename:  header.Filename,
+		Size:      header.Size,
+		URL:       "/files/" + fileID,
+		CreatedAt: time.Now().UnixMilli(),
+	}
+
+	h.log.Info("file uploaded", zap.String("filename", header.Filename), zap.String("id", fileID))
+	writeJSON(w, http.StatusOK, uploadedFile)
+}
+
+func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
+	fileID := strings.TrimPrefix(r.URL.Path, "/files/")
+	if fileID == "" {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(h.uploadDir, fileID)
+	http.ServeFile(w, r, filePath)
+}
+
+func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
+	fileID := strings.TrimPrefix(r.URL.Path, "/files/")
+	if fileID == "" {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(h.uploadDir, fileID)
+	if err := os.Remove(filePath); err != nil {
+		h.log.Warn("failed to delete file", zap.String("file_id", fileID), zap.Error(err))
+		http.Error(w, "failed to delete file", http.StatusInternalServerError)
+		return
+	}
+
+	h.log.Info("file deleted", zap.String("file_id", fileID))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

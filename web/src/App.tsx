@@ -16,6 +16,7 @@ import {
   ConfigProvider,
   theme,
   message as antdMessage,
+  Modal,
 } from 'antd'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import {
@@ -31,6 +32,8 @@ import {
   DownOutlined,
   SunOutlined,
   MoonOutlined,
+  PaperClipOutlined,
+  FileOutlined,
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -46,6 +49,14 @@ const { useToken } = theme
 
 type Role = 'user' | 'assistant' | 'error'
 
+interface UploadedFile {
+  id: string
+  filename: string
+  size: number
+  url: string
+  created_at: number
+}
+
 interface Message {
   id: string
   role: Role
@@ -54,6 +65,7 @@ interface Message {
   timeTaken?: number
   llmCalls?: number
   toolCalls?: number
+  files?: UploadedFile[]
 }
 
 interface ToolInfo {
@@ -101,17 +113,30 @@ type ChatResponse = {
   time_taken_ms: number
   llm_calls: number
   tool_calls: number
+  files?: UploadedFile[]
 }
 
-async function apiChat(sessionId: string, message: string): Promise<ChatResponse> {
+async function apiChat(sessionId: string, message: string, files?: string[]): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message }),
+    body: JSON.stringify({ session_id: sessionId, message, files }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Request failed')
   return data as ChatResponse
+}
+
+async function apiUploadFile(file: File): Promise<UploadedFile> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch('/upload', {
+    method: 'POST',
+    body: formData,
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Upload failed')
+  return data as UploadedFile
 }
 
 async function apiReset(sessionId: string): Promise<void> {
@@ -192,6 +217,8 @@ function Bubble({ msg }: { msg: Message }) {
   const isUser = msg.role === 'user'
   const isError = msg.role === 'error'
   const [copied, setCopied] = useState(false)
+  const [previewVisible, setPreviewVisible] = useState(false)
+  const [previewImage, setPreviewImage] = useState('')
 
   const handleCopy = async () => {
     try {
@@ -201,6 +228,16 @@ function Bubble({ msg }: { msg: Message }) {
     } catch {
       antdMessage.error('Failed to copy')
     }
+  }
+
+  const isImageFile = (filename: string) => {
+    const ext = filename.toLowerCase().split('.').pop()
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext || '')
+  }
+
+  const handleImageClick = (url: string) => {
+    setPreviewImage(url)
+    setPreviewVisible(true)
   }
 
   const bubbleStyle: React.CSSProperties = isUser
@@ -434,6 +471,59 @@ function Bubble({ msg }: { msg: Message }) {
             />
           )}
         </div>
+        {msg.files && msg.files.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {msg.files.map((file) => (
+              isImageFile(file.filename) ? (
+                <img
+                  key={file.id}
+                  src={file.url}
+                  alt={file.filename}
+                  onClick={() => handleImageClick(file.url)}
+                  style={{
+                    maxWidth: 200,
+                    maxHeight: 150,
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    objectFit: 'cover',
+                  }}
+                />
+              ) : (
+                <a
+                  key={file.id}
+                  href={file.url}
+                  download={file.filename}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    background: token.colorFillSecondary,
+                    color: token.colorText,
+                    textDecoration: 'none',
+                    fontSize: 12,
+                  }}
+                >
+                  <FileOutlined /> {file.filename}
+                </a>
+              )
+            ))}
+          </div>
+        )}
+        <Modal
+          open={previewVisible}
+          footer={null}
+          onCancel={() => setPreviewVisible(false)}
+          width="90vw"
+          centered
+        >
+          <img
+            alt="preview"
+            style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain' }}
+            src={previewImage}
+          />
+        </Modal>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Text type="secondary" style={{ fontSize: 10 }}>
             {fmt(msg.ts)}
@@ -593,6 +683,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [toolsLoading, setToolsLoading] = useState(false)
   const [uiConfig, setUIConfig] = useState<UIConfig>({})
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const [uploading, setUploading] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<TextAreaRef>(null)
@@ -640,16 +732,18 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
-    if (!text || loading) return
+    if (!text && uploadedFiles.length === 0) return
 
     setInput('')
-    const userMsg: Message = { id: uid(), role: 'user', content: text, ts: new Date() }
+    const userMsg: Message = { id: uid(), role: 'user', content: text, ts: new Date(), files: uploadedFiles }
     setMessages((prev) => [...prev, userMsg])
+    setUploadedFiles([])
     setLoading(true)
 
     try {
-      const response = await apiChat(sessionId, text)
-      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls }
+      const fileUrls = uploadedFiles.map((f) => f.url)
+      const response = await apiChat(sessionId, text, fileUrls)
+      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls, files: response.files }
       setMessages((prev) => [...prev, assistantMsg])
     } catch (err) {
       const errMsg: Message = {
@@ -662,7 +756,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     } finally {
       setLoading(false)
     }
-  }, [input, loading, sessionId])
+  }, [input, loading, sessionId, uploadedFiles])
 
   const handleReset = useCallback(async () => {
     await apiReset(sessionId)
@@ -896,12 +990,51 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               padding: '12px 16px',
             }}
           />
+          <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
+            <Button
+              type="text"
+              icon={<PaperClipOutlined />}
+              onClick={() => document.getElementById('file-upload')?.click()}
+              disabled={loading || uploading}
+              style={{
+                height: 42,
+                width: 42,
+                borderRadius: 12,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            />
+          </Tooltip>
+          <input
+            id="file-upload"
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={async (e) => {
+              const files = e.target.files
+              if (!files || files.length === 0) return
+              setUploading(true)
+              try {
+                const uploaded = await Promise.all(
+                  Array.from(files).map((f) => apiUploadFile(f))
+                )
+                setUploadedFiles((prev) => [...prev, ...uploaded])
+              } catch {
+                antMessage.error('Failed to upload file')
+              } finally {
+                setUploading(false)
+                e.target.value = ''
+              }
+            }}
+          />
           <Tooltip title="Send">
             <Button
               type="primary"
               icon={<SendOutlined />}
               onClick={() => send()}
-              disabled={!input.trim()}
+              disabled={!input.trim() && uploadedFiles.length === 0}
               style={{
                 height: 42,
                 width: 42,
@@ -914,6 +1047,20 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
             />
           </Tooltip>
         </div>
+        {uploadedFiles.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {uploadedFiles.map((file) => (
+              <Tag
+                key={file.id}
+                closable
+                onClose={() => setUploadedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <FileOutlined /> {file.filename}
+              </Tag>
+            ))}
+          </div>
+        )}
         <div style={{ textAlign: 'center', marginTop: 8 }}>
           <Text type="secondary" style={{ fontSize: 11 }}>
             {uiConfig.aiDisclaimer || 'AI can make mistakes. Verify important info.'}

@@ -6,6 +6,10 @@ server:
   # HTTP port the chatbot listens on
   port: "8080"
 
+upload:
+  # Directory to store uploaded files (default: ./uploads)
+  # dir: "./uploads"
+
 llm:
   # Required: API key for your LLM provider
   api_key: ""

@@ -4,3 +4,4 @@ test.sh
 tmp/**
 config.yaml
 internal/ui/dist/
+uploads/

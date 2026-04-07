@@ -66,6 +66,7 @@ tools:
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `server.port` | No | 8080 | HTTP port |
+| `upload.dir` | No | ./uploads | Directory for uploaded files |
 | `llm.api_key` | Yes | - | API key for LLM provider |
 | `llm.base_url` | No | OpenRouter | OpenAI-compatible endpoint |
 | `llm.model` | No | claude-sonnet-4-6 | Model identifier |
@@ -90,6 +91,9 @@ tools:
 | `POST` | `/chat` | `{"session_id":"...","message":"..."}` | Send message |
 | `POST` | `/reset` | `{"session_id":"..."}` | Reset session |
 | `GET` | `/mcp` | - | List MCP servers and tools |
+| `POST` | `/upload` | multipart/form-data | Upload file |
+| `GET` | `/files/{id}` | - | Download uploaded file |
+| `DELETE` | `/files/{id}` | - | Delete uploaded file |
 
 ---
 
