@@ -60,9 +60,6 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 
 	c := client.NewClient(trans)
 
-	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
@@ -71,7 +68,9 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
+	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	_, err = c.Initialize(initCtx, initRequest)
+	cancel() // release timer goroutine as soon as Initialize completes
 	if err != nil {
 		trans.Close()
 		return nil, fmt.Errorf("failed to initialize MCP server at %s: %w", url, err)

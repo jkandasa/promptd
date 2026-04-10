@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"chatbot/internal/chat"
 	"chatbot/internal/handler"
 	"chatbot/internal/mcp"
+	"chatbot/internal/storage"
 	"chatbot/internal/tools"
 	"chatbot/internal/ui"
 
@@ -53,12 +55,12 @@ func getModelIDs(models []LLMModel) []string {
 }
 
 type Config struct {
+	Data struct {
+		Dir string `yaml:"dir"`
+	} `yaml:"data"`
 	Server struct {
 		Port string `yaml:"port"`
 	} `yaml:"server"`
-	Upload struct {
-		Dir string `yaml:"dir"`
-	} `yaml:"upload"`
 	LLM struct {
 		APIKey          string     `yaml:"api_key"`
 		BaseURL         string     `yaml:"base_url"`
@@ -118,6 +120,11 @@ func loadConfig(path string) (*Config, error) {
 		cfg.Log.Level = "info"
 	}
 
+	// Resolve data root directory (default: ./data).
+	if cfg.Data.Dir == "" {
+		cfg.Data.Dir = "./data"
+	}
+
 	return &cfg, nil
 }
 
@@ -132,13 +139,19 @@ func buildLogger(level string) *zap.Logger {
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
-	logger, _ := cfg.Build()
+	logger, err := cfg.Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to build logger: %v\n", err)
+		os.Exit(1)
+	}
 	return logger
 }
 
 func buildRegistry(logger *zap.Logger) *tools.Registry {
 	registry := tools.NewRegistry()
-	registry.Register(tools.DateTimeTool{})
+	if err := registry.Register(tools.DateTimeTool{}); err != nil {
+		logger.Fatal("failed to register built-in tool", zap.Error(err))
+	}
 	logger.Info("built-in tools registered", zap.Strings("tools", []string{"get_current_datetime"}))
 	return registry
 }
@@ -154,9 +167,14 @@ func main() {
 	}
 
 	logger := buildLogger(cfg.Log.Level)
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
-	if cfg.LLM.APIKey == "" {
+	dataDir := cfg.Data.Dir
+	storageDir := dataDir + "/conversations"
+	uploadDir := dataDir + "/uploads"
+	logger.Info("data root", zap.String("dir", dataDir), zap.String("conversations", storageDir), zap.String("uploads", uploadDir))
+
+	if strings.TrimSpace(cfg.LLM.APIKey) == "" {
 		logger.Fatal("LLM API key is required in config")
 	}
 
@@ -180,7 +198,7 @@ func main() {
 		}
 	}
 
-	go mcpManager.StartHealthMonitor(ctx)
+	go mcpManager.StartHealthMonitor(ctx) // StartHealthMonitor spawns its own goroutine internally
 
 	var systemPrompt string
 	if cfg.Tools.SystemPromptFile != "" {
@@ -192,7 +210,11 @@ func main() {
 		logger.Info("system prompt loaded", zap.String("path", cfg.Tools.SystemPromptFile))
 	}
 
-	store := chat.NewSessionStore()
+	st, err := storage.NewYAMLStore(storageDir)
+	if err != nil {
+		logger.Fatal("failed to create storage", zap.String("dir", storageDir), zap.Error(err))
+	}
+	store := chat.NewSessionStore(st)
 	uiConfig := handler.UIConfig{
 		WelcomeTitle:      cfg.UI.WelcomeTitle,
 		AIDisclaimer:      cfg.UI.AIDisclaimer,
@@ -212,13 +234,9 @@ func main() {
 			"What are best practices?",
 		}
 	}
-	uploadDir := cfg.Upload.Dir
-	if uploadDir == "" {
-		uploadDir = "./uploads"
-	}
 
 	modelSelector := handler.NewModelSelector(getModelIDs(cfg.LLM.Models), cfg.LLM.SelectionMethod)
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompt, modelSelector, registry, store, logger, ui.FS(), uiConfig, uploadDir)
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
@@ -231,9 +249,22 @@ func main() {
 	mux.HandleFunc("POST /upload", h.Upload)
 	mux.HandleFunc("GET /files/", h.ServeFile)
 	mux.HandleFunc("DELETE /files/", h.DeleteFile)
+	mux.HandleFunc("GET /conversations", h.ListConversations)
+	mux.HandleFunc("GET /conversations/{id}", h.GetConversation)
+	mux.HandleFunc("DELETE /conversations/{id}", h.DeleteConversation)
+	mux.HandleFunc("PATCH /conversations/{id}/title", h.RenameConversation)
+	mux.HandleFunc("PATCH /conversations/{id}/pin", h.TogglePinConversation)
+	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}", h.DeleteMessage)
+	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}/after", h.DeleteMessagesFrom)
 
 	addr := ":" + cfg.Server.Port
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 
 	go func() {
 		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.Strings("models", getModelIDs(cfg.LLM.Models)), zap.String("selection_method", cfg.LLM.SelectionMethod), zap.String("baseUrl", cfg.LLM.BaseURL))

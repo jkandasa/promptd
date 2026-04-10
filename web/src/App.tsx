@@ -1,47 +1,56 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
 import {
+  App as AntApp,
+  Avatar,
+  Badge,
   Button,
+  ConfigProvider,
+  Divider,
+  Drawer,
+  Empty,
   Input,
   Layout,
-  Typography,
-  Avatar,
-  Tooltip,
-  Badge,
-  Drawer,
   List,
-  Tag,
-  Empty,
-  Spin,
-  App as AntApp,
-  ConfigProvider,
-  theme,
-  message as antdMessage,
   Modal,
+  Popconfirm,
   Select,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
 } from 'antd'
-import type { TextAreaRef } from 'antd/es/input/TextArea'
 import {
-  SendOutlined,
-  PlusOutlined,
-  RobotOutlined,
-  UserOutlined,
-  ToolOutlined,
-  ReloadOutlined,
-  GithubOutlined,
-  CopyOutlined,
   CheckOutlined,
+  CopyOutlined,
+  DeleteOutlined,
   DownOutlined,
-  SunOutlined,
+  EditOutlined,
+  FileOutlined,
+  GithubOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  MessageOutlined,
   MoonOutlined,
   PaperClipOutlined,
-  FileOutlined,
+  PlusOutlined,
+  PushpinFilled,
+  PushpinOutlined,
+  ReloadOutlined,
+  RobotOutlined,
+  SendOutlined,
+  SunOutlined,
+  ToolOutlined,
+  UserOutlined,
 } from '@ant-design/icons'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import type { TextAreaRef } from 'antd/es/input/TextArea'
+import remarkGfm from 'remark-gfm'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
-const { Content } = Layout
+const { Content, Sider } = Layout
 const { Text } = Typography
 const { TextArea } = Input
 const { useToken } = theme
@@ -68,6 +77,7 @@ interface Message {
   toolCalls?: number
   model?: string
   files?: UploadedFile[]
+  msgId?: string  // persisted storage ID (undefined for error messages or pre-persistence)
 }
 
 interface ToolInfo {
@@ -92,23 +102,46 @@ interface UIConfig {
   promptSuggestions?: string[]
 }
 
+interface ConversationMeta {
+  id: string
+  title: string
+  model: string
+  pinned?: boolean
+  created_at: string
+  updated_at: string
+}
+
+interface StorageMessage {
+  id: string
+  role: string
+  content: string
+  sent_at: string
+  model?: string
+  time_taken_ms?: number
+}
+
+interface ConversationDetail extends ConversationMeta {
+  messages: StorageMessage[]
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+
 async function apiListTools(): Promise<ToolInfo[]> {
   const res = await fetch('/mcp')
   if (!res.ok) return []
   const data: MCPServersResponse = await res.json()
-  return data.servers?.flatMap((s) => s.tools.map((t) => ({ 
-    name: t, 
+  return data.servers?.flatMap((s) => s.tools.map((t) => ({
+    name: t,
     description: t,
-    serverName: s.name || s.url 
+    serverName: s.name || s.url
   }))) ?? []
 }
 
 async function apiGetUIConfig(): Promise<UIConfig> {
   const res = await fetch('/ui-config')
+  if (!res.ok) return {}
   return res.json()
 }
-
-// ── API helpers ────────────────────────────────────────────────────────────
 
 type ChatResponse = {
   reply: string
@@ -117,6 +150,17 @@ type ChatResponse = {
   llm_calls: number
   tool_calls: number
   files?: UploadedFile[]
+  user_msg_id?: string
+  assistant_msg_id?: string
+}
+
+class ChatError extends Error {
+  model?: string
+  constructor(message: string, model?: string) {
+    super(message)
+    this.name = 'ChatError'
+    this.model = model
+  }
 }
 
 interface ModelInfo {
@@ -126,6 +170,7 @@ interface ModelInfo {
 
 async function apiGetModels(): Promise<{ models: ModelInfo[]; selection_method: string }> {
   const res = await fetch('/models')
+  if (!res.ok) return { models: [], selection_method: 'auto' }
   return res.json()
 }
 
@@ -136,7 +181,7 @@ async function apiChat(sessionId: string, message: string, files?: string[], mod
     body: JSON.stringify({ session_id: sessionId, message, files, model }),
   })
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Request failed')
+  if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model)
   return data as ChatResponse
 }
 
@@ -152,12 +197,42 @@ async function apiUploadFile(file: File): Promise<UploadedFile> {
   return data as UploadedFile
 }
 
-async function apiReset(sessionId: string): Promise<void> {
-  await fetch('/reset', {
-    method: 'POST',
+async function apiListConversations(): Promise<ConversationMeta[]> {
+  const res = await fetch('/conversations')
+  if (!res.ok) return []
+  return res.json()
+}
+
+async function apiLoadConversation(id: string): Promise<ConversationDetail | null> {
+  const res = await fetch(`/conversations/${id}`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+async function apiDeleteConversation(id: string): Promise<void> {
+  await fetch(`/conversations/${id}`, { method: 'DELETE' })
+}
+
+async function apiRenameConversation(id: string, title: string): Promise<void> {
+  await fetch(`/conversations/${id}/title`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify({ title }),
   })
+}
+
+async function apiTogglePin(id: string): Promise<boolean> {
+  const res = await fetch(`/conversations/${id}/pin`, { method: 'PATCH' })
+  const data = await res.json()
+  return data.pinned as boolean
+}
+
+async function apiDeleteMessage(convId: string, msgId: string): Promise<void> {
+  await fetch(`/conversations/${convId}/messages/${msgId}`, { method: 'DELETE' })
+}
+
+async function apiDeleteMessagesFrom(convId: string, msgId: string): Promise<void> {
+  await fetch(`/conversations/${convId}/messages/${msgId}/after`, { method: 'DELETE' })
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -166,14 +241,60 @@ function uid(): string {
   return crypto.randomUUID()
 }
 
-function fmt(d: Date): string {
+function formatMessageTime(d: Date): string {
+  if (isNaN(d.getTime())) return ''
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB — matches server limit
+const MAX_FILES_PER_MESSAGE = 10
+const MAX_MESSAGE_LENGTH = 4000
+const TYPING_DOTS = [0, 1, 2] // module-level constant to avoid per-render allocation
+
+// Validate a URL is safe to use as href/src (no javascript: etc.)
+function safeUrl(url: string | undefined): string {
+  if (!url) return '#'
+  try {
+    const u = new URL(url, window.location.href)
+    if (u.protocol === 'javascript:' || u.protocol === 'data:') return '#'
+    return url
+  } catch {
+    return '#'
+  }
+}
+
+// Linkify plain text — split on URLs and wrap each in an <a>.
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
+function Linkified({ text, linkColor }: { text: string; linkColor: string }) {
+  const parts: React.ReactNode[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+  URL_RE.lastIndex = 0
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index))
+    const url = match[0]
+    parts.push(
+      <a
+        key={match.index}
+        href={safeUrl(url)}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: linkColor, textDecoration: 'underline', wordBreak: 'break-all' }}
+      >
+        {url}
+      </a>
+    )
+    last = match.index + url.length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return <>{parts}</>
 }
 
 // ── Markdown code block renderer ───────────────────────────────────────────
 
 function CodeBlock({ language, code }: { language?: string; code: string }) {
   const { token } = useToken()
+  const { message: antMessage } = AntApp.useApp()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -182,7 +303,7 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      antdMessage.error('Failed to copy')
+      antMessage.error('Failed to copy')
     }
   }
 
@@ -204,6 +325,7 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
         <Button
           type="text"
           size="small"
+          aria-label={copied ? 'Copied' : 'Copy code'}
           icon={copied ? <CheckOutlined style={{ color: token.colorSuccess }} /> : <CopyOutlined />}
           onClick={handleCopy}
           style={{ fontSize: 12 }}
@@ -223,15 +345,142 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
   )
 }
 
+// ── Markdown components factory — built once per theme token ────────────────
+
+function buildMarkdownComponents(token: ReturnType<typeof useToken>['token']) {
+  return {
+    code({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { className?: string }) {
+      const match = /language-(\w+)/.exec(className || '')
+      const codeStr = String(children).replace(/\n$/, '')
+      if (match) {
+        return <CodeBlock language={match[1]} code={codeStr} />
+      }
+      return (
+        <code
+          style={{
+            background: token.colorFillSecondary,
+            padding: '2px 6px',
+            borderRadius: 4,
+            fontSize: '0.9em',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      )
+    },
+    pre({ children }: React.ComponentPropsWithoutRef<'pre'>) {
+      return <>{children}</>
+    },
+    p({ children }: React.ComponentPropsWithoutRef<'p'>) {
+      return <p style={{ margin: '0.5em 0' }}>{children}</p>
+    },
+    ul({ children }: React.ComponentPropsWithoutRef<'ul'>) {
+      return <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ul>
+    },
+    ol({ children }: React.ComponentPropsWithoutRef<'ol'>) {
+      return <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ol>
+    },
+    li({ children }: React.ComponentPropsWithoutRef<'li'>) {
+      return <li style={{ margin: '0.25em 0' }}>{children}</li>
+    },
+    blockquote({ children }: React.ComponentPropsWithoutRef<'blockquote'>) {
+      return (
+        <blockquote
+          style={{
+            margin: '0.5em 0',
+            paddingLeft: '1em',
+            borderLeft: `3px solid ${token.colorPrimary}`,
+            color: token.colorTextSecondary,
+          }}
+        >
+          {children}
+        </blockquote>
+      )
+    },
+    table({ children }: React.ComponentPropsWithoutRef<'table'>) {
+      return (
+        <div style={{ overflowX: 'auto', margin: '0.5em 0' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
+            {children}
+          </table>
+        </div>
+      )
+    },
+    th({ children }: React.ComponentPropsWithoutRef<'th'>) {
+      return (
+        <th
+          style={{
+            border: `1px solid ${token.colorBorder}`,
+            padding: '6px 10px',
+            background: token.colorFillSecondary,
+            fontWeight: 600,
+            textAlign: 'left',
+          }}
+        >
+          {children}
+        </th>
+      )
+    },
+    td({ children }: React.ComponentPropsWithoutRef<'td'>) {
+      return (
+        <td style={{ border: `1px solid ${token.colorBorder}`, padding: '6px 10px' }}>
+          {children}
+        </td>
+      )
+    },
+    a({ href, children }: React.ComponentPropsWithoutRef<'a'>) {
+      return (
+        <a
+          href={safeUrl(href)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: token.colorPrimary }}
+        >
+          {children}
+        </a>
+      )
+    },
+    h1({ children }: React.ComponentPropsWithoutRef<'h1'>) {
+      return <h1 style={{ margin: '0.75em 0 0.4em', fontSize: '1.3em', fontWeight: 700 }}>{children}</h1>
+    },
+    h2({ children }: React.ComponentPropsWithoutRef<'h2'>) {
+      return <h2 style={{ margin: '0.7em 0 0.35em', fontSize: '1.15em', fontWeight: 600 }}>{children}</h2>
+    },
+    h3({ children }: React.ComponentPropsWithoutRef<'h3'>) {
+      return <h3 style={{ margin: '0.6em 0 0.3em', fontSize: '1.05em', fontWeight: 600 }}>{children}</h3>
+    },
+    hr() {
+      return <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorder}`, margin: '0.75em 0' }} />
+    },
+  }
+}
+
 // ── Bubble component ───────────────────────────────────────────────────────
 
-function Bubble({ msg }: { msg: Message }) {
+const Bubble = memo(function Bubble({
+  msg,
+  onDelete,
+  onEdit,
+}: {
+  msg: Message
+  onDelete: (id: string) => void
+  onEdit: (id: string, newContent: string) => void
+}) {
   const { token } = useToken()
+  const { message: antMessage } = AntApp.useApp()
   const isUser = msg.role === 'user'
   const isError = msg.role === 'error'
   const [copied, setCopied] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editText, setEditText] = useState(msg.content)
+  const [isHovered, setIsHovered] = useState(false)
   const [previewVisible, setPreviewVisible] = useState(false)
   const [previewImage, setPreviewImage] = useState('')
+
+  // Memoize markdown components per theme token to avoid re-creating on every render.
+  const mdComponents = useMemo(() => buildMarkdownComponents(token), [token])
 
   const handleCopy = async () => {
     try {
@@ -239,13 +488,15 @@ function Bubble({ msg }: { msg: Message }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      antdMessage.error('Failed to copy')
+      antMessage.error('Failed to copy')
     }
   }
 
   const isImageFile = (filename: string) => {
-    const ext = filename.toLowerCase().split('.').pop()
-    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext || '')
+    const dotIdx = filename.lastIndexOf('.')
+    if (dotIdx < 0) return false
+    const ext = filename.slice(dotIdx + 1).toLowerCase()
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
   }
 
   const handleImageClick = (url: string) => {
@@ -259,7 +510,7 @@ function Bubble({ msg }: { msg: Message }) {
         color: '#fff',
         borderRadius: '18px 18px 4px 18px',
         padding: '10px 18px 10px 16px',
-        maxWidth: '72%',
+        maxWidth: '80%',
         whiteSpace: 'pre-wrap',
         fontSize: 14,
         lineHeight: 1.5,
@@ -272,44 +523,101 @@ function Bubble({ msg }: { msg: Message }) {
         border: `1px solid ${token.colorErrorBorder}`,
         borderRadius: 8,
         padding: '8px 12px',
-        maxWidth: '80%',
+        width: '100%',
         whiteSpace: 'pre-wrap',
         fontSize: 13,
         lineHeight: 1.5,
       }
     : {
-        background: token.colorBgContainer,
+        // Assistant: no bubble box — full width, flush left, like ChatGPT
+        width: '100%',
         color: token.colorText,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: '18px 18px 18px 4px',
-        padding: '10px 18px 10px 16px',
-        maxWidth: '72%',
-        whiteSpace: 'pre-wrap',
         fontSize: 14,
-        lineHeight: 1.5,
-        boxShadow: token.boxShadow,
+        lineHeight: 1.7,
       }
+
+  const handleEditSubmit = () => {
+    const trimmed = editText.trim()
+    if (trimmed && trimmed !== msg.content) {
+      onEdit(msg.id, trimmed)
+    }
+    setIsEditing(false)
+  }
+
+  // Shared action toolbar — copy + edit (user only) + delete, shown on hover.
+  const actionBar = (
+    <div
+      style={{
+        opacity: isHovered ? 1 : 0,
+        transition: 'opacity 0.15s ease',
+        display: 'flex',
+        gap: 2,
+        marginTop: 2,
+      }}
+    >
+      <Button
+        className="copy-btn"
+        type="text"
+        size="small"
+        aria-label={copied ? 'Copied' : 'Copy message'}
+        icon={copied ? <CheckOutlined style={{ color: token.colorSuccess }} /> : <CopyOutlined />}
+        onClick={handleCopy}
+        style={{ fontSize: 12, padding: '2px 6px', height: 'auto', color: token.colorTextSecondary }}
+      />
+      {isUser && (
+        <Button
+          type="text"
+          size="small"
+          aria-label="Edit message"
+          icon={<EditOutlined />}
+          onClick={() => { setEditText(msg.content); setIsEditing(true) }}
+          style={{ fontSize: 12, padding: '2px 6px', height: 'auto', color: token.colorTextSecondary }}
+        />
+      )}
+      <Popconfirm
+        title="Delete this message?"
+        onConfirm={() => onDelete(msg.id)}
+        okText="Delete"
+        okType="danger"
+        placement={isUser ? 'topRight' : 'topLeft'}
+      >
+        <Button
+          type="text"
+          size="small"
+          danger
+          aria-label="Delete message"
+          icon={<DeleteOutlined />}
+          style={{ fontSize: 12, padding: '2px 6px', height: 'auto' }}
+        />
+      </Popconfirm>
+    </div>
+  )
 
   return (
     <div
       className="bubble-enter"
+      role={isError ? 'alert' : undefined}
       style={{
         display: 'flex',
         flexDirection: isUser ? 'row-reverse' : 'row',
-        alignItems: 'flex-end',
+        alignItems: isUser ? 'flex-end' : 'flex-start',
         gap: 10,
         padding: '4px 0',
       }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
       {!isUser && !isError && (
         <Avatar
+          aria-hidden="true"
           size={32}
           icon={<RobotOutlined />}
-          style={{ background: token.colorPrimary, flexShrink: 0, marginBottom: 2 }}
+          style={{ background: token.colorPrimary, flexShrink: 0, marginTop: 2 }}
         />
       )}
       {isUser && (
         <Avatar
+          aria-hidden="true"
           size={32}
           icon={<UserOutlined />}
           style={{ background: token.colorTextSecondary, flexShrink: 0, marginBottom: 2 }}
@@ -317,184 +625,74 @@ function Bubble({ msg }: { msg: Message }) {
       )}
       {isError && (
         <Avatar
+          aria-hidden="true"
           size={32}
           icon={<RobotOutlined />}
-          style={{ background: token.colorError, flexShrink: 0, marginBottom: 2 }}
+          style={{ background: token.colorError, flexShrink: 0, marginTop: 2 }}
         />
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: 3 }}>
-        <div
-          className="bubble-content"
-          style={{ ...bubbleStyle, position: 'relative' }}
-          onMouseEnter={!isUser && !isError ? (e) => {
-            const btn = (e.currentTarget as HTMLElement).querySelector('.copy-btn') as HTMLElement | null
-            if (btn) btn.style.opacity = '1'
-          } : undefined}
-          onMouseLeave={!isUser && !isError ? (e) => {
-            const btn = (e.currentTarget as HTMLElement).querySelector('.copy-btn') as HTMLElement | null
-            if (btn) btn.style.opacity = '0'
-          } : undefined}
-        >
-          {!isUser && !isError ? (
-            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  code({ className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || '')
-                    const codeStr = String(children).replace(/\n$/, '')
-                    if (match) {
-                      return <CodeBlock language={match[1]} code={codeStr} />
-                    }
-                    return (
-                      <code
-                        style={{
-                          background: token.colorFillSecondary,
-                          padding: '2px 6px',
-                          borderRadius: 4,
-                          fontSize: '0.9em',
-                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        }}
-                        {...props}
-                      >
-                        {children}
-                      </code>
-                    )
-                  },
-                  pre({ children }) {
-                    return <>{children}</>
-                  },
-                  p({ children }) {
-                    return <p style={{ margin: '0.5em 0' }}>{children}</p>
-                  },
-                  ul({ children }) {
-                    return <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ul>
-                  },
-                  ol({ children }) {
-                    return <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em' }}>{children}</ol>
-                  },
-                  li({ children }) {
-                    return <li style={{ margin: '0.25em 0' }}>{children}</li>
-                  },
-                  blockquote({ children }) {
-                    return (
-                      <blockquote
-                        style={{
-                          margin: '0.5em 0',
-                          paddingLeft: '1em',
-                          borderLeft: `3px solid ${token.colorPrimary}`,
-                          color: token.colorTextSecondary,
-                        }}
-                      >
-                        {children}
-                      </blockquote>
-                    )
-                  },
-                  table({ children }) {
-                    return (
-                      <div style={{ overflowX: 'auto', margin: '0.5em 0' }}>
-                        <table
-                          style={{
-                            borderCollapse: 'collapse',
-                            width: '100%',
-                            fontSize: 13,
-                          }}
-                        >
-                          {children}
-                        </table>
-                      </div>
-                    )
-                  },
-                  th({ children }) {
-                    return (
-                      <th
-                        style={{
-                          border: `1px solid ${token.colorBorder}`,
-                          padding: '6px 10px',
-                          background: token.colorFillSecondary,
-                          fontWeight: 600,
-                          textAlign: 'left',
-                        }}
-                      >
-                        {children}
-                      </th>
-                    )
-                  },
-                  td({ children }) {
-                    return (
-                      <td
-                        style={{
-                          border: `1px solid ${token.colorBorder}`,
-                          padding: '6px 10px',
-                        }}
-                      >
-                        {children}
-                      </td>
-                    )
-                  },
-                  a({ href, children }) {
-                    return (
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: token.colorPrimary }}
-                      >
-                        {children}
-                      </a>
-                    )
-                  },
-                  h1({ children }) {
-                    return <h1 style={{ margin: '0.75em 0 0.4em', fontSize: '1.3em', fontWeight: 700 }}>{children}</h1>
-                  },
-                  h2({ children }) {
-                    return <h2 style={{ margin: '0.7em 0 0.35em', fontSize: '1.15em', fontWeight: 600 }}>{children}</h2>
-                  },
-                  h3({ children }) {
-                    return <h3 style={{ margin: '0.6em 0 0.3em', fontSize: '1.05em', fontWeight: 600 }}>{children}</h3>
-                  },
-                  hr() {
-                    return <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorder}`, margin: '0.75em 0' }} />
-                  },
-                }}
-              >
-                {msg.content}
-              </ReactMarkdown>
-            </div>
-          ) : (
-            msg.content
-          )}
-          {!isUser && !isError && (
-            <Button
-              className="copy-btn"
-              type="text"
-              size="small"
-              icon={copied ? <CheckOutlined style={{ color: token.colorSuccess }} /> : <CopyOutlined />}
-              onClick={handleCopy}
-              style={{
-                position: 'absolute',
-                top: 4,
-                right: 4,
-                opacity: 0,
-                transition: 'opacity 0.15s ease',
-                fontSize: 12,
-                padding: '2px 6px',
-                height: 'auto',
-                color: token.colorTextSecondary,
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: 3, flex: isUser ? undefined : 1, minWidth: 0 }}>
+        {isEditing ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: '80%' }}>
+            <TextArea
+              autoFocus
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditSubmit() }
+                if (e.key === 'Escape') { setIsEditing(false) }
               }}
+              autoSize={{ minRows: 2, maxRows: 10 }}
+              style={{ borderRadius: 8, fontSize: 14 }}
             />
-          )}
-        </div>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+              <Button size="small" onClick={() => setIsEditing(false)}>Cancel</Button>
+              <Button size="small" type="primary" onClick={handleEditSubmit} disabled={!editText.trim()}>
+                Send
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className="bubble-content"
+              style={{ ...bubbleStyle, position: isUser || isError ? 'relative' : undefined }}
+            >
+              {!isUser && !isError ? (
+                <div style={{ wordBreak: 'break-word' }}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={mdComponents}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <Linkified
+                  text={msg.content}
+                  linkColor={isUser ? 'rgba(255,255,255,0.9)' : token.colorError}
+                />
+              )}
+            </div>
+
+            {/* Action toolbar — hover-revealed, same layout for all roles */}
+            {actionBar}
+          </>
+        )}
+
         {msg.files && msg.files.length > 0 && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
             {msg.files.map((file) => (
               isImageFile(file.filename) ? (
                 <img
                   key={file.id}
-                  src={file.url}
+                  src={safeUrl(file.url)}
                   alt={file.filename}
-                  onClick={() => handleImageClick(file.url)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleImageClick(safeUrl(file.url))}
+                  onKeyDown={(e) => e.key === 'Enter' && handleImageClick(safeUrl(file.url))}
                   style={{
                     maxWidth: 200,
                     maxHeight: 150,
@@ -506,7 +704,7 @@ function Bubble({ msg }: { msg: Message }) {
               ) : (
                 <a
                   key={file.id}
-                  href={file.url}
+                  href={safeUrl(file.url)}
                   download={file.filename}
                   style={{
                     display: 'flex',
@@ -529,7 +727,7 @@ function Bubble({ msg }: { msg: Message }) {
         <Modal
           open={previewVisible}
           footer={null}
-          onCancel={() => setPreviewVisible(false)}
+          onCancel={() => { setPreviewVisible(false); setPreviewImage('') }}
           width="90vw"
           centered
         >
@@ -539,35 +737,27 @@ function Bubble({ msg }: { msg: Message }) {
             src={previewImage}
           />
         </Modal>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Text type="secondary" style={{ fontSize: 10 }}>
-            {fmt(msg.ts)}
-          </Text>
-          {msg.model !== undefined && (
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {msg.model}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Tooltip title={isNaN(msg.ts.getTime()) ? undefined : msg.ts.toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' })}>
+            <Text type="secondary" style={{ fontSize: 10, cursor: 'default' }}>
+              {formatMessageTime(msg.ts)}
             </Text>
+          </Tooltip>
+          {msg.model !== undefined && (
+            isError
+              ? <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{msg.model}</Tag>
+              : <Text type="secondary" style={{ fontSize: 10 }}>{msg.model}</Text>
           )}
           {msg.timeTaken !== undefined && (
             <Text type="secondary" style={{ fontSize: 10 }}>
               {msg.timeTaken < 1000 ? `${msg.timeTaken}ms` : `${(msg.timeTaken / 1000).toFixed(1)}s`}
             </Text>
           )}
-          {msg.llmCalls !== undefined && (
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {msg.llmCalls} LLM call{msg.llmCalls !== 1 ? 's' : ''}
-            </Text>
-          )}
-          {msg.toolCalls !== undefined && msg.toolCalls > 0 && (
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {msg.toolCalls} tool call{msg.toolCalls !== 1 ? 's' : ''}
-            </Text>
-          )}
         </div>
       </div>
     </div>
   )
-}
+})
 
 // ── Typing indicator ───────────────────────────────────────────────────────
 
@@ -576,6 +766,7 @@ function TypingIndicator() {
   return (
     <div className="typing-indicator" style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
       <Avatar
+        aria-hidden="true"
         size={32}
         icon={<RobotOutlined />}
         style={{ background: token.colorPrimary, flexShrink: 0 }}
@@ -591,9 +782,11 @@ function TypingIndicator() {
           alignItems: 'center',
         }}
       >
-        {[0, 1, 2].map((i) => (
+        <span className="sr-only">Assistant is typing…</span>
+        {TYPING_DOTS.map((i) => (
           <span
             key={i}
+            aria-hidden="true"
             className="typing-dot"
             style={{ animationDelay: `${i * 0.18}s` }}
           />
@@ -634,7 +827,14 @@ function ToolsDrawer({
       onClose={onClose}
       extra={
         <Tooltip title="Refresh">
-          <Button icon={<ReloadOutlined />} type="text" onClick={onRefresh} loading={loading} size="small" />
+          <Button
+            icon={<ReloadOutlined />}
+            type="text"
+            onClick={onRefresh}
+            loading={loading}
+            size="small"
+            aria-label="Refresh tools"
+          />
         </Tooltip>
       }
     >
@@ -683,6 +883,130 @@ function ToolsDrawer({
   )
 }
 
+// ── ConvItem — sidebar conversation row ────────────────────────────────────
+
+interface ConvItemProps {
+  conv: ConversationMeta
+  isActive: boolean
+  editingConvId: string | null
+  editingTitle: string
+  token: ReturnType<typeof useToken>['token']
+  onLoad: (id: string) => void
+  onStartEdit: (id: string, title: string) => void
+  onConfirmEdit: () => void
+  onCancelEdit: () => void
+  onEditTitleChange: (v: string) => void
+  onTogglePin: (id: string) => void
+  onDelete: (id: string) => void
+}
+
+function ConvItem({
+  conv,
+  isActive,
+  editingConvId,
+  editingTitle,
+  token,
+  onLoad,
+  onStartEdit,
+  onConfirmEdit,
+  onCancelEdit,
+  onEditTitleChange,
+  onTogglePin,
+  onDelete,
+}: ConvItemProps) {
+  const isEditing = editingConvId === conv.id
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '5px 6px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        background: isActive ? token.colorPrimaryBg : 'transparent',
+        marginBottom: 2,
+      }}
+      onClick={() => { if (!isEditing) onLoad(conv.id) }}
+    >
+      <MessageOutlined
+        style={{
+          color: isActive ? token.colorPrimary : token.colorTextSecondary,
+          fontSize: 13,
+          flexShrink: 0,
+        }}
+      />
+      {isEditing ? (
+        <Input
+          size="small"
+          value={editingTitle}
+          autoFocus
+          onChange={(e) => onEditTitleChange(e.target.value)}
+          onPressEnter={onConfirmEdit}
+          onBlur={onConfirmEdit}
+          onKeyDown={(e) => { if (e.key === 'Escape') onCancelEdit() }}
+          onClick={(e) => e.stopPropagation()}
+          style={{ flex: 1, fontSize: 12, height: 24 }}
+        />
+      ) : (
+        <Text
+          ellipsis
+          style={{
+            flex: 1,
+            fontSize: 13,
+            fontWeight: isActive ? 600 : 400,
+            color: isActive ? token.colorPrimary : token.colorText,
+          }}
+        >
+          {conv.title || 'Untitled'}
+        </Text>
+      )}
+      {/* Action buttons — always rendered but hidden via opacity to preserve layout */}
+      <div
+        style={{ display: 'flex', gap: 2, flexShrink: 0 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Tooltip title={conv.pinned ? 'Unpin' : 'Pin'}>
+          <Button
+            type="text"
+            size="small"
+            icon={conv.pinned ? <PushpinFilled style={{ color: token.colorPrimary }} /> : <PushpinOutlined />}
+            onClick={() => onTogglePin(conv.id)}
+            aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
+            style={{ width: 22, height: 22, padding: 0, color: token.colorTextSecondary }}
+          />
+        </Tooltip>
+        <Tooltip title="Rename">
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => onStartEdit(conv.id, conv.title || '')}
+            aria-label="Rename conversation"
+            style={{ width: 22, height: 22, padding: 0, color: token.colorTextSecondary }}
+          />
+        </Tooltip>
+        <Popconfirm
+          title="Delete this conversation?"
+          onConfirm={() => onDelete(conv.id)}
+          okText="Delete"
+          okType="danger"
+          placement="right"
+        >
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            aria-label="Delete conversation"
+            style={{ width: 22, height: 22, padding: 0 }}
+          />
+        </Popconfirm>
+      </div>
+    </div>
+  )
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 
 interface ChatAppProps {
@@ -694,10 +1018,19 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
 
-  const [sessionId] = useState(uid)
+  // Persist session ID in sessionStorage so it survives in-tab navigations
+  // but starts fresh on a new tab/window.
+  const [sessionId, setSessionId] = useState(() => {
+    const stored = sessionStorage.getItem('chatSessionId')
+    if (stored) return stored
+    const id = uid()
+    sessionStorage.setItem('chatSessionId', id)
+    return id
+  })
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const loadingRef = useRef(false) // ref mirror so callbacks don't need loading in deps
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string>('auto')
 
@@ -708,17 +1041,25 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [uploading, setUploading] = useState(false)
 
+  // ── Sidebar state ──
+  const [siderCollapsed, setSiderCollapsed] = useState(false)
+  const [conversations, setConversations] = useState<ConversationMeta[]>([])
+  const [convsLoading, setConvsLoading] = useState(false)
+  const [editingConvId, setEditingConvId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
+
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<TextAreaRef>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
-  // Scroll to bottom whenever messages change
+  // Scroll to bottom when a new message is added (track last message id).
+  const lastMsgId = messages.length > 0 ? messages[messages.length - 1].id : null
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+  }, [lastMsgId, loading])
 
-  // Track scroll position for scroll-to-bottom button
+  // Track scroll position for scroll-to-bottom button.
   useEffect(() => {
     const el = contentRef.current
     if (!el) return
@@ -730,15 +1071,97 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  // Load UI config on mount
+  // Load UI config and models on mount.
   useEffect(() => {
-    apiGetUIConfig().then(setUIConfig).catch(() => {})
+    let cancelled = false
+    apiGetUIConfig().then((cfg) => { if (!cancelled) setUIConfig(cfg) }).catch(() => {})
     apiGetModels().then((data) => {
+      if (cancelled) return
       setModels(data.models)
-      if (data.models.length > 0) {
-        setSelectedModel(data.models[0].id)
-      }
     }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const refreshConversations = useCallback(async () => {
+    setConvsLoading(true)
+    try {
+      const list = await apiListConversations()
+      setConversations(list ?? [])
+    } catch {
+      // silently ignore — sidebar just stays empty
+    } finally {
+      setConvsLoading(false)
+    }
+  }, [])
+
+  // Fetch conversation list on mount.
+  useEffect(() => {
+    refreshConversations()
+  }, [refreshConversations])
+
+  const handleNewChat = useCallback(() => {
+    const id = uid()
+    sessionStorage.setItem('chatSessionId', id)
+    setSessionId(id)
+    setMessages([])
+    setInput('')
+    setUploadedFiles([])
+  }, [])
+
+  const handleLoadConversation = useCallback(async (id: string) => {
+    const detail = await apiLoadConversation(id)
+    if (!detail) {
+      antMessage.error('Failed to load conversation')
+      return
+    }
+    sessionStorage.setItem('chatSessionId', id)
+    setSessionId(id)
+    setInput('')
+    setUploadedFiles([])
+    // Convert storage messages to UI messages (user/assistant only; skip tool messages).
+    const uiMsgs: Message[] = detail.messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        id: uid(),
+        role: m.role as Role,
+        content: m.content,
+        ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
+        model: m.model,
+        timeTaken: m.time_taken_ms,
+        msgId: m.id,
+      }))
+    setMessages(uiMsgs)
+    // Restore the user's explicit model choice for this conversation.
+    // detail.model is empty when the user left it on auto.
+    const next = detail.model || 'auto'
+    setSelectedModel(next)
+    selectedModelRef.current = next
+  }, [antMessage])
+
+  const handleDeleteConversation = useCallback(async (id: string) => {
+    await apiDeleteConversation(id)
+    // If we deleted the active session, start fresh.
+    if (id === sessionId) {
+      handleNewChat()
+    }
+    refreshConversations()
+  }, [sessionId, handleNewChat, refreshConversations])
+
+  const handleRenameConversation = useCallback(async (id: string, title: string) => {
+    await apiRenameConversation(id, title)
+    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, title } : c))
+  }, [])
+
+  const handleTogglePin = useCallback(async (id: string) => {
+    const pinned = await apiTogglePin(id)
+    setConversations((prev) => {
+      const updated = prev.map((c) => c.id === id ? { ...c, pinned } : c)
+      // Re-sort: pinned first (preserving relative order within each group).
+      return [
+        ...updated.filter((c) => c.pinned),
+        ...updated.filter((c) => !c.pinned),
+      ]
+    })
   }, [])
 
   const fetchTools = useCallback(async () => {
@@ -753,61 +1176,254 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     }
   }, [antMessage])
 
-  const handleOpenTools = () => {
+  const handleOpenTools = useCallback(() => {
     setToolsOpen(true)
     fetchTools()
-  }
+  }, [fetchTools])
+
+  // selectedModelRef lets send() read the latest selected model without
+  // needing it in the dependency array.
+  const selectedModelRef = useRef(selectedModel)
+  useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+
+  const uploadedFilesRef = useRef(uploadedFiles)
+  useEffect(() => { uploadedFilesRef.current = uploadedFiles }, [uploadedFiles])
+
+  // sessionIdRef ensures send() always uses the current session ID even if
+  // the state update hasn't propagated through useCallback deps yet.
+  const sessionIdRef = useRef(sessionId)
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   const send = useCallback(async (overrideText?: string) => {
-    const text = (overrideText ?? input).trim()
-    if (!text && uploadedFiles.length === 0) return
+    // Guard: disallow concurrent sends.
+    if (loadingRef.current) return
 
+    const text = (overrideText ?? input).trim()
+    if (!text && uploadedFilesRef.current.length === 0) return
+
+    const files = uploadedFilesRef.current
+    const currentSessionId = sessionIdRef.current
     setInput('')
-    const userMsg: Message = { id: uid(), role: 'user', content: text, ts: new Date(), files: uploadedFiles }
+    const userMsg: Message = { id: uid(), role: 'user', content: text, ts: new Date(), files }
     setMessages((prev) => [...prev, userMsg])
     setUploadedFiles([])
     setLoading(true)
+    loadingRef.current = true
 
     try {
-      const fileUrls = uploadedFiles.map((f) => f.url)
-      const modelToSend = selectedModel === 'auto' ? undefined : selectedModel
-      const response = await apiChat(sessionId, text, fileUrls, modelToSend)
-      const assistantMsg: Message = { id: uid(), role: 'assistant', content: response.reply, ts: new Date(), timeTaken: response.time_taken_ms, llmCalls: response.llm_calls, toolCalls: response.tool_calls, model: response.model, files: response.files }
+      const fileUrls = files.map((f) => f.url)
+      const modelId = selectedModelRef.current
+      const modelToSend = modelId === 'auto' ? undefined : modelId
+      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend)
+      // Attach persisted storage IDs so individual messages can be deleted later.
+      if (response.user_msg_id) {
+        setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
+      }
+      const assistantMsg: Message = {
+        id: uid(),
+        role: 'assistant',
+        content: response.reply,
+        ts: new Date(),
+        timeTaken: response.time_taken_ms,
+        llmCalls: response.llm_calls,
+        toolCalls: response.tool_calls,
+        model: response.model,
+        files: response.files,
+        msgId: response.assistant_msg_id,
+      }
       setMessages((prev) => [...prev, assistantMsg])
+      refreshConversations()
     } catch (err) {
-      const modelDisplay = selectedModel === 'auto' ? undefined : selectedModel
+      // Prefer the model reported by the server (ChatError.model); fall back to
+      // what the user selected. Always show something — never hide it.
+      const serverModel = err instanceof ChatError ? err.model : undefined
+      const requestedModel = selectedModelRef.current
+      const errorModel = serverModel || requestedModel || 'unknown'
       const errMsg: Message = {
         id: uid(),
         role: 'error',
         content: err instanceof Error ? err.message : 'Something went wrong',
         ts: new Date(),
-        model: modelDisplay,
+        model: errorModel,
       }
       setMessages((prev) => [...prev, errMsg])
     } finally {
       setLoading(false)
+      loadingRef.current = false
+      // Defer focus until after React re-enables the textarea.
+      setTimeout(() => {
+        const el = inputRef.current?.resizableTextArea?.textArea
+        el?.focus()
+      }, 0)
     }
-  }, [input, loading, sessionId, uploadedFiles, selectedModel])
+  }, [input, refreshConversations]) // sessionId, uploadedFiles, selectedModel accessed via refs
 
-  const handleReset = useCallback(async () => {
-    await apiReset(sessionId)
-    setMessages([])
-    antMessage.success('Conversation cleared')
-  }, [sessionId, antMessage])
+  const handleDeleteMessage = useCallback((id: string) => {
+    setMessages((prev) => {
+      const msg = prev.find((m) => m.id === id)
+      if (msg?.msgId) {
+        // Fire-and-forget: remove from storage; ignore errors silently.
+        apiDeleteMessage(sessionIdRef.current, msg.msgId).catch(() => {})
+      }
+      return prev.filter((m) => m.id !== id)
+    })
+  }, [])
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  // handleEditMessage: called when the user submits an edited user message.
+  // Drops all messages after the edited one from both UI and storage, updates
+  // the edited message content, then re-sends it to the LLM.
+  const handleEditMessage = useCallback(async (id: string, newContent: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === id)
+      if (idx < 0) return prev
+
+      const msg = prev[idx]
+      const convId = sessionIdRef.current
+
+      // Delete the edited message and everything after it from storage.
+      if (msg.msgId) {
+        apiDeleteMessagesFrom(convId, msg.msgId).catch(() => {})
+      }
+
+      // Keep only messages before the edited one; the edited message itself
+      // will be re-added by send() as a fresh user message.
+      return prev.slice(0, idx)
+    })
+
+    // Now send the edited content as a new message.
+    send(newContent)
+  }, [send])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !uploading) {
       e.preventDefault()
       send()
     }
-  }
+  }, [send, uploading])
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (e.target.value.length <= MAX_MESSAGE_LENGTH) {
+      setInput(e.target.value)
+    }
+  }, [])
 
   const scrollToBottom = () => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  // Build model selector options once when models list changes.
+  const modelOptions = useMemo(() => [
+    { label: 'Auto', value: 'auto' },
+    ...models.map((m) => ({ label: m.name || m.id, value: m.id })),
+  ], [models])
+
+  const charCount = input.length
+  const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
+
   return (
     <Layout style={{ height: '100vh', background: token.colorBgLayout }}>
+      {/* ── Sidebar ── */}
+      <Sider
+        collapsible
+        collapsed={siderCollapsed}
+        onCollapse={setSiderCollapsed}
+        collapsedWidth={0}
+        trigger={null}
+        width={260}
+        style={{
+          background: token.colorBgContainer,
+          borderRight: `1px solid ${token.colorBorderSecondary}`,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* New Chat button */}
+          <div style={{ padding: '12px 12px 8px' }}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              block
+              onClick={handleNewChat}
+              style={{ borderRadius: 8 }}
+            >
+              New Chat
+            </Button>
+          </div>
+
+          {/* Conversation list */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
+            {convsLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 24 }}>
+                <Spin size="small" />
+              </div>
+            ) : conversations.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={<Text type="secondary" style={{ fontSize: 12 }}>No past conversations</Text>}
+                style={{ marginTop: 24 }}
+              />
+            ) : (
+              <>
+                {/* Pinned group */}
+                {conversations.some((c) => c.pinned) && (
+                  <>
+                    <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Pinned</Divider>
+                    {conversations.filter((c) => c.pinned).map((conv) => (
+                      <ConvItem
+                        key={conv.id}
+                        conv={conv}
+                        isActive={conv.id === sessionId}
+                        editingConvId={editingConvId}
+                        editingTitle={editingTitle}
+                        token={token}
+                        onLoad={handleLoadConversation}
+                        onStartEdit={(id, title) => { setEditingConvId(id); setEditingTitle(title) }}
+                        onConfirmEdit={() => {
+                          if (editingConvId) handleRenameConversation(editingConvId, editingTitle.trim() || 'Untitled')
+                          setEditingConvId(null)
+                        }}
+                        onCancelEdit={() => setEditingConvId(null)}
+                        onEditTitleChange={setEditingTitle}
+                        onTogglePin={handleTogglePin}
+                        onDelete={handleDeleteConversation}
+                      />
+                    ))}
+                    {conversations.some((c) => !c.pinned) && (
+                      <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Recent</Divider>
+                    )}
+                  </>
+                )}
+                {/* Recent / unpinned group */}
+                {conversations.filter((c) => !c.pinned).map((conv) => (
+                  <ConvItem
+                    key={conv.id}
+                    conv={conv}
+                    isActive={conv.id === sessionId}
+                    editingConvId={editingConvId}
+                    editingTitle={editingTitle}
+                    token={token}
+                    onLoad={handleLoadConversation}
+                    onStartEdit={(id, title) => { setEditingConvId(id); setEditingTitle(title) }}
+                    onConfirmEdit={() => {
+                      if (editingConvId) handleRenameConversation(editingConvId, editingTitle.trim() || 'Untitled')
+                      setEditingConvId(null)
+                    }}
+                    onCancelEdit={() => setEditingConvId(null)}
+                    onEditTitleChange={setEditingTitle}
+                    onTogglePin={handleTogglePin}
+                    onDelete={handleDeleteConversation}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      </Sider>
+
+      {/* ── Main area ── */}
+      <Layout style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* ── Header ── */}
       <div
         style={{
@@ -826,7 +1442,15 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Button
+            type="text"
+            icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            onClick={() => setSiderCollapsed(!siderCollapsed)}
+            aria-label={siderCollapsed ? 'Open sidebar' : 'Close sidebar'}
+            style={{ color: token.colorTextSecondary }}
+          />
           <Avatar
+            aria-hidden="true"
             icon={<RobotOutlined />}
             style={{ background: token.colorPrimary }}
             size={36}
@@ -847,6 +1471,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               icon={isDark ? <SunOutlined /> : <MoonOutlined />}
               onClick={onToggleDark}
               type="text"
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               style={{ color: token.colorTextSecondary }}
             />
           </Tooltip>
@@ -856,24 +1481,19 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                 icon={<ToolOutlined />}
                 onClick={handleOpenTools}
                 type="text"
+                aria-label="View active tools"
                 style={{ color: token.colorTextSecondary }}
               />
             </Badge>
           </Tooltip>
-          <Tooltip title="New conversation">
-            <Button
-              icon={<PlusOutlined />}
-              onClick={handleReset}
-              type="text"
-              style={{ color: token.colorTextSecondary }}
-            />
-          </Tooltip>
-          <Tooltip title="GitHub">
+          <Tooltip title="GitHub (opens in new tab)">
             <Button
               icon={<GithubOutlined />}
               href="https://github.com/anomalyco/chatbot"
               target="_blank"
+              rel="noopener noreferrer"
               type="text"
+              aria-label="View source on GitHub (opens in new tab)"
               style={{ color: token.colorTextSecondary }}
             />
           </Tooltip>
@@ -893,9 +1513,12 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         }}
       >
         <div
+          aria-live="polite"
+          aria-label="Chat messages"
+          role="log"
           style={{
             width: '100%',
-            maxWidth: 900,
+            maxWidth: 'min(92%, 1800px)',
             margin: '0 auto',
             padding: '0 16px',
             display: 'flex',
@@ -918,6 +1541,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               }}
             >
               <Avatar
+                aria-hidden="true"
                 icon={<RobotOutlined />}
                 size={64}
                 style={{ background: token.colorPrimary, opacity: 0.85 }}
@@ -932,18 +1556,27 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   <Tag
                     key={prompt}
                     className="prompt-chip"
+                    tabIndex={loading ? -1 : 0}
+                    role="button"
+                    aria-disabled={loading}
                     style={{
                       padding: '6px 14px',
                       fontSize: 13,
-                      cursor: 'pointer',
+                      cursor: loading ? 'not-allowed' : 'pointer',
                       borderRadius: 16,
                       border: `1px solid ${token.colorBorder}`,
                       background: token.colorBgContainer,
-                      color: token.colorText,
+                      color: loading ? token.colorTextDisabled : token.colorText,
+                      opacity: loading ? 0.5 : 1,
                     }}
                     onClick={() => {
-                      setInput(prompt)
-                      setTimeout(() => send(prompt), 0)
+                      if (!loading) send(prompt)
+                    }}
+                    onKeyDown={(e) => {
+                      if (!loading && (e.key === 'Enter' || e.key === ' ')) {
+                        e.preventDefault()
+                        send(prompt)
+                      }
                     }}
                   >
                     {prompt}
@@ -954,7 +1587,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
           )}
 
           {messages.map((msg) => (
-            <Bubble key={msg.id} msg={msg} />
+            <Bubble key={msg.id} msg={msg} onDelete={handleDeleteMessage} onEdit={handleEditMessage} />
           ))}
 
           {loading && <TypingIndicator />}
@@ -962,21 +1595,22 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
           <div ref={bottomRef} />
         </div>
 
-        {/* Scroll-to-bottom button */}
+        {/* Scroll-to-bottom button — fixed so it floats above the input footer */}
         {showScrollBtn && (
           <Button
             type="primary"
             shape="circle"
             icon={<DownOutlined />}
             onClick={scrollToBottom}
+            aria-label="Scroll to bottom"
             style={{
-              position: 'absolute',
-              bottom: 16,
-              right: 24,
+              position: 'fixed',
+              bottom: 100,
+              right: 32,
               width: 40,
               height: 40,
               boxShadow: token.boxShadow,
-              zIndex: 5,
+              zIndex: 100,
             }}
           />
         )}
@@ -993,104 +1627,177 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
       >
         <div
           style={{
-            maxWidth: 900,
+            maxWidth: 'min(92%, 1800px)',
             margin: '0 auto',
-            display: 'flex',
-            gap: 10,
-            alignItems: 'center',
           }}
         >
-          <TextArea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              if (e.target.value.length <= 4000) {
-                setInput(e.target.value)
-              }
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-            autoSize={{ minRows: 2, maxRows: 6 }}
-            disabled={loading}
-            style={{
-              flex: 1,
-              borderRadius: 12,
-              resize: 'none',
-              fontSize: 15,
-              padding: '12px 16px',
-            }}
-          />
-          {models.length > 0 && (
-            <Select
-              value={selectedModel}
-              onChange={setSelectedModel}
-              style={{ width: 160 }}
-              size="small"
-              options={[
-                { label: 'Auto', value: 'auto' },
-                ...models.map((m) => ({ label: m.name || m.id, value: m.id }))
-              ]}
-            />
-          )}
-          <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
-            <Button
-              type="text"
-              icon={<PaperClipOutlined />}
-              onClick={() => document.getElementById('file-upload')?.click()}
-              disabled={loading || uploading}
-              style={{
-                height: 42,
-                width: 42,
-                borderRadius: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            />
-          </Tooltip>
+          {/* ── Textarea with toolbar inset at bottom ── */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ position: 'relative' }}>
+              <TextArea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Type a message…"
+                autoSize={{ minRows: 2, maxRows: 6 }}
+                disabled={loading || uploading}
+                aria-label="Message input"
+                style={{
+                  borderRadius: 12,
+                  resize: 'none',
+                  fontSize: 15,
+                  padding: '12px 16px',
+                  paddingBottom: 48,  // leave room for the inset toolbar row
+                }}
+              />
+              {/* Inset bottom-left toolbar: attach + model selector */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 6,
+                  left: 8,
+                  right: 54, // stop before the send button (34px + 8px gutter + 12px breathing room)
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  pointerEvents: loading || uploading ? 'none' : 'auto',
+                  opacity: loading || uploading ? 0.5 : 1,
+                }}
+              >
+                <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PaperClipOutlined />}
+                    onClick={() => document.getElementById('file-upload')?.click()}
+                    disabled={loading || uploading}
+                    aria-label={uploading ? 'Uploading file…' : 'Attach file'}
+                    style={{
+                      height: 28,
+                      width: 28,
+                      borderRadius: 6,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: token.colorTextSecondary,
+                    }}
+                  />
+                </Tooltip>
+                {models.length > 0 && (
+                  <Select
+                    value={selectedModel}
+                    onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
+                    size="small"
+                    aria-label="Select AI model"
+                    options={modelOptions}
+                    disabled={loading}
+                    variant="borderless"
+                    popupMatchSelectWidth={false}
+                    placement="topLeft"
+                    showSearch
+                    optionFilterProp={['label', 'value'] as unknown as string}
+                    prefix={<RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />}
+                    optionRender={(opt) => (
+                      <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
+                        <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
+                        {opt.value !== 'auto' && (
+                          <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3 }}>{opt.value}</span>
+                        )}
+                      </div>
+                    )}
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                )}
+              </div>
+              {/* Inset bottom-right: send button */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 6,
+                  right: 8,
+                }}
+              >
+                <Tooltip title="Send">
+                  <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => send()}
+                    disabled={(!input.trim() && uploadedFiles.length === 0) || loading}
+                    aria-label="Send message"
+                    style={{
+                      height: 34,
+                      width: 34,
+                      borderRadius: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  />
+                </Tooltip>
+              </div>
+            </div>
+            {showCharCount && (
+              <Text
+                type={charCount >= MAX_MESSAGE_LENGTH ? 'danger' : 'secondary'}
+                style={{ fontSize: 11, textAlign: 'right' }}
+              >
+                {charCount} / {MAX_MESSAGE_LENGTH}
+              </Text>
+            )}
+          </div>
+
           <input
             id="file-upload"
             type="file"
             multiple
             style={{ display: 'none' }}
             onChange={async (e) => {
+
               const files = e.target.files
               if (!files || files.length === 0) return
+
+              // Validate file count.
+              const currentCount = uploadedFilesRef.current.length
+              const incoming = Array.from(files)
+              if (currentCount + incoming.length > MAX_FILES_PER_MESSAGE) {
+                antMessage.error(`You can attach at most ${MAX_FILES_PER_MESSAGE} files per message`)
+                e.target.value = ''
+                return
+              }
+
+              // Validate file sizes.
+              const oversized = incoming.filter((f) => f.size > MAX_FILE_SIZE)
+              if (oversized.length > 0) {
+                antMessage.error(`${oversized.map((f) => f.name).join(', ')} exceed${oversized.length === 1 ? 's' : ''} the 10 MB limit`)
+                e.target.value = ''
+                return
+              }
+
               setUploading(true)
               try {
-                const uploaded = await Promise.all(
-                  Array.from(files).map((f) => apiUploadFile(f))
-                )
-                setUploadedFiles((prev) => [...prev, ...uploaded])
-              } catch {
-                antMessage.error('Failed to upload file')
+                const results = await Promise.allSettled(incoming.map((f) => apiUploadFile(f)))
+                const succeeded: UploadedFile[] = []
+                const failed: string[] = []
+                results.forEach((r, i) => {
+                  if (r.status === 'fulfilled') succeeded.push(r.value)
+                  else failed.push(incoming[i].name)
+                })
+                if (succeeded.length > 0) {
+                  setUploadedFiles((prev) => [...prev, ...succeeded])
+                }
+                if (failed.length > 0) {
+                  antMessage.error(`Failed to upload: ${failed.join(', ')}`)
+                }
               } finally {
                 setUploading(false)
                 e.target.value = ''
               }
             }}
           />
-          <Tooltip title="Send">
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={() => send()}
-              disabled={!input.trim() && uploadedFiles.length === 0}
-              style={{
-                height: 42,
-                width: 42,
-                borderRadius: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            />
-          </Tooltip>
         </div>
         {uploadedFiles.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, maxWidth: 'min(92%, 1800px)', margin: '8px auto 0' }}>
             {uploadedFiles.map((file) => (
               <Tag
                 key={file.id}
@@ -1098,7 +1805,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                 onClose={() => setUploadedFiles((prev) => prev.filter((f) => f.id !== file.id))}
                 style={{ display: 'flex', alignItems: 'center', gap: 4 }}
               >
-                <FileOutlined /> {file.filename}
+                <FileOutlined /> {file.filename} ({(file.size / 1024).toFixed(0)} KB)
               </Tag>
             ))}
           </div>
@@ -1118,6 +1825,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         loading={toolsLoading}
         onRefresh={fetchTools}
       />
+      </Layout>
     </Layout>
   )
 }
@@ -1125,7 +1833,10 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 // ── Root with ConfigProvider ───────────────────────────────────────────────
 
 export default function App() {
-  const [isDark, setIsDark] = useState(false)
+  // Respect OS-level dark mode preference as the initial value.
+  const [isDark, setIsDark] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
+  )
 
   return (
     <ConfigProvider

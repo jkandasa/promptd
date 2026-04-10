@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -21,49 +19,6 @@ const (
 	defaultHealthMaxFails = 3
 	defaultHealthTimeout  = 5 * time.Second
 )
-
-// Config represents MCP server configuration.
-type Config struct {
-	URL               string            `yaml:"url"`
-	Auth              map[string]string `yaml:"auth,omitempty"`
-	Headers           map[string]string `yaml:"headers,omitempty"`
-	Enabled           bool              `yaml:"enabled"`
-	HealthMaxFailures *int              `yaml:"health_max_failures,omitempty"`
-}
-
-// GlobalConfig represents the global MCP configuration.
-type GlobalConfig struct {
-	HealthMaxFailures *int     `yaml:"health_max_failures,omitempty"`
-	Servers           []Config `yaml:"servers"`
-}
-
-// LoadConfig loads MCP servers from a YAML file.
-func LoadConfig(path string) ([]Config, GlobalConfig, error) {
-	if path == "" {
-		return nil, GlobalConfig{}, nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, GlobalConfig{}, nil
-		}
-		return nil, GlobalConfig{}, fmt.Errorf("failed to read MCP config: %w", err)
-	}
-
-	var cfg GlobalConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, GlobalConfig{}, fmt.Errorf("failed to parse MCP config: %w", err)
-	}
-
-	var servers []Config
-	for _, s := range cfg.Servers {
-		if s.Enabled {
-			servers = append(servers, s)
-		}
-	}
-	return servers, cfg, nil
-}
 
 // Manager manages multiple MCP server connections and their tools.
 type Manager struct {
@@ -73,6 +28,7 @@ type Manager struct {
 	mu             sync.RWMutex
 	healthCancel   context.CancelFunc
 	removedServers map[string]removedServerInfo // url -> server config for re-registration
+	reregistering  map[string]bool              // url -> in-progress re-registration guard
 	healthMaxFails int
 	healthInterval time.Duration
 }
@@ -95,20 +51,16 @@ func NewManager(registry *tools.Registry, log *zap.Logger, healthMaxFails int, h
 		log:            log,
 		servers:        make(map[string]*MCPServer),
 		removedServers: make(map[string]removedServerInfo),
+		reregistering:  make(map[string]bool),
 		healthMaxFails: healthMaxFails,
 		healthInterval: healthInterval,
 	}
 }
 
 // Register connects to an MCP server with optional auth, lists its tools, and registers them.
+// The registration is performed under a single lock acquisition to avoid TOCTOU races.
 func (m *Manager) Register(ctx context.Context, url string, auth map[string]string, headers map[string]string) ([]string, error) {
-	m.mu.Lock()
-	if _, exists := m.servers[url]; exists {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("MCP server already registered at %s", url)
-	}
-	m.mu.Unlock()
-
+	// Connect outside the lock (network call — can be slow).
 	server, err := ConnectMCPAuth(ctx, url, auth, headers)
 	if err != nil {
 		return nil, err
@@ -122,9 +74,13 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 		schemaBytes, err := json.Marshal(tool.InputSchema)
 		schema := map[string]any{}
 		if err == nil {
-			json.Unmarshal(schemaBytes, &schema)
+			if jsonErr := json.Unmarshal(schemaBytes, &schema); jsonErr != nil {
+				m.log.Warn("failed to unmarshal tool schema, using empty schema",
+					zap.String("tool", toolName), zap.Error(jsonErr))
+				schema = map[string]any{}
+			}
 		}
-		if schema == nil {
+		if len(schema) == 0 {
 			schema = map[string]any{"type": "object"}
 		}
 
@@ -153,6 +109,7 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 		}
 
 		if err := m.registry.RegisterRaw(toolName, toolDesc, schema, execute); err != nil {
+			// Roll back any tools already registered from this server.
 			for _, rn := range registered {
 				m.registry.Remove(rn)
 			}
@@ -162,8 +119,19 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 		registered = append(registered, toolName)
 	}
 
+	// Acquire the lock only to update the server map — after the slow network work is done.
 	m.mu.Lock()
+	if _, exists := m.servers[url]; exists {
+		m.mu.Unlock()
+		// Another goroutine registered the same URL while we were connecting; roll back.
+		for _, rn := range registered {
+			m.registry.Remove(rn)
+		}
+		server.Close()
+		return nil, fmt.Errorf("MCP server already registered at %s", url)
+	}
 	m.servers[url] = server
+	// Always store auth/headers so the health monitor can re-register if the server drops.
 	m.removedServers[url] = removedServerInfo{auth: auth, headers: headers}
 	m.mu.Unlock()
 
@@ -180,12 +148,6 @@ func (m *Manager) Unregister(url string) error {
 		return fmt.Errorf("no MCP server registered at %s", url)
 	}
 	delete(m.servers, url)
-
-	// Store auth/headers for potential re-registration
-	if server.Auth != nil || server.Headers != nil {
-		m.removedServers[url] = removedServerInfo{auth: server.Auth, headers: server.Headers}
-	}
-
 	m.mu.Unlock()
 
 	for _, name := range server.ToolNames() {
@@ -241,7 +203,7 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 					urls = append(urls, url)
 					servers[url] = server
 				}
-				// Also check removed servers
+				// Snapshot removed servers for re-registration attempts.
 				removedURLs := make([]string, 0, len(m.removedServers))
 				removedInfos := make(map[string]removedServerInfo)
 				for url, info := range m.removedServers {
@@ -250,6 +212,7 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 				}
 				m.mu.RUnlock()
 
+				// ── Health-check registered servers ──────────────────────────
 				for _, url := range urls {
 					server := servers[url]
 					if server == nil {
@@ -257,11 +220,8 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 					}
 
 					checkCtx, checkCancel := context.WithTimeout(healthCtx, defaultHealthTimeout)
-
-					// Try ping first (lightweight), fall back to ListTools if not supported
 					err := Ping(checkCtx, server.Client)
 					if err != nil {
-						// Fall back to tools/list if ping not supported
 						_, err = ListTools(checkCtx, server.Client)
 					}
 					checkCancel()
@@ -284,65 +244,89 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 					failMu.Unlock()
 				}
 
-				// Check removed servers - try to re-register if they recover
+				// ── Try to re-register recovered servers ─────────────────────
 				for _, url := range removedURLs {
 					info := removedInfos[url]
-					if info.auth == nil && info.headers == nil {
-						// Was not stored - can't re-register
+
+					// Skip if a re-registration is already in progress for this URL.
+					m.mu.Lock()
+					if m.reregistering[url] {
+						m.mu.Unlock()
+						continue
+					}
+					m.mu.Unlock()
+
+					checkCtx, checkCancel := context.WithTimeout(healthCtx, defaultHealthTimeout)
+					testErr := pingURL(checkCtx, url, info.auth, info.headers)
+					checkCancel()
+
+					if testErr != nil {
 						continue
 					}
 
-					checkCtx, checkCancel := context.WithTimeout(healthCtx, defaultHealthTimeout)
-
-					// Try ping first (lightweight), fall back to ListTools if not supported
-					// We need to create a new client to test
-					var testErr error
-					testClient := func() error {
-						opts := []transport.StreamableHTTPCOption{}
-						if token, ok := info.auth["token"]; ok && token != "" {
-							opts = append(opts, transport.WithHTTPHeaders(map[string]string{
-								"Authorization": "Bearer " + token,
-							}))
-						}
-						for k, v := range info.headers {
-							opts = append(opts, transport.WithHTTPHeaders(map[string]string{k: v}))
-						}
-						trans, err := transport.NewStreamableHTTP(url, opts...)
-						if err != nil {
-							return fmt.Errorf("failed to create transport: %w", err)
-						}
-						c := client.NewClient(trans)
-						defer c.Close()
-
-						testErr = Ping(checkCtx, c)
-						if testErr != nil {
-							_, testErr = ListTools(checkCtx, c)
-						}
-						return nil
-					}()
-					_ = testClient
-					checkCancel()
+					// Server is reachable — attempt re-registration in a goroutine.
+					// Set the in-progress flag before launching the goroutine so that
+					// the next health tick doesn't spawn a duplicate.
+					m.mu.Lock()
+					if m.reregistering[url] {
+						// Another tick raced us here.
+						m.mu.Unlock()
+						continue
+					}
+					m.reregistering[url] = true
+					m.mu.Unlock()
 
 					failMu.Lock()
-					if testErr == nil {
-						m.log.Info("MCP server recovered, re-registering", zap.String("url", url))
-						delete(failCounts, url)
-						go func(u string, auth map[string]string, headers map[string]string) {
-							_, err := m.Register(healthCtx, u, auth, headers)
-							if err != nil {
-								m.log.Error("failed to re-register MCP server", zap.String("url", u), zap.Error(err))
-								return
-							}
-							m.mu.Lock()
-							delete(m.removedServers, u)
-							m.mu.Unlock()
-						}(url, info.auth, info.headers)
-					}
+					delete(failCounts, url)
 					failMu.Unlock()
+
+					m.log.Info("MCP server recovered, re-registering", zap.String("url", url))
+					go func(u string, auth map[string]string, headers map[string]string) {
+						defer func() {
+							m.mu.Lock()
+							delete(m.reregistering, u)
+							m.mu.Unlock()
+						}()
+
+						_, err := m.Register(healthCtx, u, auth, headers)
+						if err != nil {
+							m.log.Error("failed to re-register MCP server", zap.String("url", u), zap.Error(err))
+							return
+						}
+						// Remove from removedServers only after successful re-registration.
+						m.mu.Lock()
+						delete(m.removedServers, u)
+						m.mu.Unlock()
+					}(url, info.auth, info.headers)
 				}
 			}
 		}
 	}()
+}
+
+// pingURL creates a temporary client to test whether a URL is reachable.
+func pingURL(ctx context.Context, url string, auth map[string]string, headers map[string]string) error {
+	opts := []transport.StreamableHTTPCOption{}
+	if token, ok := auth["token"]; ok && token != "" {
+		opts = append(opts, transport.WithHTTPHeaders(map[string]string{
+			"Authorization": "Bearer " + token,
+		}))
+	}
+	for k, v := range headers {
+		opts = append(opts, transport.WithHTTPHeaders(map[string]string{k: v}))
+	}
+	trans, err := transport.NewStreamableHTTP(url, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to create transport: %w", err)
+	}
+	c := client.NewClient(trans)
+	defer c.Close()
+
+	if err := Ping(ctx, c); err != nil {
+		_, err = ListTools(ctx, c)
+		return err
+	}
+	return nil
 }
 
 // StopHealthMonitor stops the health check loop.

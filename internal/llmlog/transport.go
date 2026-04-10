@@ -8,6 +8,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxLogBodyBytes caps the body size buffered for logging to avoid large memory allocations.
+const maxLogBodyBytes = 1 << 20 // 1 MiB
+
 // Transport is an http.RoundTripper that logs LLM request and response details at debug level.
 type Transport struct {
 	base http.RoundTripper
@@ -40,33 +43,37 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// Log response
+	// Log response — redact response headers the same way as request headers.
 	respBody := readAndRestore(&resp.Body)
 	t.log.Debug("llm http response",
 		zap.Int("status", resp.StatusCode),
-		zap.Any("headers", resp.Header),
+		zap.Any("headers", redactHeaders(resp.Header)),
 		zap.String("body", respBody),
 	)
 
 	return resp, nil
 }
 
-// readAndRestore reads the body, then replaces it with a fresh reader so callers are unaffected.
+// readAndRestore reads up to maxLogBodyBytes from the body, then replaces it with
+// a fresh reader that yields the full original content so callers are unaffected.
 func readAndRestore(body *io.ReadCloser) string {
 	if *body == nil {
 		return ""
 	}
-	data, _ := io.ReadAll(*body)
+	data, _ := io.ReadAll(io.LimitReader(*body, maxLogBodyBytes))
 	(*body).Close()
 	*body = io.NopCloser(bytes.NewReader(data))
 	return string(data)
 }
 
-// redactHeaders returns a copy of the headers with Authorization value masked.
+// redactHeaders returns a copy of the headers with sensitive values masked.
 func redactHeaders(h http.Header) http.Header {
 	out := h.Clone()
 	if out.Get("Authorization") != "" {
 		out.Set("Authorization", "Bearer ****")
+	}
+	if out.Get("Set-Cookie") != "" {
+		out.Set("Set-Cookie", "****")
 	}
 	return out
 }

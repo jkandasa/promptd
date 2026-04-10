@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,8 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"chatbot/internal/chat"
 	"chatbot/internal/llmlog"
+	"chatbot/internal/storage"
 	"chatbot/internal/tools"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -81,12 +85,19 @@ func (m *ModelSelector) GetAvailableModels() []ModelInfo {
 	return m.models
 }
 
+func (m *ModelSelector) GetSelectionMethod() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectionMethod
+}
+
 type Handler struct {
 	client        *openai.Client
 	modelSelector *ModelSelector
 	systemPrompt  string
 	registry      *tools.Registry
 	store         *chat.SessionStore
+	storageStore  storage.Store
 	log           *zap.Logger
 	staticFS      fs.FS
 	uiConfig      UIConfig
@@ -99,13 +110,14 @@ type UIConfig struct {
 	PromptSuggestions []string `json:"promptSuggestions"`
 }
 
-func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
+func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
 
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		log.Warn("failed to create upload directory", zap.String("dir", uploadDir), zap.Error(err))
+		// Fatal: the upload handler will fail on every request if the directory cannot be created.
+		log.Fatal("failed to create upload directory", zap.String("dir", uploadDir), zap.Error(err))
 	}
 
 	return &Handler{
@@ -114,6 +126,7 @@ func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, reg
 		systemPrompt:  systemPrompt,
 		registry:      registry,
 		store:         store,
+		storageStore:  storageStore,
 		log:           log,
 		staticFS:      staticFS,
 		uiConfig:      uiConfig,
@@ -129,15 +142,18 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
-	Reply     string `json:"reply"`
-	Model     string `json:"model"`
-	TimeTaken int64  `json:"time_taken_ms"`
-	LLMCalls  int    `json:"llm_calls"`
-	ToolCalls int    `json:"tool_calls"`
+	Reply          string `json:"reply"`
+	Model          string `json:"model"`
+	TimeTaken      int64  `json:"time_taken_ms"`
+	LLMCalls       int    `json:"llm_calls"`
+	ToolCalls      int    `json:"tool_calls"`
+	UserMsgID      string `json:"user_msg_id"`
+	AssistantMsgID string `json:"assistant_msg_id"`
 }
 
 type errorResponse struct {
 	Error string `json:"error"`
+	Model string `json:"model,omitempty"`
 }
 
 func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMessage {
@@ -151,13 +167,22 @@ func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMe
 	return append(messages, session.History()...)
 }
 
+// maxToolIterations caps the tool-call loop to prevent infinite loops from
+// misbehaving or adversarially-prompted models.
+const maxToolIterations = 20
+
 // runLLM sends the current session to the LLM and handles any tool calls in a loop
-// until the model returns a final text response. Returns the reply, model used, number of LLM calls, and number of tool calls.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, string, int, int, error) {
+// until the model returns a final text response. It does NOT append the final
+// assistant message to the session — the caller must do that (so it can attach metadata).
+// Returns the reply text, the final assistant message, model used, LLM call count, tool call count.
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, openai.ChatCompletionMessage, string, int, int, error) {
 	llmCalls := 0
 	toolCalls := 0
 	model, _ := h.modelSelector.GetModel(preferredModel)
 	for {
+		if llmCalls >= maxToolIterations {
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
+		}
 		llmCalls++
 		req := openai.ChatCompletionRequest{
 			Model:    model,
@@ -175,9 +200,12 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 
 		resp, err := h.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			return "", model, llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
 		}
 
+		if len(resp.Choices) == 0 {
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("LLM returned no choices")
+		}
 		choice := resp.Choices[0]
 
 		h.log.Debug("llm response",
@@ -188,13 +216,13 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			zap.String("reply", choice.Message.Content),
 		)
 
-		// No tool calls — we have the final answer.
+		// No tool calls — we have the final answer. Return without appending;
+		// the caller will append with full metadata via AddFinalMessage.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", model, llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
-			session.AddMessage(choice.Message)
-			return choice.Message.Content, model, llmCalls, toolCalls, nil
+			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
@@ -269,18 +297,22 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		userContent = req.Message
 	}
 
-	session.Add(openai.ChatMessageRoleUser, userContent)
+	// Record the user's explicit model choice before the first persist so it's
+	// included in the very first save (triggered by Add below).
+	session.SetModel(req.Model)
+	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
 
-	reply, model, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
+	reply, finalMsg, model, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model})
 		return
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
+	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls})
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -318,14 +350,22 @@ func (h *Handler) ServeUI(w http.ResponseWriter, r *http.Request) {
 	}
 	defer index.Close()
 
+	seeker, ok := index.(io.ReadSeeker)
+	if !ok {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(w, r, "index.html", time.Time{}, index.(io.ReadSeeker))
+	http.ServeContent(w, r, "index.html", time.Time{}, seeker)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		// Headers already committed; log only.
+		_ = err // caller's logger not available here — acceptable for this helper
+	}
 }
 
 func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
@@ -334,9 +374,10 @@ func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	models := h.modelSelector.GetAvailableModels()
+	method := h.modelSelector.GetSelectionMethod()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"models":           models,
-		"selection_method": h.modelSelector.selectionMethod,
+		"selection_method": method,
 	})
 }
 
@@ -361,7 +402,9 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	fileID := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(header.Filename))
+	// Use a UUID as the stored filename to avoid path traversal and name collisions.
+	// The original filename is preserved only in the response metadata.
+	fileID := uuid.New().String()
 	filePath := filepath.Join(h.uploadDir, fileID)
 
 	out, err := os.Create(filePath)
@@ -374,7 +417,9 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := io.Copy(out, file); err != nil {
 		h.log.Error("failed to write file", zap.Error(err))
-		os.Remove(filePath)
+		if removeErr := os.Remove(filePath); removeErr != nil {
+			h.log.Warn("failed to clean up partial upload", zap.String("path", filePath), zap.Error(removeErr))
+		}
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save file"})
 		return
 	}
@@ -399,6 +444,10 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filePath := filepath.Join(h.uploadDir, fileID)
+	if !isUnderDir(filePath, h.uploadDir) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	http.ServeFile(w, r, filePath)
 }
 
@@ -410,6 +459,10 @@ func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filePath := filepath.Join(h.uploadDir, fileID)
+	if !isUnderDir(filePath, h.uploadDir) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := os.Remove(filePath); err != nil {
 		h.log.Warn("failed to delete file", zap.String("file_id", fileID), zap.Error(err))
 		http.Error(w, "failed to delete file", http.StatusInternalServerError)
@@ -418,4 +471,149 @@ func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("file deleted", zap.String("file_id", fileID))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// isUnderDir reports whether path is inside (or equal to) dir after cleaning both.
+func isUnderDir(path, dir string) bool {
+	cleanPath := filepath.Clean(path)
+	cleanDir := filepath.Clean(dir)
+	return strings.HasPrefix(cleanPath, cleanDir+string(os.PathSeparator)) || cleanPath == cleanDir
+}
+
+// ListConversations returns all conversations (without messages) ordered newest-first.
+func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
+	if h.storageStore == nil {
+		writeJSON(w, http.StatusOK, []*storage.Conversation{})
+		return
+	}
+	convs, err := h.storageStore.List()
+	if err != nil {
+		h.log.Error("failed to list conversations", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list conversations"})
+		return
+	}
+	writeJSON(w, http.StatusOK, convs)
+}
+
+// GetConversation returns a single conversation including full message history.
+func (h *Handler) GetConversation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
+		return
+	}
+	if h.storageStore == nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+		return
+	}
+	conv, err := h.storageStore.Load(id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+		} else {
+			h.log.Error("failed to load conversation", zap.String("id", id), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load conversation"})
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, conv)
+}
+
+// DeleteConversation removes a conversation from storage and evicts it from the in-memory cache.
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
+		return
+	}
+	if err := h.store.Delete(id); err != nil {
+		h.log.Error("failed to delete conversation", zap.String("id", id), zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete conversation"})
+		return
+	}
+	h.log.Info("conversation deleted", zap.String("id", id))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// DeleteMessage removes a single message from a conversation.
+func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	convID := r.PathValue("id")
+	msgID := r.PathValue("msgId")
+	if convID == "" || msgID == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
+		return
+	}
+	if err := h.store.DeleteMessage(convID, msgID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+		} else {
+			h.log.Error("failed to delete message", zap.String("conv_id", convID), zap.String("msg_id", msgID), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete message"})
+		}
+		return
+	}
+	h.log.Info("message deleted", zap.String("conv_id", convID), zap.String("msg_id", msgID))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// DeleteMessagesFrom removes a message and all messages after it from a conversation.
+// Used when a user edits a message — all subsequent turns are discarded.
+func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
+	convID := r.PathValue("id")
+	msgID := r.PathValue("msgId")
+	if convID == "" || msgID == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
+		return
+	}
+	if err := h.store.DeleteMessagesFrom(convID, msgID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+		} else {
+			h.log.Error("failed to truncate messages", zap.String("conv_id", convID), zap.String("msg_id", msgID), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to truncate messages"})
+		}
+		return
+	}
+	h.log.Info("messages truncated from", zap.String("conv_id", convID), zap.String("msg_id", msgID))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "truncated"})
+}
+
+// RenameConversation updates the title of a conversation.
+func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.store.RenameTitle(id, body.Title); err != nil {
+		h.log.Error("failed to rename conversation", zap.String("id", id), zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to rename conversation"})
+		return
+	}
+	h.log.Info("conversation renamed", zap.String("id", id), zap.String("title", body.Title))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// TogglePinConversation flips the pinned state of a conversation.
+func (h *Handler) TogglePinConversation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
+		return
+	}
+	pinned, err := h.store.TogglePin(id)
+	if err != nil {
+		h.log.Error("failed to toggle pin", zap.String("id", id), zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to toggle pin"})
+		return
+	}
+	h.log.Info("conversation pin toggled", zap.String("id", id), zap.Bool("pinned", pinned))
+	writeJSON(w, http.StatusOK, map[string]bool{"pinned": pinned})
 }

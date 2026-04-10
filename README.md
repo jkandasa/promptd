@@ -1,18 +1,20 @@
 # Chatbot
 
-A lightweight, extensible LLM chatbot server written in Go. Connects to any OpenAI-compatible API endpoint, maintains per-session conversation history, supports configurable system prompts, and ships with MCP support.
+A lightweight, extensible LLM chatbot server written in Go with a React frontend. Connects to any OpenAI-compatible API, persists conversation history to disk, and ships with MCP tool support.
 
 ---
 
 ## Features
 
 - **Multi-provider** — works with any OpenAI-compatible API (OpenRouter, OpenAI, Gemini, Mistral, …)
-- **Multi-model** — configure multiple models with random or round-robin selection
-- **Session management** — each browser tab gets its own isolated conversation history
+- **Multi-model** — configure multiple models with random or round-robin selection; user can override per-conversation
+- **Persistent conversation history** — all conversations stored as YAML files; survives server restarts
+- **Conversation sidebar** — browse, continue, rename, pin, and delete past conversations
+- **Session management** — each browser tab gets its own isolated conversation
 - **Tool calling** — native LLM function-calling loop with built-in and MCP tools
 - **MCP support** — connect to external MCP servers with optional auth
-- **Health monitoring** — dead MCP servers are automatically removed after failures, and re-registered when they recover
-- **File uploads** — attach files to conversations, download generated files
+- **Health monitoring** — dead MCP servers are automatically removed and re-registered on recovery
+- **File uploads** — attach files to messages; images previewed inline
 - **Embedded chat UI** — zero-dependency browser interface served at `/`
 - **System prompts** — load from external file
 - **Single binary** — statically compiled, no runtime dependencies
@@ -22,7 +24,7 @@ A lightweight, extensible LLM chatbot server written in Go. Connects to any Open
 ## Usage
 
 ```bash
-# Build the UI first (requires Node.js/pnpm)
+# Build the UI first (requires Node.js / pnpm)
 make ui
 
 # Run the server
@@ -33,29 +35,32 @@ make ui
 
 ## Configuration
 
-All configuration via `config.yaml`:
+Copy `config_template.yaml` to `config.yaml` and fill in the required fields.
 
 ```yaml
+data:
+  dir: "./data"           # Root for all data (default: ./data)
+                          # Conversations → <dir>/conversations/
+                          # Uploads       → <dir>/uploads/
+
 server:
   port: "8080"
 
-upload:
-  dir: "./uploads"  # Optional: directory for uploaded files
-
 llm:
-  api_key: "your-api-key"  # Required
-  base_url: "https://openrouter.ai/api/v1"
-  selection_method: "round_robin"  # random or round_robin
+  api_key: "your-api-key"                    # Required
+  base_url: "https://openrouter.ai/api/v1"   # Any OpenAI-compatible endpoint
+  selection_method: "round_robin"            # random | round_robin
   models:
-    - "anthropic/claude-sonnet-4-6"
-    - "openai/gpt-4o"
+    - "anthropic/claude-sonnet-4-5"
+    - id: "openai/gpt-4o"
+      name: "GPT-4o"                         # Optional display name
 
 log:
-  level: "info"  # debug, info, warn, error
+  level: "info"    # debug | info | warn | error
 
 mcp:
-  health_max_failures: 3   # failures before unregistering (default: 3)
-  health_interval: 15s    # health check interval (default: 15s)
+  health_max_failures: 3    # Failures before unregistering (default: 3)
+  health_interval: 15s      # Health check interval (default: 15s)
   servers:
     - name: "my-server"
       url: "http://localhost:8081/mcp"
@@ -63,117 +68,201 @@ mcp:
         token: "optional-token"
       headers:
         X-Custom: "value"
-      disabled: false  # default: false
+      disabled: false
 
 tools:
-  system_prompt_file: "/path/to/prompt.txt"  # Optional
+  system_prompt_file: "/path/to/prompt.txt"   # Optional
+
+ui:
+  welcome_title: "How can I help you today?"
+  ai_disclaimer: "AI can make mistakes. Verify important info."
+  prompt_suggestions:
+    - "Explain how this works"
+    - "Help me write code"
 ```
 
-### Options
+### Configuration reference
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `server.port` | No | 8080 | HTTP port |
-| `upload.dir` | No | ./uploads | Directory for uploaded files |
-| `llm.api_key` | Yes | - | API key for LLM provider |
+| `data.dir` | No | `./data` | Root directory; `conversations/` and `uploads/` are always fixed sub-dirs |
+| `server.port` | No | `8080` | HTTP listen port |
+| `llm.api_key` | Yes | — | API key for LLM provider |
 | `llm.base_url` | No | OpenRouter | OpenAI-compatible endpoint |
-| `llm.selection_method` | No | round_robin | Model selection: random or round_robin |
-| `llm.models` | Yes | - | List of model identifiers |
-| `log.level` | No | info | Log verbosity |
-| `mcp.health_max_failures` | No | 3 | Consecutive failures before unregistering |
-| `mcp.health_interval` | No | 15s | Health check interval |
-| `mcp.servers` | No | [] | List of MCP servers |
-| `mcp.servers[].name` | Yes | - | Server name |
-| `mcp.servers[].url` | Yes | - | MCP server URL |
-| `mcp.servers[].auth` | No | {} | Auth credentials (token) |
-| `mcp.servers[].headers` | No | {} | Custom HTTP headers |
-| `mcp.servers[].disabled` | No | false | Skip this server |
-| `tools.system_prompt_file` | No | - | Path to .txt file |
+| `llm.selection_method` | No | `round_robin` | `random` or `round_robin` |
+| `llm.models` | Yes | — | Model IDs (string or `{id, name}` object) |
+| `log.level` | No | `info` | Log verbosity |
+| `mcp.health_max_failures` | No | `3` | Consecutive failures before unregistering |
+| `mcp.health_interval` | No | `15s` | Health check interval |
+| `mcp.servers[].name` | Yes | — | Server display name |
+| `mcp.servers[].url` | Yes | — | MCP server URL |
+| `mcp.servers[].auth.token` | No | — | Bearer token |
+| `mcp.servers[].headers` | No | `{}` | Extra HTTP headers |
+| `mcp.servers[].disabled` | No | `false` | Skip this server |
+| `tools.system_prompt_file` | No | — | Path to system prompt `.txt` |
+| `ui.welcome_title` | No | — | Welcome screen heading |
+| `ui.ai_disclaimer` | No | built-in | Disclaimer text under heading |
+| `ui.prompt_suggestions` | No | built-in | Quick-send prompt chips |
 
 ---
 
 ## API Endpoints
 
+### Chat
+
+| Method | Path | Body / Params | Description |
+|--------|------|---------------|-------------|
+| `GET` | `/` | — | Serve chat UI |
+| `POST` | `/chat` | `{session_id, message, model?, files?}` | Send a message; returns reply + message IDs |
+| `POST` | `/reset` | `{session_id}` | Clear session history server-side |
+| `GET` | `/ui-config` | — | UI configuration (title, suggestions, …) |
+| `GET` | `/models` | — | List available models and selection method |
+
+### Conversations
+
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
-| `GET` | `/` | - | Chat UI |
-| `POST` | `/chat` | `{"session_id":"...","message":"...","model":"...","files":[...]}` | Send message |
-| `POST` | `/reset` | `{"session_id":"..."}` | Reset session |
-| `GET` | `/mcp` | - | List MCP servers and tools |
-| `GET` | `/models` | - | List available models |
-| `POST` | `/upload` | multipart/form-data | Upload file |
-| `GET` | `/files/{id}` | - | Download uploaded file |
-| `DELETE` | `/files/{id}` | - | Delete uploaded file |
+| `GET` | `/conversations` | — | List all conversations (metadata only, newest first) |
+| `GET` | `/conversations/{id}` | — | Get full conversation including messages |
+| `DELETE` | `/conversations/{id}` | — | Delete a conversation |
+| `PATCH` | `/conversations/{id}/title` | `{title}` | Rename a conversation |
+| `PATCH` | `/conversations/{id}/pin` | — | Toggle pin state; returns `{pinned: bool}` |
+
+### Messages
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `DELETE` | `/conversations/{id}/messages/{msgId}` | Delete a single message |
+| `DELETE` | `/conversations/{id}/messages/{msgId}/after` | Delete a message and all subsequent messages (used on edit) |
+
+### Files
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/upload` | Upload a file (multipart/form-data, max 10 MB) |
+| `GET` | `/files/{id}` | Download an uploaded file |
+| `DELETE` | `/files/{id}` | Delete an uploaded file |
+
+### MCP
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/mcp` | List registered MCP servers and their tools |
 
 ---
 
-## Built-in Tools
+## Chat response
+
+`POST /chat` returns:
+
+```json
+{
+  "reply": "...",
+  "model": "openai/gpt-4o",
+  "time_taken_ms": 1234,
+  "llm_calls": 2,
+  "tool_calls": 1,
+  "user_msg_id": "<uuid>",
+  "assistant_msg_id": "<uuid>"
+}
+```
+
+`user_msg_id` and `assistant_msg_id` are the storage IDs of the persisted messages, used by the UI for per-message delete and edit operations.
+
+---
+
+## Conversation storage
+
+Each conversation is a single YAML file at `<data.dir>/conversations/<id>.yaml`.
+
+- Only `user` and `assistant` messages are persisted; tool/intermediate messages are kept in memory for LLM context only.
+- The top-level `model` field records the user's explicit model selection (empty = auto). Per-message `model` records the actual model used for each assistant reply.
+- `pinned` conversations sort to the top of the sidebar.
+- Auto-title is generated from the first user message (truncated to 60 runes).
+
+---
+
+## Built-in tools
 
 ### `get_current_datetime`
 
-Returns current date and time. Optional timezone parameter.
+Returns the current date and time. Accepts an optional IANA timezone parameter (e.g. `"America/New_York"`).
 
 ---
 
-## MCP Health Monitoring
+## MCP health monitoring
 
-The MCP manager runs background health checks using the `ping` method (with fallback to `tools/list`). 
+The MCP manager runs background health checks using the `ping` method (falling back to `tools/list`).
 
-**Behavior:**
-- On first ping failure: increments failure counter but keeps server registered
-- After 3 consecutive failures (configurable via `health_max_failures`): unregisters the server
-- Continues pinging removed servers on each health check interval
-- When a removed server recovers (ping succeeds): automatically re-registers it
-
----
-
-## File Uploads
-
-Users can attach files to messages. The backend stores files in the configured directory and serves them via `/files/{id}`.
-
-- Max upload size: 10MB
-- Files can be downloaded from chat bubbles
-- Images are previewed as thumbnails in the chat
+- First failure: increments counter, keeps server registered
+- After `health_max_failures` consecutive failures: unregisters the server
+- Continues pinging unregistered servers
+- On recovery: automatically re-registers
 
 ---
 
-## Multi-Model Support
+## File uploads
 
-Configure multiple models in `config.yaml`. The server will:
+- Max size: 10 MB per file, up to 10 files per message
+- Images are previewed inline as thumbnails with click-to-expand
+- Non-image files are shown as download links
+- Files persist independently of conversations under `<data.dir>/uploads/`
 
-- **random**: Randomly select a model for each request
-- **round_robin**: Cycle through models sequentially
+---
 
-Users can override the selection by choosing a specific model in the UI dropdown.
+## Multi-model support
+
+Configure multiple models in `config.yaml`. The `selection_method` controls automatic selection:
+
+- **`round_robin`** — cycles through models sequentially
+- **`random`** — picks a model at random each request
+
+The user can override the active model via the UI dropdown. The chosen model is persisted per-conversation and restored when the conversation is reopened.
+
+---
+
+## UI features
+
+- **Sidebar** — conversation list with pin, rename (inline), and delete
+- **Pinned conversations** — sorted above recent with a divider
+- **Model selector** — per-conversation model; restored on load
+- **Message actions** (hover to reveal):
+  - Copy message text
+  - Edit user messages — opens inline editor; on submit, all subsequent messages are discarded and the edited message is re-sent
+  - Delete individual messages
+- **File attachments** — attach multiple files per message with drag-or-click
+- **Markdown rendering** — full GFM with syntax-highlighted code blocks
+- **Dark / light mode** — respects OS preference, toggleable in header
+- **Typing indicator** and smooth scroll-to-bottom
 
 ---
 
 ## Building
 
 ```bash
-# Build both UI and binary
+# Build UI + Go binary
 make build
 
-# Or build just the UI (requires Node.js/pnpm)
+# UI only (outputs to internal/ui/dist/)
 make ui
 
-# Then build the Go binary
+# Go binary only (after make ui)
 go build -o chatbot .
 ```
 
-**Note:** The `internal/ui/dist/` directory is gitignored. After cloning, run `make ui` to generate the frontend assets before building.
+> The `internal/ui/dist/` directory is gitignored. After cloning, run `make ui` before building the Go binary.
 
 ---
 
 ## Development
 
 ```bash
-# Install dependencies
+# Install frontend dependencies
 cd web && pnpm install
 
-# Run frontend dev server
+# Start frontend dev server (proxies /api to localhost:8080)
 cd web && pnpm dev
 
-# Run backend
+# Start backend
 go run . -config ./config.yaml
 ```

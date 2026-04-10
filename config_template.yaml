@@ -2,13 +2,14 @@
 #
 # Usage: ./chatbot -config ./config.yaml
 
+data:
+  # Root directory for all chatbot data files (default: ./data).
+  # Conversations are stored in <dir>/conversations, uploads in <dir>/uploads.
+  # dir: "./data"
+
 server:
   # HTTP port the chatbot listens on
   port: "8080"
-
-upload:
-  # Directory to store uploaded files (default: ./uploads)
-  # dir: "./uploads"
 
 llm:
   # Required: API key for your LLM provider

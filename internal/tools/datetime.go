@@ -33,8 +33,11 @@ func (DateTimeTool) Execute(_ context.Context, args json.RawMessage) (string, er
 	var params struct {
 		Timezone string `json:"timezone"`
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	// Guard against nil/empty args (LLM may omit arguments for parameter-free calls).
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
 	}
 
 	loc := time.UTC

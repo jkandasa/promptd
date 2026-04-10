@@ -1,7 +1,8 @@
 .env
 chatbot
 test.sh
-tmp/**
+tmp/
 config.yaml
 internal/ui/dist/
-uploads/
+chatbot_data/
+data/
