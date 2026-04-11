@@ -50,10 +50,21 @@ mcp:
     #   disabled: false  # Optional: set to true to skip this server
 
 tools:
-  # Optional: path to a .txt file containing system prompt
-  # system_prompt_file: "/path/to/prompt.txt"
+  # Required: at least one selectable system prompt.
+  system_prompts:
+    # - name: "Code Reviewer"
+    #   file: "/path/to/code-reviewer.txt"
+    # - name: "Customer Support"
+    #   file: "/path/to/customer-support.txt"
 
 ui:
+  # Optional: App name shown in the header and browser title (default: "Chatbot")
+  # app_name: "My Assistant"
+
+  # Optional: App icon shown in the header.
+  # Supports emoji/text or an image URL/path like "/logo.png".
+  # app_icon: "🤖"
+
   # Optional: Welcome screen title
   # welcome_title: "How can I help you today?"
 
@@ -64,5 +75,5 @@ ui:
   prompt_suggestions:
   #  - "Explain how this works"
   #  - "Help me write code"
-  #   - "Summarize the key points"
-  #   - "What are best practices?"
+  #  - "Summarize the key points"
+  #  - "What are best practices?"

@@ -92,25 +92,33 @@ func (m *ModelSelector) GetSelectionMethod() string {
 }
 
 type Handler struct {
-	client        *openai.Client
-	modelSelector *ModelSelector
-	systemPrompt  string
-	registry      *tools.Registry
-	store         *chat.SessionStore
-	storageStore  storage.Store
-	log           *zap.Logger
-	staticFS      fs.FS
-	uiConfig      UIConfig
-	uploadDir     string
+	client              *openai.Client
+	modelSelector       *ModelSelector
+	systemPrompts       map[string]string
+	defaultSystemPrompt string
+	registry            *tools.Registry
+	store               *chat.SessionStore
+	storageStore        storage.Store
+	log                 *zap.Logger
+	staticFS            fs.FS
+	uiConfig            UIConfig
+	uploadDir           string
 }
 
 type UIConfig struct {
-	WelcomeTitle      string   `json:"welcomeTitle"`
-	AIDisclaimer      string   `json:"aiDisclaimer"`
-	PromptSuggestions []string `json:"promptSuggestions"`
+	AppName           string             `json:"appName,omitempty"`
+	AppIcon           string             `json:"appIcon,omitempty"`
+	WelcomeTitle      string             `json:"welcomeTitle"`
+	AIDisclaimer      string             `json:"aiDisclaimer"`
+	PromptSuggestions []string           `json:"promptSuggestions"`
+	SystemPrompts     []SystemPromptInfo `json:"systemPrompts,omitempty"`
 }
 
-func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
+type SystemPromptInfo struct {
+	Name string `json:"name"`
+}
+
+func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
@@ -121,24 +129,26 @@ func New(apiKey, baseURL, systemPrompt string, modelSelector *ModelSelector, reg
 	}
 
 	return &Handler{
-		client:        openai.NewClientWithConfig(cfg),
-		modelSelector: modelSelector,
-		systemPrompt:  systemPrompt,
-		registry:      registry,
-		store:         store,
-		storageStore:  storageStore,
-		log:           log,
-		staticFS:      staticFS,
-		uiConfig:      uiConfig,
-		uploadDir:     uploadDir,
+		client:              openai.NewClientWithConfig(cfg),
+		modelSelector:       modelSelector,
+		systemPrompts:       systemPrompts,
+		defaultSystemPrompt: defaultSystemPrompt,
+		registry:            registry,
+		store:               store,
+		storageStore:        storageStore,
+		log:                 log,
+		staticFS:            staticFS,
+		uiConfig:            uiConfig,
+		uploadDir:           uploadDir,
 	}
 }
 
 type chatRequest struct {
-	SessionID string   `json:"session_id"`
-	Message   string   `json:"message"`
-	Files     []string `json:"files,omitempty"`
-	Model     string   `json:"model,omitempty"`
+	SessionID    string   `json:"session_id"`
+	Message      string   `json:"message"`
+	Files        []string `json:"files,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	SystemPrompt string   `json:"system_prompt,omitempty"`
 }
 
 type chatResponse struct {
@@ -158,13 +168,25 @@ type errorResponse struct {
 
 func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMessage {
 	var messages []openai.ChatCompletionMessage
-	if h.systemPrompt != "" {
+	promptName := session.SystemPrompt()
+	if promptName == "" || h.systemPrompts[promptName] == "" {
+		promptName = h.defaultSystemPrompt
+	}
+	if prompt := h.systemPrompts[promptName]; prompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: h.systemPrompt,
+			Content: prompt,
 		})
 	}
 	return append(messages, session.History()...)
+}
+
+func (h *Handler) hasSystemPrompt(promptName string) bool {
+	if promptName == "" {
+		return true
+	}
+	_, ok := h.systemPrompts[promptName]
+	return ok
 }
 
 // maxToolIterations caps the tool-call loop to prevent infinite loops from
@@ -299,7 +321,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	// Record the user's explicit model choice before the first persist so it's
 	// included in the very first save (triggered by Add below).
+	if !h.hasSystemPrompt(req.SystemPrompt) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid system prompt"})
+		return
+	}
 	session.SetModel(req.Model)
+	session.SetSystemPrompt(req.SystemPrompt)
 	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
 
 	reply, finalMsg, model, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
@@ -310,7 +337,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken)
+	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
 	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID})
 }

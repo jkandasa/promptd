@@ -49,8 +49,8 @@ func (s *Session) Add(role, content string) string {
 }
 
 // AddFinalMessage appends the final assistant reply with its associated
-// performance metadata (model used, wall-clock time taken). Returns the new message ID.
-func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64) string {
+// performance metadata. Returns the new message ID.
+func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -63,6 +63,8 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string
 		SentAt:      time.Now(),
 		Model:       model,
 		TimeTakenMs: timeTakenMs,
+		LLMCalls:    llmCalls,
+		ToolCalls:   toolCalls,
 	})
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
@@ -81,6 +83,7 @@ func (s *Session) AddMessage(msg openai.ChatCompletionMessage) {
 		ToolCallID: msg.ToolCallID,
 		Name:       msg.Name,
 		SentAt:     time.Now(),
+		Transient:  true,
 	})
 	s.conv.UpdatedAt = time.Now()
 	// Intentionally no s.persist() call — tool and intermediate assistant messages
@@ -100,6 +103,26 @@ func (s *Session) SetModel(model string) {
 	s.persist()
 }
 
+// SetSystemPrompt records the user's explicit system prompt name.
+// Pass an empty string to clear it.
+func (s *Session) SetSystemPrompt(promptName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conv.SystemPrompt == promptName {
+		return
+	}
+	s.conv.SystemPrompt = promptName
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+}
+
+// SystemPrompt returns the selected system prompt name for this conversation.
+func (s *Session) SystemPrompt() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conv.SystemPrompt
+}
+
 // History returns a copy of the message slice as openai messages.
 func (s *Session) History() []openai.ChatCompletionMessage {
 	s.mu.Lock()
@@ -114,6 +137,7 @@ func (s *Session) Reset() {
 	s.conv.Messages = nil
 	s.conv.Title = ""
 	s.conv.Model = ""
+	s.conv.SystemPrompt = ""
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 }
@@ -139,7 +163,7 @@ func (s *Session) persist() {
 	c := s.conv
 	msgs := make([]storage.Message, 0, len(s.conv.Messages))
 	for _, m := range s.conv.Messages {
-		if m.Role == openai.ChatMessageRoleUser || m.Role == openai.ChatMessageRoleAssistant {
+		if !m.Transient && (m.Role == openai.ChatMessageRoleUser || m.Role == openai.ChatMessageRoleAssistant) {
 			msgs = append(msgs, m)
 		}
 	}

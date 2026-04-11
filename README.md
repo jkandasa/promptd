@@ -16,7 +16,7 @@ A lightweight, extensible LLM chatbot server written in Go with a React frontend
 - **Health monitoring** — dead MCP servers are automatically removed and re-registered on recovery
 - **File uploads** — attach files to messages; images previewed inline
 - **Embedded chat UI** — zero-dependency browser interface served at `/`
-- **System prompts** — load from external file
+- **System prompts** — load one or many prompts from external files and switch in the UI
 - **Single binary** — statically compiled, no runtime dependencies
 
 ---
@@ -71,9 +71,15 @@ mcp:
       disabled: false
 
 tools:
-  system_prompt_file: "/path/to/prompt.txt"   # Optional
+  system_prompts:
+    - name: "Code Reviewer"
+      file: "/path/to/code-reviewer.txt"
+    - name: "Customer Support"
+      file: "/path/to/customer-support.txt"
 
 ui:
+  app_name: "My Assistant"
+  app_icon: "🤖"
   welcome_title: "How can I help you today?"
   ai_disclaimer: "AI can make mistakes. Verify important info."
   prompt_suggestions:
@@ -99,7 +105,9 @@ ui:
 | `mcp.servers[].auth.token` | No | — | Bearer token |
 | `mcp.servers[].headers` | No | `{}` | Extra HTTP headers |
 | `mcp.servers[].disabled` | No | `false` | Skip this server |
-| `tools.system_prompt_file` | No | — | Path to system prompt `.txt` |
+| `tools.system_prompts` | Yes | — | Selectable system prompts as `{name, file}`; the first one is selected by default |
+| `ui.app_name` | No | `Chatbot` | App name shown in the header and browser title |
+| `ui.app_icon` | No | built-in robot | App icon shown in the header; supports emoji/text or image URL/path |
 | `ui.welcome_title` | No | — | Welcome screen heading |
 | `ui.ai_disclaimer` | No | built-in | Disclaimer text under heading |
 | `ui.prompt_suggestions` | No | built-in | Quick-send prompt chips |

@@ -26,6 +26,7 @@ import {
   DownOutlined,
   EditOutlined,
   FileOutlined,
+  FileTextOutlined,
   GithubOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -97,15 +98,23 @@ type MCPServersResponse = {
 }
 
 interface UIConfig {
+  appName?: string
+  appIcon?: string
   welcomeTitle?: string
   aiDisclaimer?: string
   promptSuggestions?: string[]
+  systemPrompts?: SystemPrompt[]
+}
+
+interface SystemPrompt {
+  name: string
 }
 
 interface ConversationMeta {
   id: string
   title: string
   model: string
+  system_prompt?: string
   pinned?: boolean
   created_at: string
   updated_at: string
@@ -118,10 +127,32 @@ interface StorageMessage {
   sent_at: string
   model?: string
   time_taken_ms?: number
+  llm_calls?: number
+  tool_calls?: number
 }
 
 interface ConversationDetail extends ConversationMeta {
   messages: StorageMessage[]
+}
+
+function getFirstSystemPromptName(cfg: UIConfig): string {
+  return getSortedSystemPrompts(cfg)[0]?.name || ''
+}
+
+function getSortedSystemPrompts(cfg: UIConfig): SystemPrompt[] {
+  return [...(cfg.systemPrompts || [])].sort((a, b) => {
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function isKnownSystemPrompt(cfg: UIConfig, name?: string): boolean {
+  if (!name) return false
+  return getSortedSystemPrompts(cfg).some((prompt) => prompt.name === name)
+}
+
+function isImageIcon(icon?: string): boolean {
+  if (!icon) return false
+  return /^(https?:\/\/|\/|data:image\/)/.test(icon)
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────
@@ -174,11 +205,11 @@ async function apiGetModels(): Promise<{ models: ModelInfo[]; selection_method: 
   return res.json()
 }
 
-async function apiChat(sessionId: string, message: string, files?: string[], model?: string): Promise<ChatResponse> {
+async function apiChat(sessionId: string, message: string, files?: string[], model?: string, systemPrompt?: string): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message, files, model }),
+    body: JSON.stringify({ session_id: sessionId, message, files, model, system_prompt: systemPrompt }),
   })
   const data = await res.json()
   if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model)
@@ -753,6 +784,16 @@ const Bubble = memo(function Bubble({
               {msg.timeTaken < 1000 ? `${msg.timeTaken}ms` : `${(msg.timeTaken / 1000).toFixed(1)}s`}
             </Text>
           )}
+          {msg.llmCalls !== undefined && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.llmCalls} LLM call{msg.llmCalls === 1 ? '' : 's'}
+            </Text>
+          )}
+          {msg.toolCalls !== undefined && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {msg.toolCalls} tool call{msg.toolCalls === 1 ? '' : 's'}
+            </Text>
+          )}
         </div>
       </div>
     </div>
@@ -915,6 +956,8 @@ function ConvItem({
   onDelete,
 }: ConvItemProps) {
   const isEditing = editingConvId === conv.id
+  const activeBg = token.colorPrimary
+  const activeText = '#fff'
   return (
     <div
       style={{
@@ -924,14 +967,15 @@ function ConvItem({
         padding: '5px 6px',
         borderRadius: 8,
         cursor: 'pointer',
-        background: isActive ? token.colorPrimaryBg : 'transparent',
+        background: isActive ? activeBg : 'transparent',
+        border: `1px solid ${isActive ? token.colorPrimary : 'transparent'}`,
         marginBottom: 2,
       }}
       onClick={() => { if (!isEditing) onLoad(conv.id) }}
     >
       <MessageOutlined
         style={{
-          color: isActive ? token.colorPrimary : token.colorTextSecondary,
+          color: isActive ? activeText : token.colorTextSecondary,
           fontSize: 13,
           flexShrink: 0,
         }}
@@ -955,7 +999,7 @@ function ConvItem({
             flex: 1,
             fontSize: 13,
             fontWeight: isActive ? 600 : 400,
-            color: isActive ? token.colorPrimary : token.colorText,
+            color: isActive ? activeText : token.colorText,
           }}
         >
           {conv.title || 'Untitled'}
@@ -973,7 +1017,7 @@ function ConvItem({
             icon={conv.pinned ? <PushpinFilled style={{ color: token.colorPrimary }} /> : <PushpinOutlined />}
             onClick={() => onTogglePin(conv.id)}
             aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
-            style={{ width: 22, height: 22, padding: 0, color: token.colorTextSecondary }}
+            style={{ width: 22, height: 22, padding: 0, color: isActive ? activeText : token.colorTextSecondary }}
           />
         </Tooltip>
         <Tooltip title="Rename">
@@ -983,7 +1027,7 @@ function ConvItem({
             icon={<EditOutlined />}
             onClick={() => onStartEdit(conv.id, conv.title || '')}
             aria-label="Rename conversation"
-            style={{ width: 22, height: 22, padding: 0, color: token.colorTextSecondary }}
+            style={{ width: 22, height: 22, padding: 0, color: isActive ? activeText : token.colorTextSecondary }}
           />
         </Tooltip>
         <Popconfirm
@@ -1033,6 +1077,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const loadingRef = useRef(false) // ref mirror so callbacks don't need loading in deps
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string>('auto')
+  const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>('')
 
   const [toolsOpen, setToolsOpen] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
@@ -1047,6 +1092,9 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [convsLoading, setConvsLoading] = useState(false)
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
+
+  const appName = uiConfig.appName || 'Chatbot'
+  const appIcon = uiConfig.appIcon
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<TextAreaRef>(null)
@@ -1074,13 +1122,32 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   // Load UI config and models on mount.
   useEffect(() => {
     let cancelled = false
-    apiGetUIConfig().then((cfg) => { if (!cancelled) setUIConfig(cfg) }).catch(() => {})
+    apiGetUIConfig().then((cfg) => {
+      if (cancelled) return
+      setUIConfig(cfg)
+      setSelectedSystemPrompt((prev) => prev || getFirstSystemPromptName(cfg))
+    }).catch(() => {})
     apiGetModels().then((data) => {
       if (cancelled) return
       setModels(data.models)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    document.title = appName
+
+    if (!isImageIcon(appIcon)) {
+      return
+    }
+
+    const link = document.querySelector("link[rel='icon']") || document.createElement('link')
+    link.setAttribute('rel', 'icon')
+    link.setAttribute('href', appIcon || '')
+    if (!link.parentNode) {
+      document.head.appendChild(link)
+    }
+  }, [appIcon, appName])
 
   const refreshConversations = useCallback(async () => {
     setConvsLoading(true)
@@ -1106,12 +1173,17 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     setMessages([])
     setInput('')
     setUploadedFiles([])
-  }, [])
+    const nextPrompt = getFirstSystemPromptName(uiConfig)
+    setSelectedSystemPrompt(nextPrompt)
+    selectedSystemPromptRef.current = nextPrompt
+  }, [uiConfig.systemPrompts])
 
-  const handleLoadConversation = useCallback(async (id: string) => {
+  const handleLoadConversation = useCallback(async (id: string, silent = false) => {
     const detail = await apiLoadConversation(id)
     if (!detail) {
-      antMessage.error('Failed to load conversation')
+      if (!silent) {
+        antMessage.error('Failed to load conversation')
+      }
       return
     }
     sessionStorage.setItem('chatSessionId', id)
@@ -1128,6 +1200,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
         model: m.model,
         timeTaken: m.time_taken_ms,
+        llmCalls: m.llm_calls,
+        toolCalls: m.tool_calls,
         msgId: m.id,
       }))
     setMessages(uiMsgs)
@@ -1136,7 +1210,16 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     const next = detail.model || 'auto'
     setSelectedModel(next)
     selectedModelRef.current = next
-  }, [antMessage])
+    const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
+      ? detail.system_prompt || ''
+      : getFirstSystemPromptName(uiConfig)
+    setSelectedSystemPrompt(nextPrompt)
+    selectedSystemPromptRef.current = nextPrompt
+  }, [antMessage, uiConfig.systemPrompts])
+
+  useEffect(() => {
+    void handleLoadConversation(sessionId, true)
+  }, [handleLoadConversation, sessionId])
 
   const handleDeleteConversation = useCallback(async (id: string) => {
     await apiDeleteConversation(id)
@@ -1186,6 +1269,9 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
 
+  const selectedSystemPromptRef = useRef(selectedSystemPrompt)
+  useEffect(() => { selectedSystemPromptRef.current = selectedSystemPrompt }, [selectedSystemPrompt])
+
   const uploadedFilesRef = useRef(uploadedFiles)
   useEffect(() => { uploadedFilesRef.current = uploadedFiles }, [uploadedFiles])
 
@@ -1214,7 +1300,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
       const fileUrls = files.map((f) => f.url)
       const modelId = selectedModelRef.current
       const modelToSend = modelId === 'auto' ? undefined : modelId
-      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend)
+      const systemPromptToSend = selectedSystemPromptRef.current || undefined
+      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend)
       // Attach persisted storage IDs so individual messages can be deleted later.
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
@@ -1316,6 +1403,13 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     { label: 'Auto', value: 'auto' },
     ...models.map((m) => ({ label: m.name || m.id, value: m.id })),
   ], [models])
+
+  const systemPromptOptions = useMemo(() => [
+    ...(getSortedSystemPrompts(uiConfig).map((prompt) => ({
+      label: prompt.name,
+      value: prompt.name,
+    }))),
+  ], [uiConfig.systemPrompts])
 
   const charCount = input.length
   const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
@@ -1451,13 +1545,21 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
           />
           <Avatar
             aria-hidden="true"
-            icon={<RobotOutlined />}
-            style={{ background: token.colorPrimary }}
+            src={isImageIcon(appIcon) ? appIcon : undefined}
+            icon={!appIcon ? <RobotOutlined /> : undefined}
+            style={{
+              background: !appIcon ? token.colorPrimary : isImageIcon(appIcon) ? token.colorFillSecondary : token.colorBgContainer,
+              color: !appIcon ? '#fff' : token.colorText,
+              fontSize: appIcon && !isImageIcon(appIcon) ? 18 : undefined,
+              border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : undefined,
+            }}
             size={36}
-          />
+          >
+            {appIcon && !isImageIcon(appIcon) ? appIcon : null}
+          </Avatar>
           <div>
             <Text strong style={{ fontSize: 15, display: 'block', lineHeight: 1.2 }}>
-              Chatbot
+              {appName}
             </Text>
             <Text type="secondary" style={{ fontSize: 11 }}>
               AI Assistant
@@ -1651,8 +1753,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   paddingBottom: 48,  // leave room for the inset toolbar row
                 }}
               />
-              {/* Inset bottom-left toolbar: attach + model selector */}
-              <div
+                {/* Inset bottom-left toolbar: attach + prompt/model selectors */}
+                <div
                 style={{
                   position: 'absolute',
                   bottom: 6,
@@ -1664,8 +1766,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   pointerEvents: loading || uploading ? 'none' : 'auto',
                   opacity: loading || uploading ? 0.5 : 1,
                 }}
-              >
-                <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
+                >
+                  <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
                   <Button
                     type="text"
                     size="small"
@@ -1683,10 +1785,35 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                       color: token.colorTextSecondary,
                     }}
                   />
-                </Tooltip>
-                {models.length > 0 && (
-                  <Select
-                    value={selectedModel}
+                  </Tooltip>
+                  {systemPromptOptions.length > 0 && (
+                    <Select
+                      value={selectedSystemPrompt}
+                      onChange={(v) => { setSelectedSystemPrompt(v); selectedSystemPromptRef.current = v }}
+                      size="small"
+                      aria-label="Select system prompt"
+                      options={systemPromptOptions}
+                      disabled={loading}
+                      variant="borderless"
+                      popupMatchSelectWidth={false}
+                      placement="topLeft"
+                      showSearch
+                      optionFilterProp={['label', 'value'] as unknown as string}
+                      prefix={<FileTextOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />}
+                      optionRender={(opt) => (
+                        <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
+                          <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
+                          {opt.value && (
+                            <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3 }}>{String(opt.value)}</span>
+                          )}
+                        </div>
+                      )}
+                      style={{ flex: 1, minWidth: 0 }}
+                    />
+                  )}
+                  {models.length > 0 && (
+                    <Select
+                      value={selectedModel}
                     onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
                     size="small"
                     aria-label="Select AI model"

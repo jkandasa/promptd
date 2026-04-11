@@ -21,20 +21,24 @@ type Message struct {
 	// Metadata — non-zero only for final assistant replies.
 	Model       string `yaml:"model,omitempty"         json:"model,omitempty"`
 	TimeTakenMs int64  `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
+	LLMCalls    int    `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
+	ToolCalls   int    `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
 	// Fields needed to replay the conversation to the LLM (tool messages).
 	ToolCallID string `yaml:"tool_call_id,omitempty" json:"tool_call_id,omitempty"`
 	Name       string `yaml:"name,omitempty"        json:"name,omitempty"`
+	Transient  bool   `yaml:"-"                     json:"-"`
 }
 
 // Conversation is the top-level unit that the storage layer persists.
 type Conversation struct {
-	ID        string    `yaml:"id"         json:"id"`
-	Title     string    `yaml:"title"      json:"title"`
-	Model     string    `yaml:"model"      json:"model"`
-	Pinned    bool      `yaml:"pinned,omitempty" json:"pinned,omitempty"`
-	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
-	UpdatedAt time.Time `yaml:"updated_at" json:"updated_at"`
-	Messages  []Message `yaml:"messages"   json:"messages"`
+	ID           string    `yaml:"id"         json:"id"`
+	Title        string    `yaml:"title"      json:"title"`
+	Model        string    `yaml:"model"      json:"model"`
+	SystemPrompt string    `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	Pinned       bool      `yaml:"pinned,omitempty" json:"pinned,omitempty"`
+	CreatedAt    time.Time `yaml:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `yaml:"updated_at" json:"updated_at"`
+	Messages     []Message `yaml:"messages"   json:"messages"`
 }
 
 // Store is the persistence interface. Every method is synchronous and

@@ -99,12 +99,13 @@ func (s *YAMLStore) List() ([]*Conversation, error) {
 		}
 		// Return a lightweight copy without messages.
 		convs = append(convs, &Conversation{
-			ID:        c.ID,
-			Title:     c.Title,
-			Model:     c.Model,
-			Pinned:    c.Pinned,
-			CreatedAt: c.CreatedAt,
-			UpdatedAt: c.UpdatedAt,
+			ID:           c.ID,
+			Title:        c.Title,
+			Model:        c.Model,
+			SystemPrompt: c.SystemPrompt,
+			Pinned:       c.Pinned,
+			CreatedAt:    c.CreatedAt,
+			UpdatedAt:    c.UpdatedAt,
 		})
 	}
 

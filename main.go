@@ -28,6 +28,11 @@ type LLMModel struct {
 	Name string `yaml:"name,omitempty"`
 }
 
+type SystemPromptConfig struct {
+	Name string `yaml:"name"`
+	File string `yaml:"file"`
+}
+
 func (m *LLMModel) UnmarshalYAML(value *yaml.Node) error {
 	var str string
 	if err := value.Decode(&str); err == nil {
@@ -76,13 +81,55 @@ type Config struct {
 		Servers           []MCPServerConfig `yaml:"servers"`
 	} `yaml:"mcp"`
 	Tools struct {
-		SystemPromptFile string `yaml:"system_prompt_file"`
+		SystemPrompts []SystemPromptConfig `yaml:"system_prompts"`
 	} `yaml:"tools"`
 	UI struct {
+		AppName           string   `yaml:"app_name"`
+		AppIcon           string   `yaml:"app_icon"`
 		WelcomeTitle      string   `yaml:"welcome_title"`
 		AIDisclaimer      string   `yaml:"ai_disclaimer"`
 		PromptSuggestions []string `yaml:"prompt_suggestions"`
 	} `yaml:"ui"`
+}
+
+func loadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []handler.SystemPromptInfo, string) {
+	prompts := make(map[string]string)
+	infos := make([]handler.SystemPromptInfo, 0, len(cfg.Tools.SystemPrompts))
+	firstPrompt := ""
+
+	if len(cfg.Tools.SystemPrompts) == 0 {
+		logger.Fatal("at least one system prompt is required under tools.system_prompts")
+	}
+
+	loadPrompt := func(name, file string) {
+		name = strings.TrimSpace(name)
+		file = strings.TrimSpace(file)
+		if name == "" {
+			logger.Fatal("system prompt name is required")
+		}
+		if file == "" {
+			logger.Fatal("system prompt file is required", zap.String("name", name))
+		}
+		if _, exists := prompts[name]; exists {
+			logger.Fatal("duplicate system prompt name", zap.String("name", name))
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			logger.Fatal("failed to read system prompt file", zap.String("path", file), zap.Error(err))
+		}
+		if firstPrompt == "" {
+			firstPrompt = name
+		}
+		prompts[name] = string(data)
+		infos = append(infos, handler.SystemPromptInfo{Name: name})
+		logger.Info("system prompt loaded", zap.String("name", name), zap.String("path", file))
+	}
+
+	for _, prompt := range cfg.Tools.SystemPrompts {
+		loadPrompt(prompt.Name, prompt.File)
+	}
+
+	return prompts, infos, firstPrompt
 }
 
 type MCPServerConfig struct {
@@ -200,15 +247,7 @@ func main() {
 
 	go mcpManager.StartHealthMonitor(ctx) // StartHealthMonitor spawns its own goroutine internally
 
-	var systemPrompt string
-	if cfg.Tools.SystemPromptFile != "" {
-		data, err := os.ReadFile(cfg.Tools.SystemPromptFile)
-		if err != nil {
-			logger.Fatal("failed to read system prompt file", zap.String("path", cfg.Tools.SystemPromptFile), zap.Error(err))
-		}
-		systemPrompt = string(data)
-		logger.Info("system prompt loaded", zap.String("path", cfg.Tools.SystemPromptFile))
-	}
+	systemPrompts, systemPromptInfos, defaultSystemPrompt := loadSystemPrompts(cfg, logger)
 
 	st, err := storage.NewYAMLStore(storageDir)
 	if err != nil {
@@ -216,9 +255,15 @@ func main() {
 	}
 	store := chat.NewSessionStore(st)
 	uiConfig := handler.UIConfig{
+		AppName:           cfg.UI.AppName,
+		AppIcon:           cfg.UI.AppIcon,
 		WelcomeTitle:      cfg.UI.WelcomeTitle,
 		AIDisclaimer:      cfg.UI.AIDisclaimer,
 		PromptSuggestions: cfg.UI.PromptSuggestions,
+		SystemPrompts:     systemPromptInfos,
+	}
+	if uiConfig.AppName == "" {
+		uiConfig.AppName = "Chatbot"
 	}
 	if uiConfig.WelcomeTitle == "" {
 		uiConfig.WelcomeTitle = "How can I help you today?"
@@ -236,7 +281,7 @@ func main() {
 	}
 
 	modelSelector := handler.NewModelSelector(getModelIDs(cfg.LLM.Models), cfg.LLM.SelectionMethod)
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir)
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompts, defaultSystemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
