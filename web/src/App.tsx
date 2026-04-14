@@ -10,7 +10,6 @@ import {
   Empty,
   Input,
   Layout,
-  List,
   Modal,
   Popconfirm,
   Select,
@@ -59,6 +58,53 @@ const { Content, Sider } = Layout
 const { Text } = Typography
 const { TextArea } = Input
 const { useToken } = theme
+
+// ── Parameter schema pretty‑print ────────────────────────────────────────
+function ParamsTable({ parameters }: { parameters?: any }) {
+  if (!parameters || typeof parameters !== 'object') return null
+  const props = parameters.properties
+  if (!props || typeof props !== 'object' || Object.keys(props).length === 0) return null
+  const required: string[] = Array.isArray(parameters.required) ? parameters.required : []
+  const rows = Object.entries(props).map(([k, v]) => ({
+    key: k,
+    name: k,
+    type: (v as any).type || (Array.isArray((v as any).enum) ? 'enum' : ''),
+    desc: (v as any).description || '',
+    req: required.includes(k),
+  }))
+  return (
+    <Table
+      size="small"
+      pagination={false}
+      dataSource={rows}
+      columns={[
+        {
+          title: 'Parameter',
+          dataIndex: 'name',
+          width: 160,
+          render: (name: string, row) => (
+            <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+              {name}
+              {row.req && <Tag color="red" style={{ fontSize: 10, marginLeft: 4, padding: '0 4px', lineHeight: '16px' }}>req</Tag>}
+            </span>
+          ),
+        },
+        {
+          title: 'Type',
+          dataIndex: 'type',
+          width: 70,
+          render: (t: string) => t ? <Tag style={{ fontSize: 10, fontFamily: 'ui-monospace, monospace' }}>{t}</Tag> : null,
+        },
+        {
+          title: 'Description',
+          dataIndex: 'desc',
+          render: (d: string) => <Text type="secondary" style={{ fontSize: 12 }}>{d}</Text>,
+        },
+      ]}
+      style={{ marginTop: 8 }}
+    />
+  )
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -115,7 +161,7 @@ interface LLMRound {
   response: TraceMessage
   llm_duration_ms: number
   tool_results?: ToolResult[]
-  available_tools?: TraceToolDef[]
+  available_tools?: (TraceToolDef & { parameters?: any })[]
   usage?: TokenUsage
 }
 
@@ -136,8 +182,9 @@ interface Message {
 }
 
 interface ToolInfo {
-  name: string
-  description: string
+  name: string;
+  description: string;
+  parameters?: any;
 }
 
 interface UIConfig {
@@ -204,8 +251,8 @@ function isImageIcon(icon?: string): boolean {
 async function apiListTools(): Promise<ToolInfo[]> {
   const res = await fetch('/tools')
   if (!res.ok) return []
-  const data: { tools: { name: string; description: string }[] } = await res.json()
-  return data.tools?.map((t) => ({ name: t.name, description: t.description })) ?? []
+  const data: { tools: { name: string; description: string; parameters?: any }[] } = await res.json()
+  return data.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) ?? []
 }
 
 async function apiGetUIConfig(): Promise<UIConfig> {
@@ -434,7 +481,7 @@ function buildMarkdownComponents(token: ReturnType<typeof useToken>['token']) {
             padding: '2px 6px',
             borderRadius: 4,
             fontSize: '0.9em',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontFamily: 'ui-monospace, monospace',
           }}
           {...props}
         >
@@ -689,8 +736,11 @@ function TraceDrawer({ open, onClose, rounds }: {
                 title: 'Description',
                 dataIndex: 'description',
                 key: 'description',
-                render: (description: string) => (
-                  <Text type="secondary" style={{ fontSize: 12 }}>{description}</Text>
+                render: (_: string, tool) => (
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{tool.description}</Text>
+                    {tool.parameters && <ParamsTable parameters={tool.parameters} />}
+                  </div>
                 ),
               },
             ]}
@@ -1282,6 +1332,9 @@ function ToolsDrawer({
     ? tools.filter(t => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
     : tools
 
+  const hasParams = (t: ToolInfo) =>
+    t.parameters?.properties && Object.keys(t.parameters.properties).length > 0
+
   return (
     <Drawer
       title={
@@ -1292,7 +1345,7 @@ function ToolsDrawer({
         </div>
       }
       placement="right"
-      width={360}
+      size="large"
       open={open}
       onClose={onClose}
       extra={
@@ -1307,54 +1360,67 @@ function ToolsDrawer({
           />
         </Tooltip>
       }
+      styles={{ body: { display: 'flex', flexDirection: 'column', padding: '16px 20px' } }}
     >
+      {/* Search always on top */}
+      <Input.Search
+        placeholder="Search tools…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        allowClear
+        size="small"
+        style={{ marginBottom: 12, flexShrink: 0 }}
+      />
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 40 }}>
           <Spin />
         </div>
       ) : tools.length === 0 ? (
-        <Empty description="No tools registered" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description="No tools registered" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ paddingTop: 40 }} />
+      ) : filtered.length === 0 ? (
+        <Empty description="No matching tools" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ paddingTop: 40 }} />
       ) : (
-        <>
-          <Input.Search
-            placeholder="Search by name or description"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            allowClear
-            size="small"
-            style={{ marginBottom: 12 }}
-          />
-          {filtered.length === 0 ? (
-            <Empty description="No matching tools" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          ) : (
-            <List
-              dataSource={filtered}
-              renderItem={(t) => (
-                <List.Item style={{ padding: '12px 0', alignItems: 'flex-start' }}>
-                  <List.Item.Meta
-                    avatar={
-                      <Avatar
-                        icon={<ToolOutlined />}
-                        size="small"
-                        style={{ background: token.colorPrimary, marginTop: 2 }}
-                      />
-                    }
-                    title={
-                      <Tag color="blue" style={{ fontFamily: 'monospace', marginBottom: 4 }}>
-                        {t.name}
-                      </Tag>
-                    }
-                    description={
-                      <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.5 }}>
-                        {t.description}
-                      </Text>
-                    }
-                  />
-                </List.Item>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {filtered.map((t, i) => (
+            <div
+              key={t.name}
+              style={{
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 8,
+                padding: '10px 14px',
+                marginBottom: i < filtered.length - 1 ? 8 : 0,
+                background: token.colorBgContainer,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <Tag color="blue" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, margin: 0 }}>
+                  {t.name}
+                </Tag>
+                {hasParams(t) && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {Object.keys(t.parameters.properties).length} param{Object.keys(t.parameters.properties).length === 1 ? '' : 's'}
+                  </Text>
+                )}
+              </div>
+              <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.5, display: 'block' }}>
+                {t.description}
+              </Text>
+              {hasParams(t) && (
+                <Collapse
+                  size="small"
+                  ghost
+                  style={{ marginTop: 6 }}
+                  items={[{
+                    key: 'params',
+                    label: <Text style={{ fontSize: 12 }}>Parameters</Text>,
+                    children: <ParamsTable parameters={t.parameters} />,
+                  }]}
+                />
               )}
-            />
-          )}
-        </>
+            </div>
+          ))}
+        </div>
       )}
     </Drawer>
   )
@@ -2418,7 +2484,7 @@ export default function App() {
         token: {
           colorPrimary: '#5b21b6',
           borderRadius: 8,
-          fontFamily: "'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          fontFamily: "'Open Sans', system-ui, sans-serif",
         },
       }}
     >

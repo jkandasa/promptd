@@ -103,8 +103,9 @@ func (r *Registry) Names() []string {
 
 // ToolInfo is a slim summary of a registered tool for API responses.
 type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // List returns name+description for every registered tool, sorted by name.
@@ -113,7 +114,14 @@ func (r *Registry) List() []ToolInfo {
 	defer r.mu.RUnlock()
 	out := make([]ToolInfo, 0, len(r.tools))
 	for _, t := range r.tools {
-		out = append(out, ToolInfo{Name: t.Name(), Description: t.Description()})
+		var params json.RawMessage
+		if p := t.Parameters(); p != nil {
+			b, err := json.Marshal(p)
+			if err == nil && string(b) != "null" {
+				params = json.RawMessage(b)
+			}
+		}
+		out = append(out, ToolInfo{Name: t.Name(), Description: t.Description(), Parameters: params})
 	}
 	// Sort for stable ordering.
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
