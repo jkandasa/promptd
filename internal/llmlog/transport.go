@@ -2,6 +2,7 @@ package llmlog
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -25,33 +26,130 @@ func NewTransport(base http.RoundTripper, log *zap.Logger) *Transport {
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !t.log.Core().Enabled(zap.DebugLevel) {
-		return t.base.RoundTrip(req)
-	}
+	debug := t.log.Core().Enabled(zap.DebugLevel)
 
-	// Log request
-	reqBody := readAndRestore(&req.Body)
-	t.log.Debug("llm http request",
-		zap.String("method", req.Method),
-		zap.String("url", req.URL.String()),
-		zap.Any("headers", redactHeaders(req.Header)),
-		zap.String("body", reqBody),
-	)
+	if debug {
+		reqBody := readAndRestore(&req.Body)
+		t.log.Debug("llm http request",
+			zap.String("method", req.Method),
+			zap.String("url", req.URL.String()),
+			zap.Any("headers", redactHeaders(req.Header)),
+			zap.String("body", reqBody),
+		)
+	}
 
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// Log response — redact response headers the same way as request headers.
-	respBody := readAndRestore(&resp.Body)
-	t.log.Debug("llm http response",
-		zap.Int("status", resp.StatusCode),
-		zap.Any("headers", redactHeaders(resp.Header)),
-		zap.String("body", respBody),
-	)
+	// Always patch: copy OpenRouter's non-standard "reasoning" field into
+	// "reasoning_content" so the go-openai SDK unmarshals it correctly.
+	patchReasoningField(&resp.Body)
+
+	if debug {
+		respBody := readAndRestore(&resp.Body)
+		t.log.Debug("llm http response",
+			zap.Int("status", resp.StatusCode),
+			zap.Any("headers", redactHeaders(resp.Header)),
+			zap.String("body", respBody),
+		)
+	}
 
 	return resp, nil
+}
+
+// patchReasoningField reads the response body, and for every choice whose
+// message has a non-empty "reasoning" field but no "reasoning_content", copies
+// the value across so the go-openai SDK can unmarshal it. The body is always
+// restored so downstream readers are unaffected.
+func patchReasoningField(body *io.ReadCloser) {
+	if *body == nil {
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(*body, maxLogBodyBytes))
+	(*body).Close()
+	if err != nil || len(data) == 0 {
+		*body = io.NopCloser(bytes.NewReader(data))
+		return
+	}
+
+	patched := applyReasoningPatch(data)
+	*body = io.NopCloser(bytes.NewReader(patched))
+}
+
+// applyReasoningPatch does the actual JSON manipulation. It is a separate
+// function so it can be unit-tested without an http.Response.
+func applyReasoningPatch(data []byte) []byte {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return data
+	}
+
+	choicesRaw, ok := root["choices"]
+	if !ok {
+		return data
+	}
+
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(choicesRaw, &choices); err != nil {
+		return data
+	}
+
+	modified := false
+	for i, choice := range choices {
+		msgRaw, ok := choice["message"]
+		if !ok {
+			continue
+		}
+		var msg map[string]json.RawMessage
+		if err := json.Unmarshal(msgRaw, &msg); err != nil {
+			continue
+		}
+
+		reasoningRaw, hasReasoning := msg["reasoning"]
+		_, hasReasoningContent := msg["reasoning_content"]
+
+		// Only patch when "reasoning" is present and "reasoning_content" is
+		// absent or null/empty.
+		if !hasReasoning {
+			continue
+		}
+		var reasoningStr string
+		if err := json.Unmarshal(reasoningRaw, &reasoningStr); err != nil || reasoningStr == "" {
+			continue
+		}
+		if hasReasoningContent {
+			var existing string
+			if err := json.Unmarshal(msg["reasoning_content"], &existing); err == nil && existing != "" {
+				continue // already populated, nothing to do
+			}
+		}
+
+		msg["reasoning_content"] = reasoningRaw
+		newMsgRaw, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+		choice["message"] = newMsgRaw
+		choices[i] = choice
+		modified = true
+	}
+
+	if !modified {
+		return data
+	}
+
+	newChoicesRaw, err := json.Marshal(choices)
+	if err != nil {
+		return data
+	}
+	root["choices"] = newChoicesRaw
+	out, err := json.Marshal(root)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 // readAndRestore reads up to maxLogBodyBytes from the body, then replaces it with

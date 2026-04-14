@@ -90,6 +90,11 @@ type Config struct {
 		AIDisclaimer      string   `yaml:"ai_disclaimer"`
 		PromptSuggestions []string `yaml:"prompt_suggestions"`
 	} `yaml:"ui"`
+	Trace struct {
+		// TTL controls how long raw LLM trace data is retained on assistant messages.
+		// Default: 168h (7 days). Minimum: 1h.
+		TTL time.Duration `yaml:"ttl"`
+	} `yaml:"trace"`
 }
 
 func loadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []handler.SystemPromptInfo, string) {
@@ -172,6 +177,14 @@ func loadConfig(path string) (*Config, error) {
 		cfg.Data.Dir = "./data"
 	}
 
+	// Trace TTL: default 7 days, minimum 1 hour.
+	if cfg.Trace.TTL == 0 {
+		cfg.Trace.TTL = 7 * 24 * time.Hour
+	}
+	if cfg.Trace.TTL < time.Hour {
+		cfg.Trace.TTL = time.Hour
+	}
+
 	return &cfg, nil
 }
 
@@ -201,6 +214,38 @@ func buildRegistry(logger *zap.Logger) *tools.Registry {
 	}
 	logger.Info("built-in tools registered", zap.Strings("tools", []string{"get_current_datetime"}))
 	return registry
+}
+
+// traceCleanupInterval returns how often the trace purge job should run.
+// If the TTL is ≤ 12 hours the job runs every TTL; otherwise it runs every 12 hours.
+func traceCleanupInterval(ttl time.Duration) time.Duration {
+	const maxInterval = 12 * time.Hour
+	if ttl <= maxInterval {
+		return ttl
+	}
+	return maxInterval
+}
+
+// runTraceCleanup is a long-running goroutine that periodically purges stale
+// LLM trace data from the conversation store.
+func runTraceCleanup(ctx context.Context, st *storage.YAMLStore, ttl time.Duration, logger *zap.Logger) {
+	interval := traceCleanupInterval(ttl)
+	logger.Info("trace cleanup job started", zap.Duration("ttl", ttl), zap.Duration("interval", interval))
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-ttl)
+			if err := st.PurgeTraces(cutoff); err != nil {
+				logger.Error("trace cleanup failed", zap.Error(err))
+			} else {
+				logger.Info("trace cleanup done", zap.Duration("ttl", ttl), zap.Time("cutoff", cutoff))
+			}
+		}
+	}
 }
 
 func main() {
@@ -254,6 +299,8 @@ func main() {
 		logger.Fatal("failed to create storage", zap.String("dir", storageDir), zap.Error(err))
 	}
 	store := chat.NewSessionStore(st)
+
+	go runTraceCleanup(ctx, st, cfg.Trace.TTL, logger)
 	uiConfig := handler.UIConfig{
 		AppName:           cfg.UI.AppName,
 		AppIcon:           cfg.UI.AppIcon,
@@ -291,6 +338,7 @@ func main() {
 	mux.HandleFunc("GET /mcp", mcpHandler.List)
 	mux.HandleFunc("GET /ui-config", h.UIConfig)
 	mux.HandleFunc("GET /models", h.ListModels)
+	mux.HandleFunc("GET /tools", h.ListTools)
 	mux.HandleFunc("POST /upload", h.Upload)
 	mux.HandleFunc("GET /files/", h.ServeFile)
 	mux.HandleFunc("DELETE /files/", h.DeleteFile)

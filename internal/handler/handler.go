@@ -152,13 +152,14 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
-	Reply          string `json:"reply"`
-	Model          string `json:"model"`
-	TimeTaken      int64  `json:"time_taken_ms"`
-	LLMCalls       int    `json:"llm_calls"`
-	ToolCalls      int    `json:"tool_calls"`
-	UserMsgID      string `json:"user_msg_id"`
-	AssistantMsgID string `json:"assistant_msg_id"`
+	Reply          string             `json:"reply"`
+	Model          string             `json:"model"`
+	TimeTaken      int64              `json:"time_taken_ms"`
+	LLMCalls       int                `json:"llm_calls"`
+	ToolCalls      int                `json:"tool_calls"`
+	UserMsgID      string             `json:"user_msg_id"`
+	AssistantMsgID string             `json:"assistant_msg_id"`
+	Trace          []storage.LLMRound `json:"trace,omitempty"`
 }
 
 type errorResponse struct {
@@ -178,7 +179,51 @@ func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMe
 			Content: prompt,
 		})
 	}
-	return append(messages, session.History()...)
+	return append(messages, filterHistory(session.History())...)
+}
+
+// filterHistory strips intermediate tool-call scaffolding from completed prior
+// turns, keeping only user messages and assistant messages that have text
+// content. Tool-call-only assistant messages (no content) and tool-result
+// messages from already-completed turns waste tokens and are not needed for
+// future LLM calls — the final assistant text reply already summarises them.
+//
+// Messages from the last user message onward are left untouched because they
+// belong to the currently active tool-call loop and must remain intact for the
+// OpenAI API contract.
+func filterHistory(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	// Find the index of the last user message. Everything from there onward is
+	// the active turn and must not be touched.
+	lastUserIdx := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == openai.ChatMessageRoleUser {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	filtered := make([]openai.ChatCompletionMessage, 0, len(history))
+	for i, msg := range history {
+		if i >= lastUserIdx {
+			// Active turn — keep everything as-is.
+			filtered = append(filtered, msg)
+			continue
+		}
+		// Prior turns: keep only user messages and assistant messages that
+		// carry actual text content. Drop pure tool-call assistant messages
+		// (content == "" and ToolCalls set) and all tool-result messages.
+		switch msg.Role {
+		case openai.ChatMessageRoleUser:
+			filtered = append(filtered, msg)
+		case openai.ChatMessageRoleAssistant:
+			if msg.Content != "" {
+				filtered = append(filtered, msg)
+			}
+			// else: pure tool-call request — drop it
+			// openai.ChatMessageRoleTool: drop entirely
+		}
+	}
+	return filtered
 }
 
 func (h *Handler) hasSystemPrompt(promptName string) bool {
@@ -189,6 +234,23 @@ func (h *Handler) hasSystemPrompt(promptName string) bool {
 	return ok
 }
 
+// traceUsage converts an openai.Usage to our storage.TokenUsage, including
+// reasoning and cached-prompt token breakdowns when the provider returns them.
+func traceUsage(u openai.Usage) *storage.TokenUsage {
+	tu := &storage.TokenUsage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if u.CompletionTokensDetails != nil {
+		tu.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	if u.PromptTokensDetails != nil {
+		tu.CachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+	return tu
+}
+
 // maxToolIterations caps the tool-call loop to prevent infinite loops from
 // misbehaving or adversarially-prompted models.
 const maxToolIterations = 20
@@ -196,22 +258,34 @@ const maxToolIterations = 20
 // runLLM sends the current session to the LLM and handles any tool calls in a loop
 // until the model returns a final text response. It does NOT append the final
 // assistant message to the session — the caller must do that (so it can attach metadata).
-// Returns the reply text, the final assistant message, model used, LLM call count, tool call count.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, openai.ChatCompletionMessage, string, int, int, error) {
+// Returns the reply text, the final assistant message, model used, LLM call count,
+// tool call count, and the full trace of all LLM round-trips.
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, openai.ChatCompletionMessage, string, int, int, []storage.LLMRound, error) {
 	llmCalls := 0
 	toolCalls := 0
+	var trace []storage.LLMRound
 	model, _ := h.modelSelector.GetModel(preferredModel)
 	for {
 		if llmCalls >= maxToolIterations {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
+		requestMsgs := h.buildMessages(session)
 		req := openai.ChatCompletionRequest{
 			Model:    model,
-			Messages: h.buildMessages(session),
+			Messages: requestMsgs,
 		}
 		if h.registry != nil && !h.registry.Empty() {
 			req.Tools = h.registry.OpenAITools()
+		}
+
+		// Snapshot available tools for the trace before the API call.
+		var availableTools []storage.TraceToolDef
+		for _, t := range req.Tools {
+			availableTools = append(availableTools, storage.TraceToolDef{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+			})
 		}
 
 		h.log.Debug("llm request",
@@ -220,13 +294,15 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			zap.Any("messages", req.Messages),
 		)
 
+		llmStart := time.Now()
 		resp, err := h.client.CreateChatCompletion(ctx, req)
+		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("LLM error: %w", err)
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("LLM error: %w", err)
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("LLM returned no choices")
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("LLM returned no choices")
 		}
 		choice := resp.Choices[0]
 
@@ -236,29 +312,52 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 			zap.String("reply", choice.Message.Content),
+			zap.Int64("llm_duration_ms", llmDurationMs),
 		)
 
-		// No tool calls — we have the final answer. Return without appending;
-		// the caller will append with full metadata via AddFinalMessage.
+		// No tool calls — we have the final answer. Record the round and return.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
-			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, nil
+			trace = append(trace, storage.LLMRound{
+				Request:        storage.ToTraceMessages(requestMsgs),
+				Response:       storage.ToTraceMessage(choice.Message),
+				LLMDurationMs:  llmDurationMs,
+				AvailableTools: availableTools,
+				Usage:          traceUsage(resp.Usage),
+			})
+			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, trace, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
 		session.AddMessage(choice.Message)
 
-		// Execute each requested tool and append its result.
+		// Execute each requested tool, timing each one individually.
+		round := storage.LLMRound{
+			Request:        storage.ToTraceMessages(requestMsgs),
+			Response:       storage.ToTraceMessage(choice.Message),
+			LLMDurationMs:  llmDurationMs,
+			AvailableTools: availableTools,
+			Usage:          traceUsage(resp.Usage),
+		}
 		for _, tc := range choice.Message.ToolCalls {
 			toolCalls++
+			toolStart := time.Now()
 			result, toolErr := h.executeTool(ctx, tc)
+			toolDurationMs := time.Since(toolStart).Milliseconds()
 			h.log.Debug("tool executed",
 				zap.String("tool", tc.Function.Name),
 				zap.String("args", tc.Function.Arguments),
 				zap.String("result", result),
+				zap.Int64("tool_duration_ms", toolDurationMs),
 			)
+			round.ToolResults = append(round.ToolResults, storage.ToolResult{
+				Name:       tc.Function.Name,
+				Args:       tc.Function.Arguments,
+				Result:     result,
+				DurationMs: toolDurationMs,
+			})
 			session.AddMessage(openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				ToolCallID: tc.ID,
@@ -269,6 +368,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 				h.log.Warn("tool error", zap.String("tool", tc.Function.Name), zap.Error(toolErr))
 			}
 		}
+		trace = append(trace, round)
 		// Loop: send tool results back to the LLM.
 	}
 }
@@ -333,7 +433,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	session.SetSystemPrompt(req.SystemPrompt)
 	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
 
-	reply, finalMsg, model, llmCalls, toolCalls, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
+	reply, finalMsg, model, llmCalls, toolCalls, trace, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model})
@@ -341,9 +441,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls)
+	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls, trace)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID})
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +510,15 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 		"models":           models,
 		"selection_method": method,
 	})
+}
+
+// ListTools returns all registered tools with their name and description.
+func (h *Handler) ListTools(w http.ResponseWriter, r *http.Request) {
+	if h.registry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"tools": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.List()})
 }
 
 type UploadedFile struct {

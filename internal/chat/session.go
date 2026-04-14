@@ -49,8 +49,8 @@ func (s *Session) Add(role, content string) string {
 }
 
 // AddFinalMessage appends the final assistant reply with its associated
-// performance metadata. Returns the new message ID.
-func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int) string {
+// performance metadata and LLM trace. Returns the new message ID.
+func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -65,6 +65,7 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string
 		TimeTakenMs: timeTakenMs,
 		LLMCalls:    llmCalls,
 		ToolCalls:   toolCalls,
+		Trace:       trace,
 	})
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
@@ -76,7 +77,7 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string
 func (s *Session) AddMessage(msg openai.ChatCompletionMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.conv.Messages = append(s.conv.Messages, storage.Message{
+	sm := storage.Message{
 		ID:         uuid.New().String(),
 		Role:       msg.Role,
 		Content:    msg.Content,
@@ -84,7 +85,15 @@ func (s *Session) AddMessage(msg openai.ChatCompletionMessage) {
 		Name:       msg.Name,
 		SentAt:     time.Now(),
 		Transient:  true,
-	})
+	}
+	for _, tc := range msg.ToolCalls {
+		sm.InlineToolCalls = append(sm.InlineToolCalls, storage.MessageToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+	s.conv.Messages = append(s.conv.Messages, sm)
 	s.conv.UpdatedAt = time.Now()
 	// Intentionally no s.persist() call — tool and intermediate assistant messages
 	// are kept in memory for LLM context only and are never written to disk.

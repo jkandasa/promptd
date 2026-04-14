@@ -17,6 +17,8 @@ A lightweight, extensible LLM chatbot server written in Go with a React frontend
 - **File uploads** — attach files to messages; images previewed inline
 - **Embedded chat UI** — zero-dependency browser interface served at `/`
 - **System prompts** — load one or many prompts from external files and switch in the UI
+- **Trace drawer** — per-assistant-message LLM trace showing every round's messages sent, model response, tool executions, token counts (with reasoning and cached breakdowns), and latencies
+- **Active tools drawer** — searchable list of all tools currently available to the LLM (built-in + MCP)
 - **Single binary** — statically compiled, no runtime dependencies
 
 ---
@@ -104,6 +106,9 @@ ui:
   prompt_suggestions:
     - "Explain how this works"
     - "Help me write code"
+
+trace:
+  ttl: 168h              # How long raw LLM trace data is kept per assistant message (default: 7 days)
 ```
 
 ### Configuration reference
@@ -130,6 +135,7 @@ ui:
 | `ui.welcome_title` | No | — | Welcome screen heading |
 | `ui.ai_disclaimer` | No | built-in | Disclaimer text under heading |
 | `ui.prompt_suggestions` | No | built-in | Quick-send prompt chips |
+| `trace.ttl` | No | `168h` | How long raw LLM trace data is retained per assistant message (min `1h`) |
 
 ---
 
@@ -144,6 +150,7 @@ ui:
 | `POST` | `/reset` | `{session_id}` | Clear session history server-side |
 | `GET` | `/ui-config` | — | UI configuration (title, suggestions, …) |
 | `GET` | `/models` | — | List available models and selection method |
+| `GET` | `/tools` | — | List all tools currently available to the LLM (built-in + MCP) |
 
 ### Conversations
 
@@ -209,6 +216,17 @@ Each conversation is a single YAML file at `<data.dir>/conversations/<id>.yaml`.
 
 ---
 
+## Trace data
+
+Each assistant message optionally carries a `trace` field containing the full LLM round-trip data for that reply:
+
+- **What is captured per round**: the exact messages sent, the model's raw response (including reasoning from thinking models), tool definitions available, tool results, token usage (prompt / completion / reasoning / cached), and LLM + tool latencies.
+- **Reasoning content** — OpenRouter models that return a `"reasoning"` field (e.g. `nvidia/nemotron`, `liquid/lfm-thinking`) have it transparently mapped to `reasoning_content` before the SDK parses the response. No extra configuration needed.
+- **Retention** — trace data is purged after `trace.ttl` (default 7 days) by a background job. Only the `trace` field is removed; the conversation and messages are unaffected.
+- Trace data is stored inline in the conversation YAML under each assistant message's `trace:` key.
+
+---
+
 ## Built-in tools
 
 ### `get_current_datetime`
@@ -261,6 +279,12 @@ The user can override the active model via the UI dropdown. The chosen model is 
 - **Markdown rendering** — full GFM with syntax-highlighted code blocks
 - **Dark / light mode** — respects OS preference, toggleable in header
 - **Typing indicator** and smooth scroll-to-bottom
+- **Trace drawer** — click the token-count badge on any assistant message to open a per-message LLM trace:
+  - One collapsible panel per LLM round showing: Available Tools → Messages Sent → LLM Decision/Response → Tool Execution
+  - Reasoning content shown as a collapsed block (for thinking models)
+  - Token counts per round: `↑ prompt  ↓ completion  (N reasoning, N cached)`
+  - Round summary with LLM and tool latencies
+- **Active tools drawer** — header button lists all tools the LLM can call; searchable by name or description
 
 ---
 

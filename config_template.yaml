@@ -77,3 +77,10 @@ ui:
   #  - "Help me write code"
   #  - "Summarize the key points"
   #  - "What are best practices?"
+
+trace:
+  # How long raw LLM trace data is kept on assistant messages (default: 168h = 7 days).
+  # Minimum allowed value is 1h (anything lower is clamped to 1h).
+  # The cleanup job runs every <ttl> when ttl ≤ 12h, otherwise every 12h.
+  # Examples: 1h, 6h, 24h, 72h, 168h
+  # ttl: 168h

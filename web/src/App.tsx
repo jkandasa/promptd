@@ -3,6 +3,7 @@ import {
   Avatar,
   Badge,
   Button,
+  Collapse,
   ConfigProvider,
   Divider,
   Drawer,
@@ -15,11 +16,13 @@ import {
   Select,
   Spin,
   Tag,
+  Timeline,
   Tooltip,
   Typography,
   theme,
 } from 'antd'
 import {
+  CheckCircleOutlined,
   CheckOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -68,6 +71,55 @@ interface UploadedFile {
   created_at: number
 }
 
+// ── LLM Trace types ────────────────────────────────────────────────────────
+
+interface TraceToolCall {
+  id: string
+  name: string
+  args: string
+}
+
+interface TraceMessage {
+  role: string
+  content?: string
+  refusal?: string
+  reasoning_content?: string
+  name?: string
+  tool_call_id?: string
+  tool_calls?: TraceToolCall[]
+}
+
+interface ToolResult {
+  name: string
+  args: string
+  result: string
+  duration_ms: number
+}
+
+interface TraceToolDef {
+  name: string
+  description: string
+}
+
+interface TokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  reasoning_tokens?: number
+  cached_tokens?: number
+}
+
+interface LLMRound {
+  request: TraceMessage[]
+  response: TraceMessage
+  llm_duration_ms: number
+  tool_results?: ToolResult[]
+  available_tools?: TraceToolDef[]
+  usage?: TokenUsage
+}
+
+// ── Message ────────────────────────────────────────────────────────────────
+
 interface Message {
   id: string
   role: Role
@@ -79,22 +131,12 @@ interface Message {
   model?: string
   files?: UploadedFile[]
   msgId?: string  // persisted storage ID (undefined for error messages or pre-persistence)
+  trace?: LLMRound[]
 }
 
 interface ToolInfo {
   name: string
   description: string
-  serverName?: string
-}
-
-interface MCPServer {
-  url: string
-  tools: string[]
-  name?: string
-}
-
-type MCPServersResponse = {
-  servers: MCPServer[]
 }
 
 interface UIConfig {
@@ -129,6 +171,7 @@ interface StorageMessage {
   time_taken_ms?: number
   llm_calls?: number
   tool_calls?: number
+  trace?: LLMRound[]
 }
 
 interface ConversationDetail extends ConversationMeta {
@@ -158,14 +201,10 @@ function isImageIcon(icon?: string): boolean {
 // ── API helpers ────────────────────────────────────────────────────────────
 
 async function apiListTools(): Promise<ToolInfo[]> {
-  const res = await fetch('/mcp')
+  const res = await fetch('/tools')
   if (!res.ok) return []
-  const data: MCPServersResponse = await res.json()
-  return data.servers?.flatMap((s) => s.tools.map((t) => ({
-    name: t,
-    description: t,
-    serverName: s.name || s.url
-  }))) ?? []
+  const data: { tools: { name: string; description: string }[] } = await res.json()
+  return data.tools?.map((t) => ({ name: t.name, description: t.description })) ?? []
 }
 
 async function apiGetUIConfig(): Promise<UIConfig> {
@@ -183,6 +222,7 @@ type ChatResponse = {
   files?: UploadedFile[]
   user_msg_id?: string
   assistant_msg_id?: string
+  trace?: LLMRound[]
 }
 
 class ChatError extends Error {
@@ -488,6 +528,347 @@ function buildMarkdownComponents(token: ReturnType<typeof useToken>['token']) {
   }
 }
 
+// ── TraceDrawer component ──────────────────────────────────────────────────
+
+// Role badge colours matching standard OpenAI roles.
+const ROLE_COLORS: Record<string, string> = {
+  system:    '#8c8c8c',
+  user:      '#1677ff',
+  assistant: '#52c41a',
+  tool:      '#fa8c16',
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const color = ROLE_COLORS[role] ?? '#595959'
+  return (
+    <Tag color={color} style={{ fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      {role}
+    </Tag>
+  )
+}
+
+function TraceMessageCard({ msg, token }: { msg: TraceMessage; token: ReturnType<typeof useToken>['token'] }) {
+  return (
+    <div style={{
+      border: `1px solid ${token.colorBorderSecondary}`,
+      borderRadius: 6,
+      padding: '8px 10px',
+      marginBottom: 6,
+      background: token.colorFillAlter,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <RoleBadge role={msg.role} />
+        {msg.name && (
+          <Text type="secondary" style={{ fontSize: 11 }}>({msg.name})</Text>
+        )}
+        {msg.tool_call_id && (
+          <Text type="secondary" style={{ fontSize: 10, fontFamily: 'monospace' }}>id:{msg.tool_call_id}</Text>
+        )}
+      </div>
+
+      {msg.content && (
+        <pre style={{
+          margin: '4px 0 0',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontSize: 12,
+          fontFamily: 'monospace',
+          maxHeight: 300,
+          overflowY: 'auto',
+          color: token.colorText,
+        }}>{msg.content}</pre>
+      )}
+      {msg.reasoning_content && (
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ fontSize: 11, color: token.colorTextSecondary, cursor: 'pointer', userSelect: 'none' }}>
+            reasoning ({msg.reasoning_content.length} chars)
+          </summary>
+          <pre style={{
+            margin: '4px 0 0',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            fontSize: 12,
+            fontFamily: 'monospace',
+            maxHeight: 300,
+            overflowY: 'auto',
+            color: token.colorTextSecondary,
+            borderLeft: `2px solid ${token.colorBorderSecondary}`,
+            paddingLeft: 8,
+          }}>{msg.reasoning_content}</pre>
+        </details>
+      )}
+      {msg.refusal && (
+        <pre style={{
+          margin: '4px 0 0',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontSize: 12,
+          fontFamily: 'monospace',
+          maxHeight: 200,
+          overflowY: 'auto',
+          color: token.colorError,
+        }}>[refusal] {msg.refusal}</pre>
+      )}
+      {msg.tool_calls && msg.tool_calls.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {msg.tool_calls.map((tc, i) => (
+            <div key={i} style={{
+              background: token.colorFillSecondary,
+              borderRadius: 4,
+              padding: '4px 8px',
+              marginBottom: 4,
+              fontSize: 12,
+              fontFamily: 'monospace',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Text strong style={{ fontSize: 12 }}>→ calls {tc.name}</Text>
+                <Text type="secondary" style={{ fontSize: 10, fontFamily: 'monospace' }}>id:{tc.id}</Text>
+              </div>
+              <pre style={{ margin: '2px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, color: token.colorText }}>
+                {(() => { try { return JSON.stringify(JSON.parse(tc.args), null, 2) } catch { return tc.args } })()}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TraceDrawer({ open, onClose, rounds }: {
+  open: boolean
+  onClose: () => void
+  rounds?: LLMRound[]
+}) {
+  const { token } = useToken()
+  if (!rounds?.length) return null
+
+  const fmtMs = (ms: number) => ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+
+  const timelineItems = rounds.map((round, idx) => {
+    const hasTools = (round.tool_results?.length ?? 0) > 0
+    const toolCount = round.tool_results?.length ?? 0
+    const totalToolMs = round.tool_results?.reduce((s, t) => s + t.duration_ms, 0) ?? 0
+    const isFinal = !hasTools
+
+    // Build collapse panels for the sections inside this round
+    const collapseItems = [
+      {
+        key: 'messages',
+        label: (
+          <Text style={{ fontSize: 12 }}>
+            Messages Sent
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.request.length})</Text>
+          </Text>
+        ),
+        children: (
+          <div style={{
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 6,
+            maxHeight: 320,
+            overflowY: 'auto',
+            background: token.colorFillAlter,
+          }}>
+            {round.request.map((msg, mi) => (
+              <div key={mi} style={{
+                display: 'flex',
+                gap: 8,
+                padding: '5px 10px',
+                borderBottom: mi < round.request.length - 1 ? `1px solid ${token.colorBorderSecondary}` : undefined,
+                alignItems: 'flex-start',
+              }}>
+                <Tag color={ROLE_COLORS[msg.role] ?? '#595959'} style={{
+                  fontSize: 10,
+                  marginTop: 1,
+                  flexShrink: 0,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  lineHeight: '16px',
+                }}>
+                  {msg.role}
+                </Tag>
+                <pre style={{
+                  margin: 0,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  color: token.colorText,
+                  flex: 1,
+                }}>
+                  {msg.tool_calls && msg.tool_calls.length > 0
+                    ? msg.tool_calls.map(tc => `→ calls ${tc.name}  [id:${tc.id}]\n${(() => { try { return JSON.stringify(JSON.parse(tc.args), null, 2) } catch { return tc.args } })()}`).join('\n\n')
+                    : msg.content || ''}
+                  {msg.tool_call_id && (
+                    <Text type="secondary" style={{ fontSize: 10, fontFamily: 'monospace', display: 'block' }}>
+                      id:{msg.tool_call_id}
+                    </Text>
+                  )}
+                </pre>
+              </div>
+            ))}
+          </div>
+        ),
+      },
+      {
+        key: 'decision',
+        label: (
+          <Text style={{ fontSize: 12 }}>
+            {isFinal ? 'LLM Response' : 'LLM Decision'}
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{fmtMs(round.llm_duration_ms)}</Text>
+          </Text>
+        ),
+        children: <TraceMessageCard msg={round.response} token={token} />,
+      },
+      ...(round.available_tools && round.available_tools.length > 0 ? [{
+        key: 'available_tools',
+        label: (
+          <Text style={{ fontSize: 12 }}>
+            Available Tools
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
+          </Text>
+        ),
+        children: (
+          <div style={{
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 6,
+            overflow: 'hidden',
+            background: token.colorFillAlter,
+          }}>
+            {round.available_tools.map((td, ti) => (
+              <div key={ti} style={{
+                display: 'flex',
+                gap: 8,
+                padding: '5px 10px',
+                borderBottom: ti < round.available_tools!.length - 1 ? `1px solid ${token.colorBorderSecondary}` : undefined,
+                alignItems: 'flex-start',
+              }}>
+                <Text strong style={{ fontSize: 12, fontFamily: 'monospace', flexShrink: 0 }}>{td.name}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{td.description}</Text>
+              </div>
+            ))}
+          </div>
+        ),
+      }] : []),
+      ...(hasTools ? [{
+        key: 'tools',
+        label: (
+          <Text style={{ fontSize: 12 }}>
+            Tool Execution
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+              {toolCount} call{toolCount === 1 ? '' : 's'} · {fmtMs(totalToolMs)}
+            </Text>
+          </Text>
+        ),
+        children: (
+          <div>
+            {round.tool_results!.map((tr, ti) => (
+              <div key={ti} style={{
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 6,
+                padding: '8px 10px',
+                marginBottom: 6,
+                background: token.colorFillAlter,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Tag color="orange" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0 }}>
+                    {tr.name}
+                  </Tag>
+                  <Text type="secondary" style={{ fontSize: 11 }}>{fmtMs(tr.duration_ms)}</Text>
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Args: </Text>
+                  <pre style={{ display: 'inline', fontSize: 12, fontFamily: 'monospace', color: token.colorText }}>
+                    {(() => { try { return JSON.stringify(JSON.parse(tr.args), null, 2) } catch { return tr.args } })()}
+                  </pre>
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Result: </Text>
+                  <pre style={{
+                    margin: '2px 0 0',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    maxHeight: 200,
+                    overflowY: 'auto',
+                    color: token.colorText,
+                  }}>{tr.result}</pre>
+                </div>
+              </div>
+            ))}
+          </div>
+        ),
+      }] : []),
+    ]
+
+    return {
+      dot: isFinal
+        ? <CheckCircleOutlined style={{ fontSize: 16, color: token.colorSuccess }} />
+        : <ToolOutlined style={{ fontSize: 14, color: token.colorWarning }} />,
+      color: isFinal ? 'green' : 'orange',
+      children: (
+        <div style={{ paddingBottom: 8 }}>
+          <Collapse
+            size="small"
+            defaultActiveKey={[]}
+            style={{ background: 'transparent' }}
+            items={[{
+              key: 'round',
+              label: (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    Round {idx + 1} — {isFinal ? 'final answer' : `${toolCount} tool call${toolCount === 1 ? '' : 's'}`}
+                  </Text>
+                  <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>LLM {fmtMs(round.llm_duration_ms)}</Tag>
+                  {hasTools && (
+                    <Tag color="orange" style={{ fontSize: 11, margin: 0 }}>tools {fmtMs(totalToolMs)}</Tag>
+                  )}
+                  {round.usage && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {round.usage.prompt_tokens}↑ {round.usage.completion_tokens}↓ tok
+                      {(round.usage.reasoning_tokens ?? 0) > 0 && ` (${round.usage.reasoning_tokens} reasoning)`}
+                      {(round.usage.cached_tokens ?? 0) > 0 && ` (${round.usage.cached_tokens} cached)`}
+                    </Text>
+                  )}
+                </span>
+              ),
+              children: (
+                <Collapse
+                  size="small"
+                  defaultActiveKey={[]}
+                  items={collapseItems}
+                  style={{ background: 'transparent' }}
+                />
+              ),
+            }]}
+          />
+        </div>
+      ),
+    }
+  })
+
+  return (
+    <Drawer
+      title={
+        <span>
+          LLM Trace
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            {rounds.length} round{rounds.length === 1 ? '' : 's'}
+          </Text>
+        </span>
+      }
+      placement="right"
+      width="min(960px, 90vw)"
+      open={open}
+      onClose={onClose}
+      styles={{ body: { padding: '16px 24px' } }}
+    >
+      <Timeline items={timelineItems} />
+    </Drawer>
+  )
+}
+
 // ── Bubble component ───────────────────────────────────────────────────────
 
 const Bubble = memo(function Bubble({
@@ -504,6 +885,7 @@ const Bubble = memo(function Bubble({
   const isUser = msg.role === 'user'
   const isError = msg.role === 'error'
   const [copied, setCopied] = useState(false)
+  const [traceOpen, setTraceOpen] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState(msg.content)
   const [isHovered, setIsHovered] = useState(false)
@@ -785,16 +1167,43 @@ const Bubble = memo(function Bubble({
             </Text>
           )}
           {msg.llmCalls !== undefined && (
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {msg.llmCalls} LLM call{msg.llmCalls === 1 ? '' : 's'}
-            </Text>
+            msg.trace?.length
+              ? <Typography.Link style={{ fontSize: 10 }} onClick={() => setTraceOpen(true)}>
+                  {msg.llmCalls} LLM call{msg.llmCalls === 1 ? '' : 's'}
+                </Typography.Link>
+              : <Text type="secondary" style={{ fontSize: 10 }}>
+                  {msg.llmCalls} LLM call{msg.llmCalls === 1 ? '' : 's'}
+                </Text>
           )}
           {msg.toolCalls !== undefined && (
             <Text type="secondary" style={{ fontSize: 10 }}>
               {msg.toolCalls} tool call{msg.toolCalls === 1 ? '' : 's'}
             </Text>
           )}
+          {(() => {
+            if (!msg.trace?.length) return null
+            let prompt = 0, completion = 0, reasoning = 0, cached = 0
+            for (const r of msg.trace) {
+              if (r.usage) {
+                prompt += r.usage.prompt_tokens
+                completion += r.usage.completion_tokens
+                reasoning += r.usage.reasoning_tokens ?? 0
+                cached += r.usage.cached_tokens ?? 0
+              }
+            }
+            if (prompt === 0 && completion === 0) return null
+            const extra = [
+              reasoning > 0 ? `${reasoning} reasoning` : '',
+              cached > 0 ? `${cached} cached` : '',
+            ].filter(Boolean).join(', ')
+            return (
+              <Text type="secondary" style={{ fontSize: 10 }}>
+                {prompt}↑ {completion}↓ tok{extra ? ` (${extra})` : ''}
+              </Text>
+            )
+          })()}
         </div>
+        <TraceDrawer open={traceOpen} onClose={() => setTraceOpen(false)} rounds={msg.trace} />
       </div>
     </div>
   )
@@ -853,6 +1262,12 @@ function ToolsDrawer({
   onRefresh: () => void
 }) {
   const { token } = useToken()
+  const [search, setSearch] = useState('')
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? tools.filter(t => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+    : tools
+
   return (
     <Drawer
       title={
@@ -886,39 +1301,46 @@ function ToolsDrawer({
       ) : tools.length === 0 ? (
         <Empty description="No tools registered" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
-        <List
-          dataSource={tools}
-          renderItem={(t) => (
-            <List.Item style={{ padding: '12px 0', alignItems: 'flex-start' }}>
-              <List.Item.Meta
-                avatar={
-                  <Avatar
-                    icon={<ToolOutlined />}
-                    size="small"
-                    style={{ background: token.colorPrimary, marginTop: 2 }}
-                  />
-                }
-                title={
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <Tag color="blue" style={{ fontFamily: 'monospace', marginBottom: 4 }}>
-                      {t.name}
-                    </Tag>
-                    {t.serverName && (
-                      <Tag color="purple" style={{ marginBottom: 4 }}>
-                        {t.serverName}
+        <>
+          <Input.Search
+            placeholder="Search by name or description"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            allowClear
+            size="small"
+            style={{ marginBottom: 12 }}
+          />
+          {filtered.length === 0 ? (
+            <Empty description="No matching tools" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <List
+              dataSource={filtered}
+              renderItem={(t) => (
+                <List.Item style={{ padding: '12px 0', alignItems: 'flex-start' }}>
+                  <List.Item.Meta
+                    avatar={
+                      <Avatar
+                        icon={<ToolOutlined />}
+                        size="small"
+                        style={{ background: token.colorPrimary, marginTop: 2 }}
+                      />
+                    }
+                    title={
+                      <Tag color="blue" style={{ fontFamily: 'monospace', marginBottom: 4 }}>
+                        {t.name}
                       </Tag>
-                    )}
-                  </div>
-                }
-                description={
-                  <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.5 }}>
-                    {t.description}
-                  </Text>
-                }
-              />
-            </List.Item>
+                    }
+                    description={
+                      <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                        {t.description}
+                      </Text>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
           )}
-        />
+        </>
       )}
     </Drawer>
   )
@@ -1120,7 +1542,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  // Load UI config and models on mount.
+  // Load UI config, models, and tools on mount.
   useEffect(() => {
     let cancelled = false
     apiGetUIConfig().then((cfg) => {
@@ -1131,6 +1553,10 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     apiGetModels().then((data) => {
       if (cancelled) return
       setModels(data.models)
+    }).catch(() => {})
+    apiListTools().then((list) => {
+      if (cancelled) return
+      setTools(list)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [])
@@ -1204,6 +1630,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         llmCalls: m.llm_calls,
         toolCalls: m.tool_calls,
         msgId: m.id,
+        trace: m.trace,
       }))
     setMessages(uiMsgs)
     // Restore the user's explicit model choice for this conversation.
@@ -1320,6 +1747,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         model: response.model,
         files: response.files,
         msgId: response.assistant_msg_id,
+        trace: response.trace,
       }
       setMessages((prev) => [...prev, assistantMsg])
       refreshConversations()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -98,6 +99,25 @@ func (r *Registry) Names() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// ToolInfo is a slim summary of a registered tool for API responses.
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// List returns name+description for every registered tool, sorted by name.
+func (r *Registry) List() []ToolInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ToolInfo, 0, len(r.tools))
+	for _, t := range r.tools {
+		out = append(out, ToolInfo{Name: t.Name(), Description: t.Description()})
+	}
+	// Sort for stable ordering.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // OpenAITools converts all registered tools to the format expected by go-openai.

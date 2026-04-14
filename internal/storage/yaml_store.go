@@ -172,3 +172,45 @@ func (s *YAMLStore) Delete(id string) error {
 	}
 	return nil
 }
+
+// PurgeTraces removes the Trace field from all assistant messages whose SentAt
+// is before cutoff. Only conversation files that actually contain stale traces
+// are rewritten, so the common case (nothing to purge) is cheap.
+func (s *YAMLStore) PurgeTraces(cutoff time.Time) error {
+	s.mu.RLock()
+	entries, err := os.ReadDir(s.dir)
+	s.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".yaml")
+		if len(stem) <= 16 {
+			continue
+		}
+		id := stem[16:]
+
+		c, err := s.Load(id)
+		if err != nil {
+			continue // skip unreadable files
+		}
+
+		changed := false
+		for i := range c.Messages {
+			if len(c.Messages[i].Trace) > 0 && c.Messages[i].SentAt.Before(cutoff) {
+				c.Messages[i].Trace = nil
+				changed = true
+			}
+		}
+		if changed {
+			if err := s.Save(c); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
