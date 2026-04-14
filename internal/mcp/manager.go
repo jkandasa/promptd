@@ -11,6 +11,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
 
@@ -101,8 +102,8 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 			}
 
 			for _, content := range result.Content {
-				if tc, ok := content.(interface{ GetText() string }); ok {
-					return tc.GetText(), nil
+				if tc, ok := mcp.AsTextContent(content); ok {
+					return tc.Text, nil
 				}
 			}
 			return "", fmt.Errorf("tool %q returned no text content", cName)

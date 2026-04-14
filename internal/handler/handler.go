@@ -278,7 +278,11 @@ func (h *Handler) executeTool(ctx context.Context, tc openai.ToolCall) (string, 
 	if !ok {
 		return fmt.Sprintf("tool %q not found", tc.Function.Name), nil
 	}
-	result, err := tool.Execute(ctx, json.RawMessage(tc.Function.Arguments))
+	args := tc.Function.Arguments
+	if args == "" {
+		args = "{}"
+	}
+	result, err := tool.Execute(ctx, json.RawMessage(args))
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), err
 	}

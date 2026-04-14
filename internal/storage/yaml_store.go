@@ -1,11 +1,12 @@
 // Package storage — YAML file-based implementation of Store.
 //
-// Each conversation is stored as a single YAML file:
+// Each conversation is stored as a single YAML file named:
 //
-//	<dir>/<conversation-id>.yaml
+//	<dir>/<YYYYMMDD-HHMMSS>-<uuid>.yaml
 //
-// This is intentionally simple. The directory acts as the "table"; listing
-// conversations is a directory scan. Writes are atomic (write-then-rename).
+// The timestamp prefix is derived from the conversation's CreatedAt field,
+// which makes the files sort chronologically in any file browser.
+// Writes are atomic (write to a .tmp file then os.Rename).
 package storage
 
 import (
@@ -15,9 +16,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const tsLayout = "20060102-150405" // matches the desired 20260414-131545 format
 
 // YAMLStore implements Store using one YAML file per conversation.
 type YAMLStore struct {
@@ -34,8 +38,26 @@ func NewYAMLStore(dir string) (*YAMLStore, error) {
 	return &YAMLStore{dir: dir}, nil
 }
 
-func (s *YAMLStore) path(id string) string {
-	return filepath.Join(s.dir, id+".yaml")
+// filename builds the canonical filename stem for a conversation:
+// <YYYYMMDD-HHMMSS>-<uuid>
+func filename(c *Conversation) string {
+	return c.CreatedAt.UTC().Format(tsLayout) + "-" + c.ID
+}
+
+// findFile scans the directory for the file whose name ends with "-<id>.yaml".
+// Returns the full path, or "" if not found. Caller must hold at least s.mu.RLock.
+func (s *YAMLStore) findFile(id string) string {
+	suffix := "-" + id + ".yaml"
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
+			return filepath.Join(s.dir, e.Name())
+		}
+	}
+	return ""
 }
 
 // Save serialises the conversation atomically (tmp file → rename).
@@ -45,7 +67,8 @@ func (s *YAMLStore) Save(c *Conversation) error {
 		return err
 	}
 
-	tmp := s.path(c.ID) + ".tmp"
+	target := filepath.Join(s.dir, filename(c)+".yaml")
+	tmp := target + ".tmp"
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,13 +76,18 @@ func (s *YAMLStore) Save(c *Conversation) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path(c.ID))
+	return os.Rename(tmp, target)
 }
 
-// Load reads and deserialises the conversation file.
+// Load reads and deserialises the conversation file for the given UUID.
 func (s *YAMLStore) Load(id string) (*Conversation, error) {
 	s.mu.RLock()
-	data, err := os.ReadFile(s.path(id))
+	path := s.findFile(id)
+	if path == "" {
+		s.mu.RUnlock()
+		return nil, ErrNotFound
+	}
+	data, err := os.ReadFile(path)
 	s.mu.RUnlock()
 
 	if err != nil {
@@ -91,8 +119,18 @@ func (s *YAMLStore) List() ([]*Conversation, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		// Strip ".yaml" suffix to get the ID, then load header only.
-		id := strings.TrimSuffix(e.Name(), ".yaml")
+		// Extract the UUID: everything after the timestamp prefix "YYYYMMDD-HHMMSS-".
+		// The prefix is exactly len("20060102-150405-") = 16 characters.
+		stem := strings.TrimSuffix(e.Name(), ".yaml")
+		if len(stem) <= 16 {
+			continue // malformed name — skip
+		}
+		ts, err := time.Parse(tsLayout, stem[:15])
+		if err != nil {
+			continue // not a recognised prefix — skip
+		}
+		_ = ts
+		id := stem[16:]
 		c, err := s.Load(id)
 		if err != nil {
 			continue // skip corrupt files
@@ -122,7 +160,11 @@ func (s *YAMLStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := os.Remove(s.path(id)); err != nil {
+	path := s.findFile(id)
+	if path == "" {
+		return ErrNotFound
+	}
+	if err := os.Remove(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrNotFound
 		}

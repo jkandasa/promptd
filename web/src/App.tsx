@@ -569,7 +569,7 @@ const Bubble = memo(function Bubble({
 
   const handleEditSubmit = () => {
     const trimmed = editText.trim()
-    if (trimmed && trimmed !== msg.content) {
+    if (trimmed) {
       onEdit(msg.id, trimmed)
     }
     setIsEditing(false)
@@ -1072,6 +1072,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     return id
   })
   const [messages, setMessages] = useState<Message[]>([])
+  const messagesRef = useRef<Message[]>([]) // ref mirror so handleEditMessage can read current messages synchronously
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false) // ref mirror so callbacks don't need loading in deps
@@ -1266,6 +1267,8 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 
   // selectedModelRef lets send() read the latest selected model without
   // needing it in the dependency array.
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
 
@@ -1360,22 +1363,23 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   // Drops all messages after the edited one from both UI and storage, updates
   // the edited message content, then re-sends it to the LLM.
   const handleEditMessage = useCallback(async (id: string, newContent: string) => {
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === id)
-      if (idx < 0) return prev
+    const prev = messagesRef.current
+    const idx = prev.findIndex((m) => m.id === id)
+    if (idx < 0) return
 
-      const msg = prev[idx]
-      const convId = sessionIdRef.current
+    const msg = prev[idx]
+    const convId = sessionIdRef.current
 
-      // Delete the edited message and everything after it from storage.
-      if (msg.msgId) {
-        apiDeleteMessagesFrom(convId, msg.msgId).catch(() => {})
-      }
+    // Delete the edited message and everything after it from storage.
+    if (msg.msgId) {
+      apiDeleteMessagesFrom(convId, msg.msgId).catch(() => {})
+    }
 
-      // Keep only messages before the edited one; the edited message itself
-      // will be re-added by send() as a fresh user message.
-      return prev.slice(0, idx)
-    })
+    // Synchronously truncate: keep only messages before the edited one.
+    // The edited message will be re-added by send() as a fresh user message.
+    const truncated = prev.slice(0, idx)
+    setMessages(truncated)
+    messagesRef.current = truncated
 
     // Now send the edited content as a new message.
     send(newContent)

@@ -31,6 +31,25 @@ make ui
 ./chatbot -config ./config.yaml
 ```
 
+### Standalone MCP Search Server
+
+This repo also includes a standalone Go MCP server that exposes an `internet_search` tool over Streamable HTTP.
+
+```bash
+cd mcp-servers/internet-search
+go mod tidy
+go run . -addr :8081
+```
+
+Then register it in `config.yaml`:
+
+```yaml
+mcp:
+  servers:
+    - name: "internet-search"
+      url: "http://localhost:8081/mcp"
+```
+
 ---
 
 ## Configuration
