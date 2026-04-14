@@ -15,6 +15,7 @@ import {
   Popconfirm,
   Select,
   Spin,
+  Table,
   Tag,
   Timeline,
   Tooltip,
@@ -653,6 +654,49 @@ function TraceDrawer({ open, onClose, rounds }: {
 
     // Build collapse panels for the sections inside this round
     const collapseItems = [
+      ...(round.available_tools && round.available_tools.length > 0 ? [{
+        key: 'available_tools',
+        label: (
+          <Text style={{ fontSize: 12 }}>
+            Available Tools
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
+          </Text>
+        ),
+        children: (
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="name"
+            dataSource={round.available_tools}
+            showHeader={false}
+            style={{
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 6,
+              overflow: 'hidden',
+              background: token.colorFillAlter,
+            }}
+            columns={[
+              {
+                title: 'Name',
+                dataIndex: 'name',
+                key: 'name',
+                width: 240,
+                render: (name: string) => (
+                  <Text strong style={{ fontSize: 12, fontFamily: 'monospace' }}>{name}</Text>
+                ),
+              },
+              {
+                title: 'Description',
+                dataIndex: 'description',
+                key: 'description',
+                render: (description: string) => (
+                  <Text type="secondary" style={{ fontSize: 12 }}>{description}</Text>
+                ),
+              },
+            ]}
+          />
+        ),
+      }] : []),
       {
         key: 'messages',
         label: (
@@ -720,36 +764,6 @@ function TraceDrawer({ open, onClose, rounds }: {
         ),
         children: <TraceMessageCard msg={round.response} token={token} />,
       },
-      ...(round.available_tools && round.available_tools.length > 0 ? [{
-        key: 'available_tools',
-        label: (
-          <Text style={{ fontSize: 12 }}>
-            Available Tools
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
-          </Text>
-        ),
-        children: (
-          <div style={{
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 6,
-            overflow: 'hidden',
-            background: token.colorFillAlter,
-          }}>
-            {round.available_tools.map((td, ti) => (
-              <div key={ti} style={{
-                display: 'flex',
-                gap: 8,
-                padding: '5px 10px',
-                borderBottom: ti < round.available_tools!.length - 1 ? `1px solid ${token.colorBorderSecondary}` : undefined,
-                alignItems: 'flex-start',
-              }}>
-                <Text strong style={{ fontSize: 12, fontFamily: 'monospace', flexShrink: 0 }}>{td.name}</Text>
-                <Text type="secondary" style={{ fontSize: 12 }}>{td.description}</Text>
-              </div>
-            ))}
-          </div>
-        ),
-      }] : []),
       ...(hasTools ? [{
         key: 'tools',
         label: (
