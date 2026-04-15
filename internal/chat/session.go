@@ -50,7 +50,7 @@ func (s *Session) Add(role, content string) string {
 
 // AddFinalMessage appends the final assistant reply with its associated
 // performance metadata and LLM trace. Returns the new message ID.
-func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound) string {
+func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -66,6 +66,7 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string
 		LLMCalls:    llmCalls,
 		ToolCalls:   toolCalls,
 		Trace:       trace,
+		UsedParams:  usedParams,
 	})
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
@@ -121,6 +122,16 @@ func (s *Session) SetSystemPrompt(promptName string) {
 		return
 	}
 	s.conv.SystemPrompt = promptName
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+}
+
+// SetParams records the user's current LLM parameter overrides for the conversation.
+// Pass nil to clear stored params (revert to config defaults).
+func (s *Session) SetParams(p *storage.UsedParams) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conv.Params = p
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 }

@@ -26,34 +26,53 @@ import (
 	"go.uber.org/zap"
 )
 
+// LLMParams holds optional generation parameters that can be set globally
+// or per model in the config, and overridden per-request from the UI.
+type LLMParams struct {
+	Temperature *float32 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+	MaxTokens   int      `json:"max_tokens,omitempty"  yaml:"max_tokens,omitempty"`
+	TopP        *float32 `json:"top_p,omitempty"       yaml:"top_p,omitempty"`
+	TopK        int      `json:"top_k,omitempty"       yaml:"top_k,omitempty"`
+}
+
 type ModelInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name,omitempty"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name,omitempty"`
+	Params   LLMParams `json:"params,omitempty"`
+	IsManual bool      `json:"is_manual,omitempty"`
 }
 
 type ModelSelector struct {
 	models          []ModelInfo
 	selectionMethod string
 	currentIndex    int
+	source          string // "static" | "discovered"
+	lastUpdated     time.Time
+	refreshInterval time.Duration // 0 if autodiscover disabled
 	mu              sync.Mutex
 }
 
-func NewModelSelector(models []string, selectionMethod string) *ModelSelector {
+func NewModelSelector(models []ModelInfo, selectionMethod string) *ModelSelector {
 	if len(models) == 0 {
-		models = []string{"anthropic/claude-sonnet-4-6"}
+		models = []ModelInfo{{ID: "anthropic/claude-sonnet-4-6"}}
 	}
 	if selectionMethod == "" {
-		selectionMethod = "auto"
-	}
-	info := make([]ModelInfo, len(models))
-	for i, m := range models {
-		info[i] = ModelInfo{ID: m}
+		selectionMethod = "round_robin"
 	}
 	return &ModelSelector{
-		models:          info,
+		models:          models,
 		selectionMethod: selectionMethod,
 		currentIndex:    0,
+		source:          "static",
+		lastUpdated:     time.Now(),
 	}
+}
+
+// SetRefreshInterval records the autodiscover interval so it can be surfaced to the UI.
+func (m *ModelSelector) SetRefreshInterval(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshInterval = d
 }
 
 func (m *ModelSelector) GetModel(preferredModel string) (string, string) {
@@ -82,7 +101,18 @@ func (m *ModelSelector) GetModel(preferredModel string) (string, string) {
 }
 
 func (m *ModelSelector) GetAvailableModels() []ModelInfo {
-	return m.models
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]ModelInfo(nil), m.models...) // copy
+}
+
+func (m *ModelSelector) UpdateModels(infos []ModelInfo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.models = infos
+	m.currentIndex = 0 // reset round-robin index on update
+	m.source = "discovered"
+	m.lastUpdated = time.Now()
 }
 
 func (m *ModelSelector) GetSelectionMethod() string {
@@ -93,7 +123,9 @@ func (m *ModelSelector) GetSelectionMethod() string {
 
 type Handler struct {
 	client              *openai.Client
-	modelSelector       *ModelSelector
+	ModelSelector       *ModelSelector
+	GlobalParams        LLMParams   // global config defaults; applied to discovered models
+	StaticModels        []ModelInfo // models explicitly listed in config (is_manual=true)
 	systemPrompts       map[string]string
 	defaultSystemPrompt string
 	registry            *tools.Registry
@@ -130,7 +162,7 @@ func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemP
 
 	return &Handler{
 		client:              openai.NewClientWithConfig(cfg),
-		modelSelector:       modelSelector,
+		ModelSelector:       modelSelector,
 		systemPrompts:       systemPrompts,
 		defaultSystemPrompt: defaultSystemPrompt,
 		registry:            registry,
@@ -144,22 +176,24 @@ func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemP
 }
 
 type chatRequest struct {
-	SessionID    string   `json:"session_id"`
-	Message      string   `json:"message"`
-	Files        []string `json:"files,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	SystemPrompt string   `json:"system_prompt,omitempty"`
+	SessionID    string    `json:"session_id"`
+	Message      string    `json:"message"`
+	Files        []string  `json:"files,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	SystemPrompt string    `json:"system_prompt,omitempty"`
+	Params       LLMParams `json:"params,omitempty"` // UI overrides; zero values ignored
 }
 
 type chatResponse struct {
-	Reply          string             `json:"reply"`
-	Model          string             `json:"model"`
-	TimeTaken      int64              `json:"time_taken_ms"`
-	LLMCalls       int                `json:"llm_calls"`
-	ToolCalls      int                `json:"tool_calls"`
-	UserMsgID      string             `json:"user_msg_id"`
-	AssistantMsgID string             `json:"assistant_msg_id"`
-	Trace          []storage.LLMRound `json:"trace,omitempty"`
+	Reply          string              `json:"reply"`
+	Model          string              `json:"model"`
+	TimeTaken      int64               `json:"time_taken_ms"`
+	LLMCalls       int                 `json:"llm_calls"`
+	ToolCalls      int                 `json:"tool_calls"`
+	UserMsgID      string              `json:"user_msg_id"`
+	AssistantMsgID string              `json:"assistant_msg_id"`
+	Trace          []storage.LLMRound  `json:"trace,omitempty"`
+	UsedParams     *storage.UsedParams `json:"used_params,omitempty"`
 }
 
 type errorResponse struct {
@@ -259,21 +293,69 @@ const maxToolIterations = 20
 // until the model returns a final text response. It does NOT append the final
 // assistant message to the session — the caller must do that (so it can attach metadata).
 // Returns the reply text, the final assistant message, model used, LLM call count,
-// tool call count, and the full trace of all LLM round-trips.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string) (string, openai.ChatCompletionMessage, string, int, int, []storage.LLMRound, error) {
+// tool call count, the full trace of all LLM round-trips, the effective params used,
+// and any error.
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string, reqParams LLMParams) (string, openai.ChatCompletionMessage, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
-	model, _ := h.modelSelector.GetModel(preferredModel)
+	model, _ := h.ModelSelector.GetModel(preferredModel)
+
+	// Resolve effective params: model-config defaults, overridden by UI request.
+	var modelParams LLMParams
+	h.ModelSelector.mu.Lock()
+	for _, m := range h.ModelSelector.models {
+		if m.ID == model {
+			modelParams = m.Params
+			break
+		}
+	}
+	h.ModelSelector.mu.Unlock()
+	// UI request params override model-config params.
+	if reqParams.Temperature != nil {
+		modelParams.Temperature = reqParams.Temperature
+	}
+	if reqParams.MaxTokens != 0 {
+		modelParams.MaxTokens = reqParams.MaxTokens
+	}
+	if reqParams.TopP != nil {
+		modelParams.TopP = reqParams.TopP
+	}
+	if reqParams.TopK != 0 {
+		modelParams.TopK = reqParams.TopK
+	}
+
+	// Build the UsedParams record from the effective (merged) params.
+	// Only include fields that are actually set so the UI can distinguish
+	// "explicitly set to X" from "not set / provider default".
+	var usedParams *storage.UsedParams
+	if modelParams.Temperature != nil || modelParams.MaxTokens != 0 || modelParams.TopP != nil || modelParams.TopK != 0 {
+		usedParams = &storage.UsedParams{
+			Temperature: modelParams.Temperature,
+			MaxTokens:   modelParams.MaxTokens,
+			TopP:        modelParams.TopP,
+			TopK:        modelParams.TopK,
+		}
+	}
+
 	for {
 		if llmCalls >= maxToolIterations {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
 		requestMsgs := h.buildMessages(session)
 		req := openai.ChatCompletionRequest{
 			Model:    model,
 			Messages: requestMsgs,
+		}
+		if modelParams.Temperature != nil {
+			req.Temperature = *modelParams.Temperature
+		}
+		if modelParams.MaxTokens != 0 {
+			req.MaxTokens = modelParams.MaxTokens
+		}
+		if modelParams.TopP != nil {
+			req.TopP = *modelParams.TopP
 		}
 		if h.registry != nil && !h.registry.Empty() {
 			req.Tools = h.registry.OpenAITools()
@@ -298,11 +380,11 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		resp, err := h.client.CreateChatCompletion(ctx, req)
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("LLM error: %w", err)
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("LLM returned no choices")
+			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
 		}
 		choice := resp.Choices[0]
 
@@ -318,7 +400,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		// No tool calls — we have the final answer. Record the round and return.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
 			trace = append(trace, storage.LLMRound{
 				Request:        storage.ToTraceMessages(requestMsgs),
@@ -327,7 +409,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 				AvailableTools: availableTools,
 				Usage:          traceUsage(resp.Usage),
 			})
-			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, trace, nil
+			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, trace, usedParams, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
@@ -431,9 +513,21 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	session.SetModel(req.Model)
 	session.SetSystemPrompt(req.SystemPrompt)
+	// Persist the current UI param overrides on the conversation so they can be
+	// restored when the conversation is loaded again. Nil means "use config defaults".
+	var convParams *storage.UsedParams
+	if req.Params.Temperature != nil || req.Params.MaxTokens != 0 || req.Params.TopP != nil || req.Params.TopK != 0 {
+		convParams = &storage.UsedParams{
+			Temperature: req.Params.Temperature,
+			MaxTokens:   req.Params.MaxTokens,
+			TopP:        req.Params.TopP,
+			TopK:        req.Params.TopK,
+		}
+	}
+	session.SetParams(convParams)
 	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
 
-	reply, finalMsg, model, llmCalls, toolCalls, trace, err := h.runLLM(r.Context(), req.SessionID, session, req.Model)
+	reply, finalMsg, model, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Params)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model})
@@ -441,9 +535,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls, trace)
+	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls, trace, usedParams)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace})
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -504,12 +598,88 @@ func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
-	models := h.modelSelector.GetAvailableModels()
-	method := h.modelSelector.GetSelectionMethod()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	discover := r.URL.Query().Get("discover") == "true"
+	if discover {
+		if err := h.DiscoverAndUpdateModels(r.Context()); err != nil {
+			http.Error(w, fmt.Sprintf("discover failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	models := h.ModelSelector.GetAvailableModels()
+	m := h.ModelSelector
+	m.mu.Lock()
+	source := m.source
+	count := len(m.models)
+	updatedAt := m.lastUpdated.Format(time.RFC3339)
+	refreshInterval := ""
+	if m.refreshInterval > 0 {
+		refreshInterval = m.refreshInterval.String()
+	}
+	method := m.selectionMethod
+	m.mu.Unlock()
+
+	resp := map[string]interface{}{
 		"models":           models,
 		"selection_method": method,
-	})
+		"source":           source,
+		"count":            count,
+		"updated_at":       updatedAt,
+		"refresh_interval": refreshInterval,
+		"global_params":    h.GlobalParams,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) DiscoverAndUpdateModels(ctx context.Context) error {
+	resp, err := h.client.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("list models: %w", err)
+	}
+	// Build a lookup of static (manually-configured) models by ID so we can
+	// preserve their per-model params and manual flag when autodiscover runs.
+	staticByID := make(map[string]ModelInfo, len(h.StaticModels))
+	for _, m := range h.StaticModels {
+		staticByID[m.ID] = m
+	}
+	// Track which static model IDs were matched by the provider response.
+	matchedStatic := make(map[string]bool, len(h.StaticModels))
+
+	var infos []ModelInfo
+	for _, md := range resp.Models {
+		if sm, ok := staticByID[md.ID]; ok {
+			// Static model: keep its merged params and mark it as manual.
+			infos = append(infos, sm)
+			matchedStatic[md.ID] = true
+		} else {
+			// Discovered-only model: apply global params baseline.
+			infos = append(infos, ModelInfo{ID: md.ID, Params: h.GlobalParams})
+		}
+	}
+	// Append static models that the provider didn't return — they may be
+	// hosted elsewhere or the provider list may be incomplete.
+	for _, sm := range h.StaticModels {
+		if !matchedStatic[sm.ID] {
+			infos = append(infos, sm)
+		}
+	}
+	h.ModelSelector.UpdateModels(infos)
+	h.log.Info("models updated from provider", zap.Int("count", len(infos)))
+	return nil
+}
+
+func (h *Handler) StartAutodiscover(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := h.DiscoverAndUpdateModels(ctx); err != nil {
+				h.log.Warn("autodiscover tick failed", zap.Error(err))
+			}
+		}
+	}
 }
 
 // ListTools returns all registered tools with their name and description.

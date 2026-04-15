@@ -53,6 +53,17 @@ type ToolResult struct {
 	DurationMs int64  `yaml:"duration_ms" json:"duration_ms"`
 }
 
+// UsedParams records the effective LLM generation parameters that were actually
+// sent to the API for a given assistant reply — after merging global config,
+// per-model config, and any per-request UI overrides.
+// Pointer fields are nil when the parameter was not set (provider default used).
+type UsedParams struct {
+	Temperature *float32 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	MaxTokens   int      `yaml:"max_tokens,omitempty"  json:"max_tokens,omitempty"`
+	TopP        *float32 `yaml:"top_p,omitempty"       json:"top_p,omitempty"`
+	TopK        int      `yaml:"top_k,omitempty"       json:"top_k,omitempty"`
+}
+
 // LLMRound captures one full request/response cycle with the LLM, including
 // any tool calls that were made and their results.
 type LLMRound struct {
@@ -116,6 +127,9 @@ type Message struct {
 	TimeTakenMs int64  `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
 	LLMCalls    int    `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
 	ToolCalls   int    `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
+	// UsedParams records the effective generation parameters sent to the LLM.
+	// Nil/zero fields were not set (provider default was used).
+	UsedParams *UsedParams `yaml:"used_params,omitempty"  json:"used_params,omitempty"`
 	// Fields needed to replay the conversation to the LLM (tool messages).
 	ToolCallID string `yaml:"tool_call_id,omitempty" json:"tool_call_id,omitempty"`
 	Name       string `yaml:"name,omitempty"        json:"name,omitempty"`
@@ -130,14 +144,15 @@ type Message struct {
 
 // Conversation is the top-level unit that the storage layer persists.
 type Conversation struct {
-	ID           string    `yaml:"id"         json:"id"`
-	Title        string    `yaml:"title"      json:"title"`
-	Model        string    `yaml:"model"      json:"model"`
-	SystemPrompt string    `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	Pinned       bool      `yaml:"pinned,omitempty" json:"pinned,omitempty"`
-	CreatedAt    time.Time `yaml:"created_at" json:"created_at"`
-	UpdatedAt    time.Time `yaml:"updated_at" json:"updated_at"`
-	Messages     []Message `yaml:"messages"   json:"messages"`
+	ID           string      `yaml:"id"         json:"id"`
+	Title        string      `yaml:"title"      json:"title"`
+	Model        string      `yaml:"model"      json:"model"`
+	SystemPrompt string      `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	Params       *UsedParams `yaml:"params,omitempty"        json:"params,omitempty"`
+	Pinned       bool        `yaml:"pinned,omitempty" json:"pinned,omitempty"`
+	CreatedAt    time.Time   `yaml:"created_at" json:"created_at"`
+	UpdatedAt    time.Time   `yaml:"updated_at" json:"updated_at"`
+	Messages     []Message   `yaml:"messages"   json:"messages"`
 }
 
 // Store is the persistence interface. Every method is synchronous and

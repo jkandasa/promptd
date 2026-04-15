@@ -23,9 +23,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type LLMParams struct {
+	Temperature *float32 `yaml:"temperature,omitempty"`
+	MaxTokens   int      `yaml:"max_tokens,omitempty"`
+	TopP        *float32 `yaml:"top_p,omitempty"`
+	TopK        int      `yaml:"top_k,omitempty"`
+}
+
 type LLMModel struct {
-	ID   string `yaml:"id"`
-	Name string `yaml:"name,omitempty"`
+	ID     string    `yaml:"id"`
+	Name   string    `yaml:"name,omitempty"`
+	Params LLMParams `yaml:"params,omitempty"`
 }
 
 type SystemPromptConfig struct {
@@ -40,23 +48,44 @@ func (m *LLMModel) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 	}
 	var obj struct {
-		ID   string `yaml:"id"`
-		Name string `yaml:"name,omitempty"`
+		ID     string    `yaml:"id"`
+		Name   string    `yaml:"name,omitempty"`
+		Params LLMParams `yaml:"params,omitempty"`
 	}
 	if err := value.Decode(&obj); err != nil {
 		return err
 	}
 	m.ID = obj.ID
 	m.Name = obj.Name
+	m.Params = obj.Params
 	return nil
 }
 
-func getModelIDs(models []LLMModel) []string {
-	ids := make([]string, len(models))
+func buildModelInfos(models []LLMModel, globalParams LLMParams) []handler.ModelInfo {
+	infos := make([]handler.ModelInfo, len(models))
 	for i, m := range models {
-		ids[i] = m.ID
+		p := handler.LLMParams{
+			Temperature: globalParams.Temperature,
+			MaxTokens:   globalParams.MaxTokens,
+			TopP:        globalParams.TopP,
+			TopK:        globalParams.TopK,
+		}
+		// Per-model params override global.
+		if m.Params.Temperature != nil {
+			p.Temperature = m.Params.Temperature
+		}
+		if m.Params.MaxTokens != 0 {
+			p.MaxTokens = m.Params.MaxTokens
+		}
+		if m.Params.TopP != nil {
+			p.TopP = m.Params.TopP
+		}
+		if m.Params.TopK != 0 {
+			p.TopK = m.Params.TopK
+		}
+		infos[i] = handler.ModelInfo{ID: m.ID, Name: m.Name, Params: p, IsManual: true}
 	}
-	return ids
+	return infos
 }
 
 type Config struct {
@@ -71,6 +100,11 @@ type Config struct {
 		BaseURL         string     `yaml:"base_url"`
 		SelectionMethod string     `yaml:"selection_method"`
 		Models          []LLMModel `yaml:"models"`
+		Params          LLMParams  `yaml:"params"` // global defaults
+		Autodiscover    struct {
+			Enabled         bool          `yaml:"enabled"`
+			RefreshInterval time.Duration `yaml:"refresh_interval"`
+		} `yaml:"auto_discover"`
 	} `yaml:"llm"`
 	Log struct {
 		Level string `yaml:"level"`
@@ -167,6 +201,12 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if len(cfg.LLM.Models) == 0 {
 		cfg.LLM.Models = []LLMModel{{ID: "anthropic/claude-sonnet-4-6"}}
+	}
+	if cfg.LLM.Autodiscover.RefreshInterval == 0 {
+		cfg.LLM.Autodiscover.RefreshInterval = 60 * time.Minute
+	}
+	if cfg.LLM.Autodiscover.RefreshInterval < time.Minute {
+		cfg.LLM.Autodiscover.RefreshInterval = time.Minute
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -327,8 +367,28 @@ func main() {
 		}
 	}
 
-	modelSelector := handler.NewModelSelector(getModelIDs(cfg.LLM.Models), cfg.LLM.SelectionMethod)
+	modelSelector := handler.NewModelSelector(buildModelInfos(cfg.LLM.Models, cfg.LLM.Params), cfg.LLM.SelectionMethod)
+	if cfg.LLM.Autodiscover.Enabled {
+		modelSelector.SetRefreshInterval(cfg.LLM.Autodiscover.RefreshInterval)
+	}
 	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompts, defaultSystemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir)
+	h.GlobalParams = handler.LLMParams{
+		Temperature: cfg.LLM.Params.Temperature,
+		MaxTokens:   cfg.LLM.Params.MaxTokens,
+		TopP:        cfg.LLM.Params.TopP,
+		TopK:        cfg.LLM.Params.TopK,
+	}
+	// Keep a copy of manually-configured models so DiscoverAndUpdateModels can
+	// preserve their per-model params and manual flag after autodiscover replaces the list.
+	h.StaticModels = buildModelInfos(cfg.LLM.Models, cfg.LLM.Params)
+	if cfg.LLM.Autodiscover.Enabled {
+		if err := h.DiscoverAndUpdateModels(ctx); err != nil {
+			logger.Warn("initial autodiscover failed", zap.Error(err))
+		} else {
+			logger.Info("initial autodiscover complete", zap.Int("count", len(h.ModelSelector.GetAvailableModels())))
+		}
+		go h.StartAutodiscover(ctx, cfg.LLM.Autodiscover.RefreshInterval)
+	}
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
 	mux := http.NewServeMux()
@@ -360,7 +420,13 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.Strings("models", getModelIDs(cfg.LLM.Models)), zap.String("selection_method", cfg.LLM.SelectionMethod), zap.String("baseUrl", cfg.LLM.BaseURL))
+		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.Strings("models", func() []string {
+			ids := make([]string, len(cfg.LLM.Models))
+			for i, m := range cfg.LLM.Models {
+				ids[i] = m.ID
+			}
+			return ids
+		}()), zap.String("selection_method", cfg.LLM.SelectionMethod), zap.String("baseUrl", cfg.LLM.BaseURL))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server error", zap.Error(err))
 		}

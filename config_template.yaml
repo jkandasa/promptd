@@ -21,11 +21,38 @@ llm:
   # Model selection method: random or round_robin
   selection_method: "round_robin"
 
-  # List of models (string or object with id and optional name)
+  auto_discover:
+    # Enable automatic discovery of available models from the provider's /v1/models endpoint.
+    # When enabled, replaces the static 'models' list above. Background refreshes every refresh_interval.
+    # Supports OpenAI-compatible APIs (OpenRouter, etc.). Initial fetch on startup + ticker.
+    enabled: false
+    # Refresh interval (default: 60m, minimum: 1m). Go duration format: 10s, 30m, 1h, etc.
+    refresh_interval: 60m
+
+  # Global LLM generation parameters — applied to all models unless overridden per-model.
+  # All fields are optional; omit to use the provider's default.
+  # Per-model params (under models[].params) override these globals.
+  # Per-request UI overrides (sliders in the chat input) override both.
+  #
+  # params:
+  #   temperature: 0.7      # Output randomness (0.0 = deterministic, 2.0 = very random)
+  #   top_p: 0.95           # Nucleus sampling threshold (0.0–1.0)
+  #   max_tokens: 4096      # Maximum output tokens per reply
+  #   top_k: 40             # Top-K sampling (provider support varies)
+
+  # List of models (string or object with id, optional name, and optional params).
+  # Per-model params override the global params above.
   models:
+    # Simple string form:
     # - "model-id"
-    # - id: "model-id"
-    #   name: "Display Name"
+    #
+    # Object form with optional display name and per-model param overrides:
+    # - id: "openai/gpt-4o"
+    #   name: "GPT-4o"
+    #   params:
+    #     temperature: 0.3
+    #     max_tokens: 8192
+
 
 log:
   # Log level: debug, info, warn, error (default: info)

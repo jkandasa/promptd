@@ -12,7 +12,9 @@ import {
   Layout,
   Modal,
   Popconfirm,
+  Popover,
   Select,
+  Slider,
   Spin,
   Table,
   Tag,
@@ -42,6 +44,7 @@ import {
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
+  SlidersOutlined,
   SunOutlined,
   ToolOutlined,
   UserOutlined,
@@ -179,6 +182,7 @@ interface Message {
   files?: UploadedFile[]
   msgId?: string  // persisted storage ID (undefined for error messages or pre-persistence)
   trace?: LLMRound[]
+  usedParams?: UsedParams
 }
 
 interface ToolInfo {
@@ -205,6 +209,7 @@ interface ConversationMeta {
   title: string
   model: string
   system_prompt?: string
+  params?: LLMParamsOverride
   pinned?: boolean
   created_at: string
   updated_at: string
@@ -220,6 +225,7 @@ interface StorageMessage {
   llm_calls?: number
   tool_calls?: number
   trace?: LLMRound[]
+  used_params?: UsedParams
 }
 
 interface ConversationDetail extends ConversationMeta {
@@ -271,6 +277,7 @@ type ChatResponse = {
   user_msg_id?: string
   assistant_msg_id?: string
   trace?: LLMRound[]
+  used_params?: UsedParams
 }
 
 class ChatError extends Error {
@@ -285,19 +292,57 @@ class ChatError extends Error {
 interface ModelInfo {
   id: string
   name?: string
+  source?: 'static' | 'discovered'   // set client-side after fetching models
+  is_manual?: boolean                 // true when explicitly listed in config
+  params?: {
+    temperature?: number
+    max_tokens?: number
+    top_p?: number
+    top_k?: number
+  }
 }
 
-async function apiGetModels(): Promise<{ models: ModelInfo[]; selection_method: string }> {
+interface ModelData {
+  models: ModelInfo[]
+  selection_method: string
+  source?: string        // 'static' | 'discovered'
+  count: number
+  updated_at?: string    // RFC3339
+  refresh_interval?: string
+  global_params?: {
+    temperature?: number
+    max_tokens?: number
+    top_p?: number
+    top_k?: number
+  }
+}
+
+async function apiGetModels(): Promise<ModelData> {
   const res = await fetch('/models')
-  if (!res.ok) return { models: [], selection_method: 'auto' }
+  if (!res.ok) return { models: [], selection_method: 'auto', count: 0 }
   return res.json()
 }
 
-async function apiChat(sessionId: string, message: string, files?: string[], model?: string, systemPrompt?: string): Promise<ChatResponse> {
+interface LLMParamsOverride {
+  temperature?: number
+  max_tokens?: number
+  top_p?: number
+  top_k?: number
+}
+
+// UsedParams mirrors storage.UsedParams — the effective params actually sent to the LLM.
+interface UsedParams {
+  temperature?: number
+  max_tokens?: number
+  top_p?: number
+  top_k?: number
+}
+
+async function apiChat(sessionId: string, message: string, files?: string[], model?: string, systemPrompt?: string, params?: LLMParamsOverride): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message, files, model, system_prompt: systemPrompt }),
+    body: JSON.stringify({ session_id: sessionId, message, files, model, system_prompt: systemPrompt, params }),
   })
   const data = await res.json()
   if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model)
@@ -1333,6 +1378,7 @@ const Bubble = memo(function Bubble({
               </Text>
             )
           })()}
+          {msg.usedParams && <UsedParamsChip params={msg.usedParams} />}
         </div>
         <TraceDrawer open={traceOpen} onClose={() => setTraceOpen(false)} rounds={msg.trace} />
       </div>
@@ -1620,6 +1666,212 @@ function ConvItem({
   )
 }
 
+// ── UsedParamsChip — shown in Bubble metadata row ─────────────────────────
+// Renders a small clickable chip; opens a popover with the effective params
+// that were actually sent to the LLM for this specific reply.
+
+function UsedParamsChip({ params }: { params: UsedParams }) {
+  const { token } = useToken()
+
+  const entries: { label: string; value: string }[] = []
+  if (params.temperature != null) entries.push({ label: 'temp', value: params.temperature.toFixed(2) })
+  if (params.top_p       != null) entries.push({ label: 'top_p', value: params.top_p.toFixed(2) })
+  if (params.max_tokens)          entries.push({ label: 'max_tok', value: String(params.max_tokens) })
+  if (params.top_k)               entries.push({ label: 'top_k', value: String(params.top_k) })
+
+  if (entries.length === 0) return null
+
+  const content = (
+    <div style={{ minWidth: 180 }}>
+      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
+        Effective parameters sent to the LLM for this reply.
+      </Text>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {entries.map(({ label, value }) => (
+          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <Text style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace', color: token.colorTextSecondary }}>{label}</Text>
+            <Text strong style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{value}</Text>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  // Compact inline summary: "t=0.70 p=0.95"
+  const summary = entries.map(({ label, value }) => `${label}=${value}`).join(' ')
+
+  return (
+    <Popover content={content} title={<span style={{ fontSize: 12 }}>Used Parameters</span>} trigger="click" placement="top" arrow={false}>
+      <Tag
+        style={{
+          fontSize: 10,
+          margin: 0,
+          cursor: 'pointer',
+          fontFamily: 'ui-monospace, monospace',
+          color: token.colorTextSecondary,
+          background: token.colorFillAlter,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          padding: '0 5px',
+          lineHeight: '18px',
+        }}
+      >
+        {summary}
+      </Tag>
+    </Popover>
+  )
+}
+
+// ── LLM Params Popover ────────────────────────────────────────────────────
+interface LLMParamsPopoverProps {
+  params: LLMParamsOverride
+  configDefaults: LLMParamsOverride
+  onChange: (p: LLMParamsOverride) => void
+  disabled?: boolean
+}
+
+function LLMParamsPopover({ params, configDefaults, onChange, disabled }: LLMParamsPopoverProps) {
+  const { token } = useToken()
+  // Show reset button only when current params differ from config defaults.
+  const hasOverrides = (Object.keys(params) as Array<keyof LLMParamsOverride>).some(
+    (k) => params[k] != null && params[k] !== configDefaults[k]
+  )
+
+  const row = (label: string, key: keyof LLMParamsOverride, min: number, max: number, step: number, decimals: number) => (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Text style={{ fontSize: 12, fontWeight: 500 }}>{label}</Text>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Input
+            size="small"
+            value={params[key] ?? ''}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v === '') { const next = { ...params }; delete next[key]; onChange(next); return }
+              const n = parseFloat(v)
+              if (!isNaN(n)) onChange({ ...params, [key]: n })
+            }}
+            style={{ width: 60, fontSize: 12, textAlign: 'right' }}
+          />
+          {params[key] != null && (
+            <Button
+              type="text" size="small"
+              onClick={() => { const next = { ...params }; delete next[key]; onChange(next) }}
+              style={{ fontSize: 11, color: token.colorTextTertiary, padding: '0 4px', height: 22 }}
+            >reset</Button>
+          )}
+        </div>
+      </div>
+      <Slider
+        min={min} max={max} step={step}
+        value={params[key] as number ?? undefined}
+        onChange={(v) => onChange({ ...params, [key]: v })}
+        tooltip={{ formatter: (v) => v?.toFixed(decimals) }}
+        style={{ margin: '0 4px' }}
+      />
+    </div>
+  )
+
+  const content = (
+    <div style={{ width: 280, padding: '4px 0' }}>
+      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 12 }}>
+        Overrides config defaults for this session. Leave blank to use config value.
+      </Text>
+      {row('Temperature', 'temperature', 0, 2, 0.01, 2)}
+      {row('Top P', 'top_p', 0, 1, 0.01, 2)}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <Text style={{ fontSize: 12, fontWeight: 500 }}>Top K</Text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Input
+              size="small"
+              value={params.top_k ?? ''}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '') { const next = { ...params }; delete next.top_k; onChange(next); return }
+                const n = parseInt(v)
+                if (!isNaN(n) && n >= 0) onChange({ ...params, top_k: n })
+              }}
+              style={{ width: 60, fontSize: 12, textAlign: 'right' }}
+            />
+            {params.top_k != null && (
+              <Button type="text" size="small"
+                onClick={() => { const next = { ...params }; delete next.top_k; onChange(next) }}
+                style={{ fontSize: 11, color: token.colorTextTertiary, padding: '0 4px', height: 22 }}
+              >reset</Button>
+            )}
+          </div>
+        </div>
+        <Slider min={0} max={100} step={1}
+          value={params.top_k != null ? Math.min(params.top_k, 100) : undefined}
+          onChange={(v) => onChange({ ...params, top_k: v })}
+          tooltip={{ formatter: (v) => v?.toString() }}
+          style={{ margin: '0 4px' }}
+        />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <Text style={{ fontSize: 12, fontWeight: 500 }}>Max Tokens</Text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Input
+              size="small"
+              value={params.max_tokens ?? ''}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '') { const next = { ...params }; delete next.max_tokens; onChange(next); return }
+                const n = parseInt(v)
+                if (!isNaN(n)) onChange({ ...params, max_tokens: n })
+              }}
+              style={{ width: 60, fontSize: 12, textAlign: 'right' }}
+            />
+            {params.max_tokens != null && (
+              <Button type="text" size="small"
+                onClick={() => { const next = { ...params }; delete next.max_tokens; onChange(next) }}
+                style={{ fontSize: 11, color: token.colorTextTertiary, padding: '0 4px', height: 22 }}
+              >reset</Button>
+            )}
+          </div>
+        </div>
+        <Slider min={256} max={32768} step={256}
+          value={params.max_tokens ?? undefined}
+          onChange={(v) => onChange({ ...params, max_tokens: v })}
+          tooltip={{ formatter: (v) => v?.toString() }}
+          style={{ margin: '0 4px' }}
+        />
+      </div>
+      {hasOverrides && (
+        <Button size="small" block onClick={() => onChange(configDefaults)}
+          style={{ marginTop: 4, fontSize: 12 }}>
+          Reset all to config defaults
+        </Button>
+      )}
+    </div>
+  )
+
+  return (
+    <Popover
+      content={content}
+      title={<span style={{ fontSize: 13 }}>LLM Parameters</span>}
+      trigger="click"
+      placement="topLeft"
+      arrow={false}
+    >
+      <Tooltip title="LLM parameters">
+        <Button
+          type="text"
+          size="small"
+          icon={<SlidersOutlined />}
+          disabled={disabled}
+          style={{
+            height: 28, width: 28, padding: 0, flexShrink: 0,
+            color: hasOverrides ? token.colorPrimary : token.colorTextSecondary,
+          }}
+          aria-label="LLM parameters"
+        />
+      </Tooltip>
+    </Popover>
+  )
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 
 interface ChatAppProps {
@@ -1646,8 +1898,14 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false) // ref mirror so callbacks don't need loading in deps
   const [models, setModels] = useState<ModelInfo[]>([])
+  const [modelData, setModelData] = useState<{source?: string; count: number; updated_at?: string; refresh_interval?: string; global_params?: ModelData['global_params']}>({count: 0})
   const [selectedModel, setSelectedModel] = useState<string>('auto')
   const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>('')
+  const [llmParams, setLlmParams] = useState<LLMParamsOverride>({})
+  const llmParamsRef = useRef<LLMParamsOverride>({})
+  // When loading a conversation that has stored params, we set this ref to the
+  // params to restore so the model-change effect skips its reset for that cycle.
+  const pendingParamsRef = useRef<LLMParamsOverride | null>(null)
 
   const [toolsOpen, setToolsOpen] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
@@ -1699,7 +1957,10 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     }).catch(() => {})
     apiGetModels().then((data) => {
       if (cancelled) return
-      setModels(data.models)
+      // Tag each model with its source so option rows can render differently.
+      const tagged = data.models.map((m) => ({ ...m, source: (data.source ?? 'static') as 'static' | 'discovered' }))
+      setModels(tagged)
+      setModelData({source: data.source, count: data.count, updated_at: data.updated_at, refresh_interval: data.refresh_interval, global_params: data.global_params})
     }).catch(() => {})
     apiListTools().then((list) => {
       if (cancelled) return
@@ -1778,11 +2039,19 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         toolCalls: m.tool_calls,
         msgId: m.id,
         trace: m.trace,
+        usedParams: m.used_params,
       }))
     setMessages(uiMsgs)
     // Restore the user's explicit model choice for this conversation.
     // detail.model is empty when the user left it on auto.
     const next = detail.model || 'auto'
+    // If the conversation has stored params, stage them so the model-change
+    // effect applies them instead of computing config defaults.
+    if (detail.params && Object.keys(detail.params).length > 0) {
+      pendingParamsRef.current = detail.params
+    } else {
+      pendingParamsRef.current = null
+    }
     setSelectedModel(next)
     selectedModelRef.current = next
     const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
@@ -1846,8 +2115,46 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
 
+  // When the selected model changes, reset llmParams to that model's config defaults,
+  // falling back to global config defaults (for auto mode or models with no per-model params).
+  // If pendingParamsRef is set (conversation load), use those params instead.
+  useEffect(() => {
+    if (pendingParamsRef.current !== null) {
+      const p = pendingParamsRef.current
+      pendingParamsRef.current = null
+      setLlmParams(p)
+      llmParamsRef.current = p
+      return
+    }
+    const gp = modelData.global_params
+    const globalDefaults: LLMParamsOverride = {}
+    if (gp) {
+      if (gp.temperature != null) globalDefaults.temperature = gp.temperature
+      if (gp.max_tokens)          globalDefaults.max_tokens  = gp.max_tokens
+      if (gp.top_p != null)       globalDefaults.top_p       = gp.top_p
+      if (gp.top_k)               globalDefaults.top_k       = gp.top_k
+    }
+    if (selectedModel === 'auto') {
+      setLlmParams(globalDefaults)
+      llmParamsRef.current = globalDefaults
+      return
+    }
+    const m = models.find((m) => m.id === selectedModel)
+    // Start from global defaults, then layer per-model overrides on top.
+    const p: LLMParamsOverride = { ...globalDefaults }
+    if (m?.params) {
+      if (m.params.temperature != null) p.temperature = m.params.temperature
+      if (m.params.max_tokens)          p.max_tokens  = m.params.max_tokens
+      if (m.params.top_p != null)       p.top_p       = m.params.top_p
+      if (m.params.top_k)               p.top_k       = m.params.top_k
+    }
+    setLlmParams(p)
+    llmParamsRef.current = p
+  }, [selectedModel, models, modelData.global_params])
+
   const selectedSystemPromptRef = useRef(selectedSystemPrompt)
   useEffect(() => { selectedSystemPromptRef.current = selectedSystemPrompt }, [selectedSystemPrompt])
+  useEffect(() => { llmParamsRef.current = llmParams }, [llmParams])
 
   const uploadedFilesRef = useRef(uploadedFiles)
   useEffect(() => { uploadedFilesRef.current = uploadedFiles }, [uploadedFiles])
@@ -1878,7 +2185,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
       const modelId = selectedModelRef.current
       const modelToSend = modelId === 'auto' ? undefined : modelId
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
-      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend)
+      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend, llmParamsRef.current)
       // Attach persisted storage IDs so individual messages can be deleted later.
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
@@ -1895,6 +2202,7 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         files: response.files,
         msgId: response.assistant_msg_id,
         trace: response.trace,
+        usedParams: response.used_params,
       }
       setMessages((prev) => [...prev, assistantMsg])
       refreshConversations()
@@ -1979,9 +2287,32 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
 
   // Build model selector options once when models list changes.
   const modelOptions = useMemo(() => [
-    { label: 'Auto', value: 'auto' },
-    ...models.map((m) => ({ label: m.name || m.id, value: m.id })),
+    { label: 'Auto', value: 'auto', source: 'static' as const, is_manual: false },
+    ...models.map((m) => ({ label: m.name || m.id, value: m.id, source: m.source ?? 'static' as const, is_manual: m.is_manual ?? false })),
   ], [models])
+
+  // Config defaults for the currently selected model (global merged with per-model).
+  // Used by LLMParamsPopover to restore sliders on reset.
+  const configDefaults = useMemo<LLMParamsOverride>(() => {
+    const gp = modelData.global_params
+    const d: LLMParamsOverride = {}
+    if (gp) {
+      if (gp.temperature != null) d.temperature = gp.temperature
+      if (gp.max_tokens)          d.max_tokens  = gp.max_tokens
+      if (gp.top_p != null)       d.top_p       = gp.top_p
+      if (gp.top_k)               d.top_k       = gp.top_k
+    }
+    if (selectedModel !== 'auto') {
+      const m = models.find((m) => m.id === selectedModel)
+      if (m?.params) {
+        if (m.params.temperature != null) d.temperature = m.params.temperature
+        if (m.params.max_tokens)          d.max_tokens  = m.params.max_tokens
+        if (m.params.top_p != null)       d.top_p       = m.params.top_p
+        if (m.params.top_k)               d.top_k       = m.params.top_k
+      }
+    }
+    return d
+  }, [selectedModel, models, modelData.global_params])
 
   const systemPromptOptions = useMemo(() => [
     ...(getSortedSystemPrompts(uiConfig).map((prompt) => ({
@@ -2334,17 +2665,17 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               />
                 {/* Inset bottom-left toolbar: attach + prompt/model selectors */}
                 <div
-                style={{
-                  position: 'absolute',
-                  bottom: 6,
-                  left: 8,
-                  right: 54, // stop before the send button (34px + 8px gutter + 12px breathing room)
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  pointerEvents: loading || uploading ? 'none' : 'auto',
-                  opacity: loading || uploading ? 0.5 : 1,
-                }}
+                  style={{
+                    position: 'absolute',
+                    bottom: 6,
+                    left: 8,
+                    right: 54,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    pointerEvents: loading || uploading ? 'none' : 'auto',
+                    opacity: loading || uploading ? 0.5 : 1,
+                  }}
                 >
                   <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
                   <Button
@@ -2391,31 +2722,103 @@ function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                     />
                   )}
                   {models.length > 0 && (
-                    <Select
-                      value={selectedModel}
-                    onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
-                    size="small"
-                    aria-label="Select AI model"
-                    options={modelOptions}
-                    disabled={loading}
-                    variant="borderless"
-                    popupMatchSelectWidth={false}
-                    placement="topLeft"
-                    showSearch
-                    optionFilterProp={['label', 'value'] as unknown as string}
-                    prefix={<RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />}
-                    optionRender={(opt) => (
-                      <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
-                        <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
-                        {opt.value !== 'auto' && (
-                          <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3 }}>{opt.value}</span>
+                    <Tooltip title={
+                      modelData.source === 'discovered'
+                        ? `Discovered — ${modelData.count} models${modelData.updated_at ? ` · refreshed ${new Date(modelData.updated_at).toLocaleTimeString()}` : ''}${modelData.refresh_interval ? ` · every ${modelData.refresh_interval}` : ''}`
+                        : `Static — ${modelData.count} model${modelData.count !== 1 ? 's' : ''} from config`
+                    }>
+                      <Select
+                        value={selectedModel}
+                        onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
+                        size="small"
+                        aria-label="Select AI model"
+                        options={modelOptions}
+                        disabled={loading}
+                        variant="borderless"
+                        popupMatchSelectWidth={false}
+                        placement="topLeft"
+                        showSearch
+                        optionFilterProp={['label', 'value'] as unknown as string}
+                        prefix={
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            <RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
+                            {modelData.source === 'discovered' && (
+                              <span style={{
+                                fontSize: 9,
+                                fontWeight: 700,
+                                lineHeight: 1,
+                                padding: '1px 3px',
+                                borderRadius: 3,
+                                background: token.colorSuccessBg,
+                                color: token.colorSuccess,
+                                letterSpacing: 0.3,
+                               }}>DISC</span>
+                            )}
+                          </span>
+                        }
+                        optionRender={(opt) => (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '2px 0' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                              <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
+                              {opt.value !== 'auto' && (
+                                <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.value}</span>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                              {opt.data.is_manual && (
+                                <span style={{
+                                  fontSize: 9, fontWeight: 700, lineHeight: 1,
+                                  padding: '1px 4px', borderRadius: 3,
+                                  background: token.colorInfoBg, color: token.colorInfo,
+                                  letterSpacing: 0.3,
+                                }}>M</span>
+                              )}
+                              {!opt.data.is_manual && opt.data.source === 'discovered' ? (
+                                <span style={{
+                                  fontSize: 9, fontWeight: 700, lineHeight: 1,
+                                  padding: '1px 4px', borderRadius: 3,
+                                  background: token.colorSuccessBg, color: token.colorSuccess,
+                                  letterSpacing: 0.3,
+                                }}>DISC</span>
+                              ) : !opt.data.is_manual && opt.value !== 'auto' ? (
+                                <span style={{
+                                  fontSize: 9, fontWeight: 600, lineHeight: 1,
+                                  padding: '1px 4px', borderRadius: 3,
+                                  background: token.colorFillSecondary, color: token.colorTextTertiary,
+                                  letterSpacing: 0.3,
+                                }}>CFG</span>
+                              ) : null}
+                            </div>
+                          </div>
                         )}
-                      </div>
-                    )}
-                    style={{ flex: 1, minWidth: 0 }}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                    </Tooltip>
+                  )}
+                  {modelData.source === 'discovered' && (
+                    <Tooltip title={`Refresh model list now`}>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        onClick={async () => {
+                          const data = await apiGetModels()
+                          const tagged = data.models.map((m) => ({ ...m, source: (data.source ?? 'static') as 'static' | 'discovered' }))
+                          setModels(tagged)
+                          setModelData({ source: data.source, count: data.count, updated_at: data.updated_at, refresh_interval: data.refresh_interval, global_params: data.global_params })
+                        }}
+                        disabled={loading}
+                        style={{ height: 28, width: 28, padding: 0, color: token.colorTextSecondary, flexShrink: 0 }}
+                      />
+                    </Tooltip>
+                  )}
+                  <LLMParamsPopover
+                    params={llmParams}
+                    configDefaults={configDefaults}
+                    onChange={(p) => { setLlmParams(p); llmParamsRef.current = p }}
+                    disabled={loading}
                   />
-                )}
-              </div>
+                </div>
               {/* Inset bottom-right: send button */}
               <div
                 style={{
