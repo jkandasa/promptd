@@ -756,52 +756,119 @@ function TraceDrawer({ open, onClose, rounds }: {
           </Text>
         ),
         children: (
-          <div style={{
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 6,
-            maxHeight: 320,
-            overflowY: 'auto',
-            background: token.colorFillAlter,
-          }}>
-            {round.request.map((msg, mi) => (
-              <div key={mi} style={{
-                display: 'flex',
-                gap: 8,
-                padding: '5px 10px',
-                borderBottom: mi < round.request.length - 1 ? `1px solid ${token.colorBorderSecondary}` : undefined,
-                alignItems: 'flex-start',
-              }}>
-                <Tag color={ROLE_COLORS[msg.role] ?? '#595959'} style={{
-                  fontSize: 10,
-                  marginTop: 1,
-                  flexShrink: 0,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                  lineHeight: '16px',
-                }}>
-                  {msg.role}
-                </Tag>
-                <pre style={{
-                  margin: 0,
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: token.colorText,
-                  flex: 1,
-                }}>
-                  {msg.tool_calls && msg.tool_calls.length > 0
-                    ? msg.tool_calls.map(tc => `→ calls ${tc.name}  [id:${tc.id}]\n${(() => { try { return JSON.stringify(JSON.parse(tc.args), null, 2) } catch { return tc.args } })()}`).join('\n\n')
-                    : msg.content || ''}
-                  {msg.tool_call_id && (
-                    <Text type="secondary" style={{ fontSize: 10, fontFamily: 'monospace', display: 'block' }}>
-                      id:{msg.tool_call_id}
-                    </Text>
-                  )}
-                </pre>
-              </div>
-            ))}
-          </div>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(_, i) => String(i)}
+            dataSource={round.request.map((msg, i) => ({ ...msg, _idx: i }))}
+            style={{
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 6,
+              overflow: 'hidden',
+            }}
+            columns={[
+              {
+                title: '#',
+                key: 'idx',
+                width: 32,
+                render: (_: unknown, __: unknown, i: number) => (
+                  <Text type="secondary" style={{ fontSize: 11 }}>{i + 1}</Text>
+                ),
+              },
+              {
+                title: 'Role',
+                dataIndex: 'role',
+                key: 'role',
+                width: 90,
+                render: (role: string) => (
+                  <Tag
+                    color={ROLE_COLORS[role] ?? '#595959'}
+                    style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', margin: 0 }}
+                  >
+                    {role}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'Content',
+                key: 'content',
+                render: (_: unknown, msg: TraceMessage & { _idx: number }) => {
+                  // Assistant with tool calls
+                  if (msg.tool_calls && msg.tool_calls.length > 0) {
+                    return (
+                      <div>
+                        {msg.tool_calls.map((tc, tci) => (
+                          <div key={tci} style={{
+                            background: token.colorFillSecondary,
+                            borderRadius: 4,
+                            padding: '3px 8px',
+                            marginBottom: tci < msg.tool_calls!.length - 1 ? 4 : 0,
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                              <Text strong style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{tc.name}</Text>
+                              <Text type="secondary" style={{ fontSize: 10, fontFamily: 'ui-monospace, monospace' }}>id:{tc.id}</Text>
+                            </div>
+                            <pre style={{
+                              margin: 0,
+                              fontSize: 11,
+                              fontFamily: 'ui-monospace, monospace',
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              color: token.colorText,
+                              maxHeight: 160,
+                              overflowY: 'auto',
+                            }}>
+                              {(() => { try { return JSON.stringify(JSON.parse(tc.args), null, 2) } catch { return tc.args } })()}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  }
+                  // Tool result message
+                  if (msg.role === 'tool') {
+                    return (
+                      <div>
+                        {msg.tool_call_id && (
+                          <Text type="secondary" style={{ fontSize: 10, fontFamily: 'ui-monospace, monospace', display: 'block', marginBottom: 2 }}>
+                            id:{msg.tool_call_id}
+                          </Text>
+                        )}
+                        {msg.name && (
+                          <Text strong style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace', display: 'block', marginBottom: 2 }}>
+                            {msg.name}
+                          </Text>
+                        )}
+                        <pre style={{
+                          margin: 0,
+                          fontSize: 11,
+                          fontFamily: 'ui-monospace, monospace',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          color: token.colorText,
+                          maxHeight: 160,
+                          overflowY: 'auto',
+                        }}>{msg.content || ''}</pre>
+                      </div>
+                    )
+                  }
+                  // Default: system / user / assistant text
+                  return (
+                    <pre style={{
+                      margin: 0,
+                      fontSize: 12,
+                      fontFamily: 'ui-monospace, monospace',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: token.colorText,
+                      maxHeight: 200,
+                      overflowY: 'auto',
+                    }}>{msg.content || ''}</pre>
+                  )
+                },
+              },
+            ]}
+          />
         ),
       },
       {
