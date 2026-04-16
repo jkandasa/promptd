@@ -1,4 +1,4 @@
-import { App as AntApp, Avatar, Button, Modal, Popconfirm, Tooltip, Typography, theme } from 'antd'
+import { App as AntApp, Avatar, Button, Input, Modal, Popconfirm, Tag, Tooltip, Typography, theme } from 'antd'
 import {
   CheckOutlined,
   CopyOutlined,
@@ -9,7 +9,6 @@ import {
   UserOutlined,
 } from '@ant-design/icons'
 import { memo, useMemo, useState } from 'react'
-import { Input } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message } from '../types/chat'
@@ -70,15 +69,15 @@ export const Bubble = memo(function Bubble({
 
   const bubbleStyle: React.CSSProperties = isUser
     ? {
-        background: token.colorPrimary,
+        background: `linear-gradient(135deg, ${token.colorPrimaryHover} 0%, ${token.colorPrimary} 100%)`,
         color: '#fff',
         borderRadius: '18px 18px 4px 18px',
         padding: '10px 18px 10px 16px',
-        maxWidth: '80%',
         whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
         fontSize: 14,
         lineHeight: 1.5,
-        boxShadow: token.boxShadow,
+        boxShadow: `0 2px 12px ${token.colorPrimary}50`,
       }
     : isError
     ? {
@@ -194,7 +193,7 @@ export const Bubble = memo(function Bubble({
         />
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: 3, flex: isUser ? undefined : 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: 3, flex: isUser ? undefined : 1, minWidth: 0, maxWidth: isUser ? '80%' : undefined }}>
         {isEditing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: '80%' }}>
             <TextArea
@@ -305,7 +304,7 @@ export const Bubble = memo(function Bubble({
           </Tooltip>
           {msg.model !== undefined && (
             isError
-              ? <span style={{ fontSize: 10 }}><span style={{ color: token.colorError }}>{msg.model}</span></span>
+              ? <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{msg.model}</Tag>
               : <Text type="secondary" style={{ fontSize: 10 }}>{msg.model}</Text>
           )}
           {msg.timeTaken !== undefined && (

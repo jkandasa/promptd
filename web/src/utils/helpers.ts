@@ -27,3 +27,18 @@ export function isImageIcon(icon?: string): boolean {
   if (!icon) return false
   return /^(https?:\/\/|\/|data:image\/)/.test(icon)
 }
+
+export function relativeTime(dateStr: string): string {
+  const then = new Date(dateStr).getTime()
+  if (isNaN(then)) return ''
+  const diff = Date.now() - then
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(diff / 3_600_000)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(diff / 86_400_000)
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days}d ago`
+  return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' })
+}

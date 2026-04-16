@@ -668,50 +668,74 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 20,
-                  color: token.colorTextSecondary,
+                  gap: 32,
                   paddingBottom: 60,
+                  background: isDark
+                    ? 'radial-gradient(ellipse 80% 50% at 50% 10%, rgba(91,33,182,0.12) 0%, transparent 100%)'
+                    : 'radial-gradient(ellipse 80% 50% at 50% 10%, rgba(91,33,182,0.07) 0%, transparent 100%)',
                 }}
               >
-                <Avatar
-                  aria-hidden="true"
-                  icon={<RobotOutlined />}
-                  size={64}
-                  style={{ background: token.colorPrimary, opacity: 0.85 }}
-                />
-                <div style={{ textAlign: 'center' }}>
-                  <Text style={{ fontSize: 18, display: 'block', fontWeight: 600, color: token.colorText }}>
-                    {uiConfig.welcomeTitle || 'How can I help you today?'}
-                  </Text>
+                {/* Hero */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+                  <Avatar
+                    aria-hidden="true"
+                    className="hero-avatar"
+                    src={isImageIcon(appIcon) ? appIcon : undefined}
+                    icon={!appIcon ? <RobotOutlined /> : undefined}
+                    size={80}
+                    style={{
+                      background: !appIcon ? token.colorPrimary : isImageIcon(appIcon) ? token.colorFillSecondary : token.colorBgContainer,
+                      color: !appIcon ? '#fff' : token.colorText,
+                      fontSize: appIcon && !isImageIcon(appIcon) ? 32 : undefined,
+                      border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : 'none',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {appIcon && !isImageIcon(appIcon) ? appIcon : null}
+                  </Avatar>
+                  <div style={{ textAlign: 'center' }}>
+                    <Text style={{ fontSize: 22, display: 'block', fontWeight: 700, color: token.colorText, lineHeight: 1.2 }}>
+                      {uiConfig.welcomeTitle || 'How can I help you today?'}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 14, display: 'block', marginTop: 6 }}>
+                      {appName} · AI Assistant
+                    </Text>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 4 }}>
+
+                {/* Prompt suggestion cards */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: 10,
+                  maxWidth: 580,
+                  width: '100%',
+                  padding: '0 20px',
+                }}>
                   {(uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?']).map((prompt) => (
-                    <Tag
+                    <button
                       key={prompt}
                       className="prompt-chip"
                       tabIndex={loading ? -1 : 0}
-                      role="button"
-                      aria-disabled={loading}
+                      disabled={loading}
                       style={{
-                        padding: '6px 14px',
+                        padding: '12px 16px',
                         fontSize: 13,
                         cursor: loading ? 'not-allowed' : 'pointer',
-                        borderRadius: 16,
-                        border: `1px solid ${token.colorBorder}`,
+                        borderRadius: 12,
+                        border: `1px solid ${token.colorBorderSecondary}`,
                         background: token.colorBgContainer,
                         color: loading ? token.colorTextDisabled : token.colorText,
                         opacity: loading ? 0.5 : 1,
+                        textAlign: 'left',
+                        lineHeight: 1.45,
+                        fontFamily: 'inherit',
+                        boxShadow: token.boxShadowTertiary,
                       }}
                       onClick={() => { if (!loading) send(prompt) }}
-                      onKeyDown={(e) => {
-                        if (!loading && (e.key === 'Enter' || e.key === ' ')) {
-                          e.preventDefault()
-                          send(prompt)
-                        }
-                      }}
                     >
                       {prompt}
-                    </Tag>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -771,8 +795,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                     borderRadius: 12,
                     resize: 'none',
                     fontSize: 15,
-                    padding: '12px 16px',
-                    paddingBottom: 48,
+                    padding: '12px 50px 48px 16px',
                   }}
                 />
                 <div

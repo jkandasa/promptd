@@ -7,6 +7,7 @@ import {
   PushpinOutlined,
 } from '@ant-design/icons'
 import type { ConversationMeta } from '../types/chat'
+import { relativeTime } from '../utils/helpers'
 
 const { Text } = Typography
 const { useToken } = theme
@@ -78,17 +79,31 @@ export function ConvItem({
           style={{ flex: 1, fontSize: 12, height: 24 }}
         />
       ) : (
-        <Text
-          ellipsis
-          style={{
-            flex: 1,
-            fontSize: 13,
-            fontWeight: isActive ? 600 : 400,
-            color: isActive ? activeText : token.colorText,
-          }}
-        >
-          {conv.title || 'Untitled'}
-        </Text>
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          <Text
+            ellipsis
+            style={{
+              display: 'block',
+              fontSize: 13,
+              fontWeight: isActive ? 600 : 400,
+              color: isActive ? activeText : token.colorText,
+              lineHeight: 1.3,
+            }}
+          >
+            {conv.title || 'Untitled'}
+          </Text>
+          <Text
+            style={{
+              fontSize: 10,
+              color: isActive ? 'rgba(255,255,255,0.65)' : token.colorTextTertiary,
+              display: 'block',
+              lineHeight: 1.3,
+              marginTop: 1,
+            }}
+          >
+            {relativeTime(conv.updated_at)}
+          </Text>
+        </div>
       )}
       <div
         style={{ display: 'flex', gap: 2, flexShrink: 0 }}
