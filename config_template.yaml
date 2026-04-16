@@ -75,16 +75,28 @@ mcp:
   # Health check interval (default: 15s)
   # health_interval: 15s
 
+  # Reconnect interval for servers that fail to connect at startup or become
+  # unreachable. Can be overridden per-server. (default: 30s)
+  # reconnect_interval: 30s
+
+  # Tool call timeout. Can be overridden per-server. (default: 30s)
+  # timeout: 30s
+
   # List of MCP servers to connect at startup
   servers:
     # HTTP server example:
     # - name: "my-server"
     #   url: "http://localhost:8081/mcp"
     #   auth:
-    #     token: "your-auth-token"  # Optional: auth token
+    #     token: "your-auth-token"      # Optional: auth token
     #   headers:
-    #     X-Custom-Header: "value"  # Optional: custom headers
-    #   disabled: false  # Optional: set to true to skip this server
+    #     X-Custom-Header: "value"      # Optional: custom headers
+    #   disabled: false                 # Optional: set to true to skip this server
+    #   reconnect_interval: 30s         # Optional: overrides global reconnect_interval
+    #   health_max_failures: 3          # Optional: overrides global health_max_failures
+    #   health_interval: 15s            # Optional: overrides global health_interval
+    #   timeout: 30s                    # Optional: overrides global timeout
+    #   insecure: false                 # Optional: skip TLS certificate verification
 
 tools:
   # Required: at least one selectable system prompt.

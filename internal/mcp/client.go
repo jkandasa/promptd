@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,12 +15,17 @@ import (
 
 // MCPServer represents a single connected MCP server.
 type MCPServer struct {
-	URL     string
-	Client  *client.Client
-	Tools   []mcp.Tool
-	Auth    map[string]string
-	Headers map[string]string
-	mu      sync.RWMutex
+	URL               string
+	Client            *client.Client
+	Tools             []mcp.Tool
+	Auth              map[string]string
+	Headers           map[string]string
+	ReconnectInterval time.Duration
+	HealthMaxFails    int
+	HealthInterval    time.Duration
+	Timeout           time.Duration
+	Insecure          bool
+	mu                sync.RWMutex
 }
 
 // ToolNames returns the names of all tools from this server.
@@ -34,21 +41,31 @@ func (s *MCPServer) ToolNames() []string {
 
 // ConnectMCP connects to an MCP server at the given URL with optional auth/headers.
 func ConnectMCP(ctx context.Context, url string) (*MCPServer, error) {
-	return ConnectMCPAuth(ctx, url, nil, nil)
+	return ConnectMCPAuth(ctx, url, nil, nil, false)
 }
 
-// ConnectMCPAuth connects to an MCP server with optional auth tokens and headers.
-func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, headers map[string]string) (*MCPServer, error) {
+// ConnectMCPAuth connects to an MCP server with optional auth, headers, and TLS settings.
+// Set insecure=true to skip TLS certificate verification (e.g. for self-signed certs).
+func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, headers map[string]string, insecure bool) (*MCPServer, error) {
 	opts := []transport.StreamableHTTPCOption{}
 
-	// Add auth headers
+	if insecure {
+		httpClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+			},
+		}
+		opts = append(opts, transport.WithHTTPBasicClient(httpClient))
+	}
+
+	// Add auth headers.
 	if token, ok := auth["token"]; ok && token != "" {
 		opts = append(opts, transport.WithHTTPHeaders(map[string]string{
 			"Authorization": "Bearer " + token,
 		}))
 	}
 
-	// Add custom headers
+	// Add custom headers.
 	for k, v := range headers {
 		opts = append(opts, transport.WithHTTPHeaders(map[string]string{k: v}))
 	}
@@ -70,7 +87,7 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	_, err = c.Initialize(initCtx, initRequest)
-	cancel() // release timer goroutine as soon as Initialize completes
+	cancel()
 	if err != nil {
 		trans.Close()
 		return nil, fmt.Errorf("failed to initialize MCP server at %s: %w", url, err)
@@ -83,11 +100,12 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 	}
 
 	return &MCPServer{
-		URL:     url,
-		Client:  c,
-		Tools:   tools,
-		Auth:    auth,
-		Headers: headers,
+		URL:      url,
+		Client:   c,
+		Tools:    tools,
+		Auth:     auth,
+		Headers:  headers,
+		Insecure: insecure,
 	}, nil
 }
 
@@ -118,15 +136,13 @@ func Ping(ctx context.Context, c *client.Client) error {
 }
 
 // CallTool executes a tool on the MCP server.
+// The caller is responsible for setting a deadline on ctx (e.g. via context.WithTimeout).
 func CallTool(ctx context.Context, c *client.Client, name string, args map[string]any) (*mcp.CallToolResult, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	request := mcp.CallToolRequest{}
 	request.Params.Name = name
 	request.Params.Arguments = args
 
-	result, err := c.CallTool(callCtx, request)
+	result, err := c.CallTool(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("tool call failed for %q: %w", name, err)
 	}

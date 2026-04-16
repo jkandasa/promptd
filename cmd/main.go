@@ -149,6 +149,8 @@ type Config struct {
 	MCP struct {
 		HealthMaxFailures int               `yaml:"health_max_failures"`
 		HealthInterval    time.Duration     `yaml:"health_interval"`
+		ReconnectInterval Duration          `yaml:"reconnect_interval"`
+		Timeout           Duration          `yaml:"timeout"`
 		Servers           []MCPServerConfig `yaml:"servers"`
 	} `yaml:"mcp"`
 	Tools struct {
@@ -204,11 +206,16 @@ func loadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []ha
 }
 
 type MCPServerConfig struct {
-	Name     string            `yaml:"name"`
-	URL      string            `yaml:"url"`
-	Auth     map[string]string `yaml:"auth"`
-	Headers  map[string]string `yaml:"headers"`
-	Disabled bool              `yaml:"disabled"`
+	Name              string            `yaml:"name"`
+	URL               string            `yaml:"url"`
+	Auth              map[string]string `yaml:"auth"`
+	Headers           map[string]string `yaml:"headers"`
+	Disabled          bool              `yaml:"disabled"`
+	ReconnectInterval Duration          `yaml:"reconnect_interval"`
+	HealthMaxFails    int               `yaml:"health_max_failures"`
+	HealthInterval    Duration          `yaml:"health_interval"`
+	Timeout           Duration          `yaml:"timeout"`
+	Insecure          bool              `yaml:"insecure"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -247,6 +254,15 @@ func loadConfig(path string) (*Config, error) {
 	// Resolve data root directory (default: ./data).
 	if cfg.Data.Dir == "" {
 		cfg.Data.Dir = "./data"
+	}
+
+	// MCP reconnect interval: default 30s.
+	if cfg.MCP.ReconnectInterval == 0 {
+		cfg.MCP.ReconnectInterval = Duration(30 * time.Second)
+	}
+	// MCP tool call timeout: default 30s.
+	if cfg.MCP.Timeout == 0 {
+		cfg.MCP.Timeout = Duration(30 * time.Second)
 	}
 
 	// Trace TTL: default 7 days, minimum 1 hour.
@@ -354,18 +370,34 @@ func main() {
 
 	registry := buildRegistry(logger)
 
-	mcpManager := mcp.NewManager(registry, logger, cfg.MCP.HealthMaxFailures, cfg.MCP.HealthInterval)
+	mcpManager := mcp.NewManager(registry, logger, cfg.MCP.HealthMaxFailures, cfg.MCP.HealthInterval, cfg.MCP.ReconnectInterval.AsDuration())
 
 	for _, sc := range cfg.MCP.Servers {
 		if sc.Disabled {
 			logger.Info("MCP server skipped (disabled)", zap.String("name", sc.Name))
 			continue
 		}
-		_, err := mcpManager.Register(ctx, sc.URL, sc.Auth, sc.Headers)
+		ri := sc.ReconnectInterval.AsDuration()
+		if ri <= 0 {
+			ri = cfg.MCP.ReconnectInterval.AsDuration()
+		}
+		to := sc.Timeout.AsDuration()
+		if to <= 0 {
+			to = cfg.MCP.Timeout.AsDuration()
+		}
+		scfg := mcp.ServerConfig{
+			ReconnectInterval: ri,
+			HealthMaxFails:    sc.HealthMaxFails,
+			HealthInterval:    sc.HealthInterval.AsDuration(),
+			Timeout:           to,
+			Insecure:          sc.Insecure,
+		}
+		_, err := mcpManager.Register(ctx, sc.URL, sc.Auth, sc.Headers, scfg)
 		if err != nil {
-			logger.Warn("failed to register MCP server", zap.String("name", sc.Name), zap.String("url", sc.URL), zap.Error(err))
-		} else {
-			logger.Info("MCP server registered", zap.String("name", sc.Name), zap.String("url", sc.URL))
+			logger.Warn("failed to connect MCP server, will retry in background",
+				zap.String("name", sc.Name), zap.String("url", sc.URL),
+				zap.Duration("reconnect_interval", ri), zap.Error(err))
+			mcpManager.QueueRetry(sc.URL, sc.Auth, sc.Headers, scfg)
 		}
 	}
 
