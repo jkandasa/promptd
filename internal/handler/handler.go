@@ -206,7 +206,7 @@ type errorResponse struct {
 func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMessage {
 	var messages []openai.ChatCompletionMessage
 	promptName := session.SystemPrompt()
-	if promptName == "" || h.systemPrompts[promptName] == "" {
+	if promptName == "" {
 		promptName = h.defaultSystemPrompt
 	}
 	if prompt := h.systemPrompts[promptName]; prompt != "" {
