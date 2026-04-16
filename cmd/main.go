@@ -17,11 +17,41 @@ import (
 	"chatbot/internal/storage"
 	"chatbot/internal/tools"
 	"chatbot/internal/ui"
+	"chatbot/internal/version"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
 )
+
+// Duration is a time.Duration that also accepts "d" (days) as a unit when
+// unmarshalling from YAML. For example "30d" is equivalent to "720h".
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	s := strings.TrimSpace(value.Value)
+	// Replace trailing 'd' with the equivalent number of hours so that
+	// time.ParseDuration can handle it (e.g. "30d" → "720h").
+	if strings.HasSuffix(s, "d") {
+		n, err := fmt.Sscanf(s[:len(s)-1], "%f", new(float64))
+		if err != nil || n == 0 {
+			return fmt.Errorf("invalid duration %q", s)
+		}
+		var days float64
+		fmt.Sscanf(s[:len(s)-1], "%f", &days)
+		*d = Duration(time.Duration(days * float64(24*time.Hour)))
+		return nil
+	}
+	td, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	*d = Duration(td)
+	return nil
+}
+
+// AsDuration returns the underlying time.Duration value.
+func (d Duration) AsDuration() time.Duration { return time.Duration(d) }
 
 type LLMParams struct {
 	Temperature *float32 `yaml:"temperature,omitempty"`
@@ -93,7 +123,7 @@ type Config struct {
 		Dir string `yaml:"dir"`
 	} `yaml:"data"`
 	Server struct {
-		Port string `yaml:"port"`
+		Address string `yaml:"address"`
 	} `yaml:"server"`
 	LLM struct {
 		APIKey          string     `yaml:"api_key"`
@@ -101,10 +131,17 @@ type Config struct {
 		SelectionMethod string     `yaml:"selection_method"`
 		Models          []LLMModel `yaml:"models"`
 		Params          LLMParams  `yaml:"params"` // global defaults
-		Autodiscover    struct {
+		AutoDiscover    struct {
 			Enabled         bool          `yaml:"enabled"`
 			RefreshInterval time.Duration `yaml:"refresh_interval"`
 		} `yaml:"auto_discover"`
+		Trace struct {
+			// TTL controls how long raw LLM trace data is retained on assistant messages.
+			// Default: 168h (7 days). Minimum: 1h. Supports d for days (e.g. 30d).
+			TTL Duration `yaml:"ttl"`
+			// Enable or disable the LLM trace drawer in the UI (default: true)
+			Enabled *bool `yaml:"enabled"`
+		} `yaml:"trace"`
 	} `yaml:"llm"`
 	Log struct {
 		Level string `yaml:"level"`
@@ -124,11 +161,6 @@ type Config struct {
 		AIDisclaimer      string   `yaml:"ai_disclaimer"`
 		PromptSuggestions []string `yaml:"prompt_suggestions"`
 	} `yaml:"ui"`
-	Trace struct {
-		// TTL controls how long raw LLM trace data is retained on assistant messages.
-		// Default: 168h (7 days). Minimum: 1h.
-		TTL time.Duration `yaml:"ttl"`
-	} `yaml:"trace"`
 }
 
 func loadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []handler.SystemPromptInfo, string) {
@@ -190,8 +222,8 @@ func loadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if cfg.Server.Port == "" {
-		cfg.Server.Port = "8080"
+	if cfg.Server.Address == "" {
+		cfg.Server.Address = "localhost:8080"
 	}
 	if cfg.LLM.BaseURL == "" {
 		cfg.LLM.BaseURL = "https://openrouter.ai/api/v1"
@@ -202,11 +234,11 @@ func loadConfig(path string) (*Config, error) {
 	if len(cfg.LLM.Models) == 0 {
 		cfg.LLM.Models = []LLMModel{{ID: "anthropic/claude-sonnet-4-6"}}
 	}
-	if cfg.LLM.Autodiscover.RefreshInterval == 0 {
-		cfg.LLM.Autodiscover.RefreshInterval = 60 * time.Minute
+	if cfg.LLM.AutoDiscover.RefreshInterval == 0 {
+		cfg.LLM.AutoDiscover.RefreshInterval = 60 * time.Minute
 	}
-	if cfg.LLM.Autodiscover.RefreshInterval < time.Minute {
-		cfg.LLM.Autodiscover.RefreshInterval = time.Minute
+	if cfg.LLM.AutoDiscover.RefreshInterval < time.Minute {
+		cfg.LLM.AutoDiscover.RefreshInterval = time.Minute
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -218,11 +250,16 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	// Trace TTL: default 7 days, minimum 1 hour.
-	if cfg.Trace.TTL == 0 {
-		cfg.Trace.TTL = 7 * 24 * time.Hour
+	if cfg.LLM.Trace.TTL == 0 {
+		cfg.LLM.Trace.TTL = Duration(7 * 24 * time.Hour)
 	}
-	if cfg.Trace.TTL < time.Hour {
-		cfg.Trace.TTL = time.Hour
+	if cfg.LLM.Trace.TTL < Duration(time.Hour) {
+		cfg.LLM.Trace.TTL = Duration(time.Hour)
+	}
+	// Trace enabled: default true if not set.
+	if cfg.LLM.Trace.Enabled == nil {
+		b := true
+		cfg.LLM.Trace.Enabled = &b
 	}
 
 	return &cfg, nil
@@ -301,6 +338,8 @@ func main() {
 	logger := buildLogger(cfg.Log.Level)
 	defer func() { _ = logger.Sync() }()
 
+	logger.Info("application details", zap.String("version", version.Get().String()))
+
 	dataDir := cfg.Data.Dir
 	storageDir := dataDir + "/conversations"
 	uploadDir := dataDir + "/uploads"
@@ -319,7 +358,7 @@ func main() {
 
 	for _, sc := range cfg.MCP.Servers {
 		if sc.Disabled {
-			logger.Info("MCP server skipped (disabled)", zap.String("name", sc.Name), zap.String("url", sc.URL))
+			logger.Info("MCP server skipped (disabled)", zap.String("name", sc.Name))
 			continue
 		}
 		_, err := mcpManager.Register(ctx, sc.URL, sc.Auth, sc.Headers)
@@ -340,7 +379,7 @@ func main() {
 	}
 	store := chat.NewSessionStore(st)
 
-	go runTraceCleanup(ctx, st, cfg.Trace.TTL, logger)
+	go runTraceCleanup(ctx, st, cfg.LLM.Trace.TTL.AsDuration(), logger)
 	uiConfig := handler.UIConfig{
 		AppName:           cfg.UI.AppName,
 		AppIcon:           cfg.UI.AppIcon,
@@ -368,10 +407,10 @@ func main() {
 	}
 
 	modelSelector := handler.NewModelSelector(buildModelInfos(cfg.LLM.Models, cfg.LLM.Params), cfg.LLM.SelectionMethod)
-	if cfg.LLM.Autodiscover.Enabled {
-		modelSelector.SetRefreshInterval(cfg.LLM.Autodiscover.RefreshInterval)
+	if cfg.LLM.AutoDiscover.Enabled {
+		modelSelector.SetRefreshInterval(cfg.LLM.AutoDiscover.RefreshInterval)
 	}
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompts, defaultSystemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir)
+	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompts, defaultSystemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir, cfg.LLM.Trace.Enabled != nil && *cfg.LLM.Trace.Enabled)
 	h.GlobalParams = handler.LLMParams{
 		Temperature: cfg.LLM.Params.Temperature,
 		MaxTokens:   cfg.LLM.Params.MaxTokens,
@@ -381,13 +420,13 @@ func main() {
 	// Keep a copy of manually-configured models so DiscoverAndUpdateModels can
 	// preserve their per-model params and manual flag after autodiscover replaces the list.
 	h.StaticModels = buildModelInfos(cfg.LLM.Models, cfg.LLM.Params)
-	if cfg.LLM.Autodiscover.Enabled {
+	if cfg.LLM.AutoDiscover.Enabled {
 		if err := h.DiscoverAndUpdateModels(ctx); err != nil {
-			logger.Warn("initial autodiscover failed", zap.Error(err))
+			logger.Warn("initial auto discover failed", zap.Error(err))
 		} else {
-			logger.Info("initial autodiscover complete", zap.Int("count", len(h.ModelSelector.GetAvailableModels())))
+			logger.Info("initial auto discover complete", zap.Int("count", len(h.ModelSelector.GetAvailableModels())))
 		}
-		go h.StartAutodiscover(ctx, cfg.LLM.Autodiscover.RefreshInterval)
+		go h.StartAutoDiscover(ctx, cfg.LLM.AutoDiscover.RefreshInterval)
 	}
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 
@@ -410,9 +449,8 @@ func main() {
 	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}", h.DeleteMessage)
 	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}/after", h.DeleteMessagesFrom)
 
-	addr := ":" + cfg.Server.Port
 	srv := &http.Server{
-		Addr:         addr,
+		Addr:         cfg.Server.Address,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
@@ -420,13 +458,13 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("server started", zap.String("addr", "http://localhost"+addr), zap.Strings("models", func() []string {
+		logger.Info("server started", zap.String("address", cfg.Server.Address), zap.Strings("models", func() []string {
 			ids := make([]string, len(cfg.LLM.Models))
 			for i, m := range cfg.LLM.Models {
 				ids[i] = m.ID
 			}
 			return ids
-		}()), zap.String("selection_method", cfg.LLM.SelectionMethod), zap.String("baseUrl", cfg.LLM.BaseURL))
+		}()), zap.String("model_selection_method", cfg.LLM.SelectionMethod), zap.String("llm_base_url", cfg.LLM.BaseURL))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server error", zap.Error(err))
 		}

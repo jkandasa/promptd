@@ -8,8 +8,8 @@ data:
   # dir: "./data"
 
 server:
-  # HTTP port the chatbot listens on
-  port: "8080"
+  # HTTP address the chatbot listens on, default: localhost:8080
+  address: "localhost:8080"
 
 llm:
   # Required: API key for your LLM provider
@@ -54,6 +54,16 @@ llm:
     #     max_tokens: 8192
 
 
+  # Trace settings for LLM round-trip data
+  trace:
+    # Enable or disable the LLM trace drawer in the UI (default: true)
+    enabled: true
+    # How long raw LLM trace data is kept on assistant messages (default: 168h = 7 days).
+    # Minimum allowed value is 1h (anything lower is clamped to 1h).
+    # The cleanup job runs every <ttl> when ttl ≤ 12h, otherwise every 12h.
+    # Examples: 1m, 6h, 1d, 7d, 30d
+    ttl: 7d
+
 log:
   # Log level: debug, info, warn, error (default: info)
   level: "info"
@@ -67,7 +77,7 @@ mcp:
 
   # List of MCP servers to connect at startup
   servers:
-    # Example server (comment out or set disabled: true to skip)
+    # HTTP server example:
     # - name: "my-server"
     #   url: "http://localhost:8081/mcp"
     #   auth:
@@ -100,14 +110,7 @@ ui:
 
   # Optional: Quick prompt suggestions shown on welcome screen
   prompt_suggestions:
-  #  - "Explain how this works"
-  #  - "Help me write code"
-  #  - "Summarize the key points"
-  #  - "What are best practices?"
-
-trace:
-  # How long raw LLM trace data is kept on assistant messages (default: 168h = 7 days).
-  # Minimum allowed value is 1h (anything lower is clamped to 1h).
-  # The cleanup job runs every <ttl> when ttl ≤ 12h, otherwise every 12h.
-  # Examples: 1h, 6h, 24h, 72h, 168h
-  # ttl: 168h
+    #  - "Explain how this works"
+    #  - "Help me write code"
+    #  - "Summarize the key points"
+    #  - "What are best practices?"

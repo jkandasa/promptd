@@ -135,6 +135,7 @@ type Handler struct {
 	staticFS            fs.FS
 	uiConfig            UIConfig
 	uploadDir           string
+	TraceEnabled        bool
 }
 
 type UIConfig struct {
@@ -150,7 +151,7 @@ type SystemPromptInfo struct {
 	Name string `json:"name"`
 }
 
-func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string) *Handler {
+func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string, traceEnabled bool) *Handler {
 	cfg := openai.DefaultConfig(apiKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
@@ -172,6 +173,7 @@ func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemP
 		staticFS:            staticFS,
 		uiConfig:            uiConfig,
 		uploadDir:           uploadDir,
+		TraceEnabled:        traceEnabled,
 	}
 }
 
@@ -402,13 +404,16 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			if choice.Message.Content == "" {
 				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
-			trace = append(trace, storage.LLMRound{
-				Request:        storage.ToTraceMessages(requestMsgs),
-				Response:       storage.ToTraceMessage(choice.Message),
-				LLMDurationMs:  llmDurationMs,
-				AvailableTools: availableTools,
-				Usage:          traceUsage(resp.Usage),
-			})
+			if h.TraceEnabled {
+				trace = append(trace, storage.LLMRound{
+					Request:        storage.ToTraceMessages(requestMsgs),
+					Response:       storage.ToTraceMessage(choice.Message),
+					LLMDurationMs:  llmDurationMs,
+					AvailableTools: availableTools,
+					Usage:          traceUsage(resp.Usage),
+				})
+			}
+
 			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, trace, usedParams, nil
 		}
 
@@ -450,7 +455,9 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 				h.log.Warn("tool error", zap.String("tool", tc.Function.Name), zap.Error(toolErr))
 			}
 		}
-		trace = append(trace, round)
+		if h.TraceEnabled {
+			trace = append(trace, round)
+		}
 		// Loop: send tool results back to the LLM.
 	}
 }
@@ -667,7 +674,7 @@ func (h *Handler) DiscoverAndUpdateModels(ctx context.Context) error {
 	return nil
 }
 
-func (h *Handler) StartAutodiscover(ctx context.Context, interval time.Duration) {
+func (h *Handler) StartAutoDiscover(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

@@ -1,6 +1,22 @@
 # Makefile for chatbot
 
-CONFIG ?= ./config.yaml
+BIN     := chatbot
+CMD     := ./cmd
+CONFIG  ?= ./config.yaml
+
+# ---------------------------------------------------------------------------
+# Version stamping — override any of these on the command line or let them
+# be derived automatically from git.
+# ---------------------------------------------------------------------------
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+PKG        := chatbot/internal/version
+LDFLAGS    := -s -w \
+              -X $(PKG).version=$(VERSION) \
+              -X $(PKG).gitCommit=$(GIT_COMMIT) \
+              -X $(PKG).buildDate=$(BUILD_DATE)
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -14,16 +30,35 @@ ui:
 
 .PHONY: run
 run: ui
-	go run . -config $(CONFIG)
+	go run $(CMD) -config $(CONFIG)
+
+# Run without rebuilding the UI (faster for backend-only changes).
+.PHONY: run-go
+run-go:
+	go run $(CMD) -config $(CONFIG)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 .PHONY: build
 build: ui
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o chatbot .
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) $(CMD)
 
 .PHONY: clean
 clean:
-	rm -f chatbot
+	rm -f $(BIN)
 	rm -rf internal/ui/dist
 	rm -rf web/dist
+
+# ── Quality ───────────────────────────────────────────────────────────────────
+
+.PHONY: vet
+vet:
+	go vet ./...
+
+.PHONY: fmt
+fmt:
+	gofmt -w .
+
+.PHONY: tidy
+tidy:
+	go mod tidy
