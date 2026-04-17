@@ -20,7 +20,7 @@ export function buildMarkdownComponents(token: ReturnType<typeof useToken>['toke
             padding: '2px 6px',
             borderRadius: 4,
             fontSize: '0.9em',
-            fontFamily: 'ui-monospace, monospace',
+            fontFamily: token.fontFamilyCode,
           }}
           {...props}
         >

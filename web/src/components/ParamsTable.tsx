@@ -1,8 +1,10 @@
-import { Table, Tag, Typography } from 'antd'
+import { Table, Tag, Typography, theme } from 'antd'
 
 const { Text } = Typography
+const { useToken } = theme
 
 export function ParamsTable({ parameters }: { parameters?: any }) {
+  const { token } = useToken()
   if (!parameters || typeof parameters !== 'object') return null
   const props = parameters.properties
   if (!props || typeof props !== 'object' || Object.keys(props).length === 0) return null
@@ -25,7 +27,7 @@ export function ParamsTable({ parameters }: { parameters?: any }) {
           dataIndex: 'name',
           width: 160,
           render: (name: string, row) => (
-            <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+            <span style={{ fontFamily: token.fontFamilyCode, fontSize: 12 }}>
               {name}
               {row.req && <Tag color="red" style={{ fontSize: 10, marginLeft: 4, padding: '0 4px', lineHeight: '16px' }}>req</Tag>}
             </span>
@@ -35,7 +37,7 @@ export function ParamsTable({ parameters }: { parameters?: any }) {
           title: 'Type',
           dataIndex: 'type',
           width: 70,
-          render: (t: string) => t ? <Tag style={{ fontSize: 10, fontFamily: 'ui-monospace, monospace' }}>{t}</Tag> : null,
+          render: (t: string) => t ? <Tag style={{ fontSize: 10, fontFamily: token.fontFamilyCode }}>{t}</Tag> : null,
         },
         {
           title: 'Description',

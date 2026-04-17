@@ -11,7 +11,6 @@ html,
 body,
 #root {
   height: 100%;
-  font-family: 'Open Sans', system-ui, sans-serif;
 }
 
 /* ── Visually hidden (screen-reader only) ───────────────────────────────── */
@@ -134,7 +133,7 @@ kbd {
   display: inline-block;
   padding: 2px 6px;
   font-size: 12px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--ant-font-family-code, ui-monospace, monospace);
   border: 1px solid var(--ant-color-border, #d9d9d9);
   border-radius: 4px;
   background: var(--ant-color-fill-secondary, #f0f0f0);

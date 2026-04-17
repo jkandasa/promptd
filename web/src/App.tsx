@@ -15,6 +15,7 @@ export default function App() {
           colorPrimary: '#5b21b6',
           borderRadius: 8,
           fontFamily: "'Open Sans', system-ui, sans-serif",
+          fontFamilyCode: "ui-monospace, Menlo, 'Courier New', monospace",
         },
       }}
     >

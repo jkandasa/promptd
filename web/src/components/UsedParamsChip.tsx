@@ -23,8 +23,8 @@ export function UsedParamsChip({ params }: { params: UsedParams }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {entries.map(({ label, value }) => (
           <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-            <Text style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace', color: token.colorTextSecondary }}>{label}</Text>
-            <Text strong style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{value}</Text>
+            <Text style={{ fontSize: 12, fontFamily: token.fontFamilyCode, color: token.colorTextSecondary }}>{label}</Text>
+            <Text strong style={{ fontSize: 12, fontFamily: token.fontFamilyCode }}>{value}</Text>
           </div>
         ))}
       </div>
@@ -40,7 +40,7 @@ export function UsedParamsChip({ params }: { params: UsedParams }) {
           fontSize: 10,
           margin: 0,
           cursor: 'pointer',
-          fontFamily: 'ui-monospace, monospace',
+          fontFamily: token.fontFamilyCode,
           color: token.colorTextSecondary,
           background: token.colorFillAlter,
           border: `1px solid ${token.colorBorderSecondary}`,

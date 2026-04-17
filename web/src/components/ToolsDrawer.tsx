@@ -88,7 +88,7 @@ export function ToolsDrawer({
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <Tag color="blue" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, margin: 0 }}>
+                <Tag color="blue" style={{ fontFamily: token.fontFamilyCode, fontSize: 12, margin: 0 }}>
                   {t.name}
                 </Tag>
                 {hasParams(t) && (
