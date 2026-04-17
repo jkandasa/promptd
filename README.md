@@ -1,6 +1,6 @@
-# Chatbot
+# promptd
 
-A lightweight, extensible LLM chatbot server written in Go with a React frontend. Connects to any OpenAI-compatible API, persists conversation history to disk, and ships with MCP tool support.
+A lightweight, extensible LLM prompt server written in Go with a React frontend. Connects to any OpenAI-compatible API, persists conversation history to disk, and ships with MCP tool support.
 
 ---
 
@@ -30,7 +30,7 @@ A lightweight, extensible LLM chatbot server written in Go with a React frontend
 make ui
 
 # Run the server
-./chatbot -config ./config.yaml
+./promptd -config ./config.yaml
 ```
 
 ### Standalone MCP Search Server
@@ -130,7 +130,7 @@ trace:
 | `mcp.servers[].headers` | No | `{}` | Extra HTTP headers |
 | `mcp.servers[].disabled` | No | `false` | Skip this server |
 | `tools.system_prompts` | Yes | — | Selectable system prompts as `{name, file}`; the first one is selected by default |
-| `ui.app_name` | No | `Chatbot` | App name shown in the header and browser title |
+| `ui.app_name` | No | `promptd` | App name shown in the header and browser title |
 | `ui.app_icon` | No | built-in robot | App icon shown in the header; supports emoji/text or image URL/path |
 | `ui.welcome_title` | No | — | Welcome screen heading |
 | `ui.ai_disclaimer` | No | built-in | Disclaimer text under heading |
@@ -298,7 +298,7 @@ make build
 make ui
 
 # Go binary only (after make ui)
-go build -o chatbot .
+go build -o promptd .
 ```
 
 > The `internal/ui/dist/` directory is gitignored. After cloning, run `make ui` before building the Go binary.

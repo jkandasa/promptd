@@ -1,14 +1,14 @@
-# Server configuration for chatbot
+# Server configuration for promptd
 #
-# Usage: ./chatbot -config ./config.yaml
+# Usage: ./promptd -config ./config.yaml
 
 data:
-  # Root directory for all chatbot data files (default: ./data).
+  # Root directory for all promptd data files (default: ./data).
   # Conversations are stored in <dir>/conversations, uploads in <dir>/uploads.
   # dir: "./data"
 
 server:
-  # HTTP address the chatbot listens on, default: localhost:8080
+  # HTTP address the server listens on, default: localhost:8080
   address: "localhost:8080"
 
 llm:

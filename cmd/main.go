@@ -11,13 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	"chatbot/internal/chat"
-	"chatbot/internal/handler"
-	"chatbot/internal/mcp"
-	"chatbot/internal/storage"
-	"chatbot/internal/tools"
-	"chatbot/internal/ui"
-	"chatbot/internal/version"
+	"promptd/internal/chat"
+	"promptd/internal/handler"
+	"promptd/internal/mcp"
+	"promptd/internal/storage"
+	"promptd/internal/tools"
+	"promptd/internal/ui"
+	"promptd/internal/version"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -424,7 +424,7 @@ func main() {
 		SystemPrompts:     systemPromptInfos,
 	}
 	if uiConfig.AppName == "" {
-		uiConfig.AppName = "Chatbot"
+		uiConfig.AppName = "promptd"
 	}
 	if uiConfig.WelcomeTitle == "" {
 		uiConfig.WelcomeTitle = "How can I help you today?"

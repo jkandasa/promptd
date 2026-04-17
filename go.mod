@@ -1,4 +1,4 @@
-module chatbot
+module promptd
 
 go 1.26
 

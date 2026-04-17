@@ -17,10 +17,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"chatbot/internal/chat"
-	"chatbot/internal/llmlog"
-	"chatbot/internal/storage"
-	"chatbot/internal/tools"
+	"promptd/internal/chat"
+	"promptd/internal/llmlog"
+	"promptd/internal/storage"
+	"promptd/internal/tools"
 
 	openai "github.com/sashabaranov/go-openai"
 	"go.uber.org/zap"

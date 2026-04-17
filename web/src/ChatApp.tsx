@@ -14,41 +14,50 @@ import {
   theme,
 } from 'antd'
 import {
+  ChatError,
+  apiChat,
+  apiDeleteConversation,
+  apiDeleteMessage,
+  apiDeleteMessagesFrom,
+  apiGetModels,
+  apiGetUIConfig,
+  apiListConversations,
+  apiListTools,
+  apiLoadConversation,
+  apiRenameConversation,
+  apiTogglePin,
+  apiUploadFile,
+} from './api/client'
+import type { ConversationMeta, LLMParamsOverride, Message, ToolInfo, UIConfig } from './types/chat'
+import {
   DownOutlined,
   FileOutlined,
   FileTextOutlined,
   GithubOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoonOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
-  ToolOutlined,
-  MoonOutlined,
   SunOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Input } from 'antd'
-import type { TextAreaRef } from 'antd/es/input/TextArea'
-
-import type { Message, UIConfig, ToolInfo, ConversationMeta, LLMParamsOverride } from './types/chat'
+import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, isImageIcon, uid } from './utils/helpers'
+import type { ModelData, ModelInfo } from './api/client'
+import type { Role, UploadedFile } from './types/chat'
 import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from './types/chat'
-import {
-  apiListTools, apiGetUIConfig, apiGetModels, apiChat, apiUploadFile,
-  apiListConversations, apiLoadConversation, apiDeleteConversation,
-  apiRenameConversation, apiTogglePin, apiDeleteMessage, apiDeleteMessagesFrom,
-  ChatError,
-} from './api/client'
-import type { ModelInfo, ModelData } from './api/client'
-import { uid, MAX_FILE_SIZE, MAX_FILES_PER_MESSAGE, MAX_MESSAGE_LENGTH, isImageIcon } from './utils/helpers'
-import type { UploadedFile, Role } from './types/chat'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
 import { Bubble } from './components/Bubble'
-import { TypingIndicator } from './components/TypingIndicator'
-import { ToolsDrawer } from './components/ToolsDrawer'
 import { ConvItem } from './components/ConvItem'
+import { Input } from 'antd'
 import { LLMParamsPopover } from './components/LLMParamsPopover'
+import type { TextAreaRef } from 'antd/es/input/TextArea'
+import { ToolsDrawer } from './components/ToolsDrawer'
+import { TypingIndicator } from './components/TypingIndicator'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -622,7 +631,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
             <Tooltip title="GitHub (opens in new tab)">
               <Button
                 icon={<GithubOutlined />}
-                href="https://github.com/anomalyco/chatbot"
+                href="https://github.com/jkandasa/promptd"
                 target="_blank"
                 rel="noopener noreferrer"
                 type="text"

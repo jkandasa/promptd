@@ -1,8 +1,8 @@
 .env
-chatbot
+promptd
 test.sh
 tmp/
 config.yaml
 internal/ui/dist/
-chatbot_data/
+promptd_data/
 data/

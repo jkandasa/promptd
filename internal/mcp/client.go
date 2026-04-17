@@ -81,7 +81,7 @@ func ConnectMCPAuth(ctx context.Context, url string, auth map[string]string, hea
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "chatbot",
+		Name:    "promptd",
 		Version: "1.0.0",
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}

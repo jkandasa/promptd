@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"chatbot/internal/storage"
+	"promptd/internal/storage"
 
 	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"

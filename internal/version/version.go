@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// Injected at build time via -ldflags "-X chatbot/internal/version.<Var>=...".
+// Injected at build time via -ldflags "-X promptd/internal/version.<Var>=...".
 var (
 	gitCommit string
 	buildDate string

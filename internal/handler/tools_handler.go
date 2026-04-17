@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"chatbot/internal/mcp"
+	"promptd/internal/mcp"
 
 	"go.uber.org/zap"
 )

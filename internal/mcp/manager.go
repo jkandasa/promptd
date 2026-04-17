@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"chatbot/internal/tools"
+	"promptd/internal/tools"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"

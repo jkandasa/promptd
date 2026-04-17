@@ -1,6 +1,6 @@
-# Makefile for chatbot
+# Makefile for promptd
 
-BIN     := chatbot
+BIN     := promptd
 CMD     := ./cmd
 CONFIG  ?= ./config.yaml
 
@@ -12,7 +12,7 @@ VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-PKG        := chatbot/internal/version
+PKG        := promptd/internal/version
 LDFLAGS    := -s -w \
               -X $(PKG).version=$(VERSION) \
               -X $(PKG).gitCommit=$(GIT_COMMIT) \
