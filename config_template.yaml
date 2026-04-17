@@ -82,6 +82,11 @@ mcp:
   # Tool call timeout. Can be overridden per-server. (default: 30s)
   # timeout: 30s
 
+  # How often to re-list tools from each connected MCP server to pick up additions,
+  # removals, or schema changes. 0 (default) disables periodic rediscovery.
+  # Can be overridden per-server. Go duration format: 30s, 5m, 1h, etc.
+  # tool_rediscovery_interval: 0
+
   # List of MCP servers to connect at startup
   servers:
     # HTTP server example:
@@ -97,6 +102,7 @@ mcp:
     #   health_interval: 15s            # Optional: overrides global health_interval
     #   timeout: 30s                    # Optional: overrides global timeout
     #   insecure: false                 # Optional: skip TLS certificate verification
+    #   tool_rediscovery_interval: 5m   # Optional: overrides global tool_rediscovery_interval
 
 tools:
   # Required: at least one selectable system prompt.

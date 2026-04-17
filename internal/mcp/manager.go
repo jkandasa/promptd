@@ -19,36 +19,39 @@ const (
 	defaultHealthTimeout     = 5 * time.Second
 	defaultReconnectInterval = 30 * time.Second
 	defaultCallTimeout       = 30 * time.Second
+	defaultRediscoveryTimeout = 10 * time.Second
 )
 
 // Manager manages multiple MCP server connections and their tools.
 type Manager struct {
-	registry         *tools.Registry
-	log              *zap.Logger
-	servers          map[string]*MCPServer // url -> server
-	mu               sync.RWMutex
-	healthCancel     context.CancelFunc
-	pendingReconnect map[string]pendingInfo // url -> reconnect state
-	reregistering    map[string]bool        // url -> in-progress reconnect guard
-	healthMaxFails   int
-	healthInterval   time.Duration
-	reconnectInterval    time.Duration
+	registry                *tools.Registry
+	log                     *zap.Logger
+	servers                 map[string]*MCPServer // url -> server
+	mu                      sync.RWMutex
+	healthCancel            context.CancelFunc
+	pendingReconnect        map[string]pendingInfo // url -> reconnect state
+	reregistering           map[string]bool        // url -> in-progress reconnect guard
+	healthMaxFails          int
+	healthInterval          time.Duration
+	reconnectInterval       time.Duration
+	toolRediscoveryInterval time.Duration // 0 = disabled
 }
 
 // pendingInfo tracks reconnect state for a server that is not currently connected.
 type pendingInfo struct {
-	auth              map[string]string
-	headers           map[string]string
-	reconnectInterval time.Duration
-	healthMaxFails    int
-	healthInterval    time.Duration
-	timeout           time.Duration
-	insecure          bool
-	nextRetry         time.Time
+	auth                    map[string]string
+	headers                 map[string]string
+	reconnectInterval       time.Duration
+	healthMaxFails          int
+	healthInterval          time.Duration
+	toolRediscoveryInterval time.Duration
+	timeout                 time.Duration
+	insecure                bool
+	nextRetry               time.Time
 }
 
 // NewManager creates a new MCP manager.
-func NewManager(registry *tools.Registry, log *zap.Logger, healthMaxFails int, healthInterval time.Duration, reconnectInterval time.Duration) *Manager {
+func NewManager(registry *tools.Registry, log *zap.Logger, healthMaxFails int, healthInterval time.Duration, reconnectInterval time.Duration, toolRediscoveryInterval time.Duration) *Manager {
 	if healthMaxFails <= 0 {
 		healthMaxFails = defaultHealthMaxFails
 	}
@@ -59,25 +62,27 @@ func NewManager(registry *tools.Registry, log *zap.Logger, healthMaxFails int, h
 		reconnectInterval = defaultReconnectInterval
 	}
 	return &Manager{
-		registry:         registry,
-		log:              log,
-		servers:          make(map[string]*MCPServer),
-		pendingReconnect: make(map[string]pendingInfo),
-		reregistering:    make(map[string]bool),
-		healthMaxFails:   healthMaxFails,
-		healthInterval:   healthInterval,
-		reconnectInterval:    reconnectInterval,
+		registry:                registry,
+		log:                     log,
+		servers:                 make(map[string]*MCPServer),
+		pendingReconnect:        make(map[string]pendingInfo),
+		reregistering:           make(map[string]bool),
+		healthMaxFails:          healthMaxFails,
+		healthInterval:          healthInterval,
+		reconnectInterval:       reconnectInterval,
+		toolRediscoveryInterval: toolRediscoveryInterval,
 	}
 }
 
 // ServerConfig holds per-server overrides passed to Register and QueueRetry.
 // Zero values mean "use the manager global default".
 type ServerConfig struct {
-	ReconnectInterval time.Duration
-	HealthMaxFails    int
-	HealthInterval    time.Duration
-	Timeout           time.Duration
-	Insecure          bool
+	ReconnectInterval       time.Duration
+	HealthMaxFails          int
+	HealthInterval          time.Duration
+	ToolRediscoveryInterval time.Duration
+	Timeout                 time.Duration
+	Insecure                bool
 }
 
 // Register connects to an MCP server, lists its tools, and registers them.
@@ -90,6 +95,9 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultCallTimeout
 	}
+	if cfg.ToolRediscoveryInterval <= 0 {
+		cfg.ToolRediscoveryInterval = m.toolRediscoveryInterval
+	}
 
 	// Connect outside the lock (network call — can be slow).
 	server, err := ConnectMCPAuth(ctx, url, auth, headers, cfg.Insecure)
@@ -99,63 +107,22 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 	server.ReconnectInterval = cfg.ReconnectInterval
 	server.HealthMaxFails = cfg.HealthMaxFails
 	server.HealthInterval = cfg.HealthInterval
+	server.ToolRediscoveryInterval = cfg.ToolRediscoveryInterval
 	server.Timeout = cfg.Timeout
 	server.Insecure = cfg.Insecure
 
 	var registered []string
 	for _, tool := range server.Tools {
-		toolName := tool.Name
-		toolDesc := tool.Description
-
-		schemaBytes, err := json.Marshal(tool.InputSchema)
-		schema := map[string]any{}
-		if err == nil {
-			if jsonErr := json.Unmarshal(schemaBytes, &schema); jsonErr != nil {
-				m.log.Warn("failed to unmarshal tool schema, using empty schema",
-					zap.String("tool", toolName), zap.Error(jsonErr))
-				schema = map[string]any{}
-			}
-		}
-		if len(schema) == 0 {
-			schema = map[string]any{"type": "object"}
-		}
-
-		cName := toolName
-		cClient := server.Client
-		cTimeout := server.Timeout
-
-		execute := func(ctx context.Context, args string) (string, error) {
-			var parsed map[string]any
-			if args != "" {
-				if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-					return "", fmt.Errorf("invalid args for %q: %w", cName, err)
-				}
-			}
-
-			callCtx, cancel := context.WithTimeout(ctx, cTimeout)
-			defer cancel()
-			result, err := CallTool(callCtx, cClient, cName, parsed)
-			if err != nil {
-				return "", err
-			}
-
-			for _, content := range result.Content {
-				if tc, ok := mcp.AsTextContent(content); ok {
-					return tc.Text, nil
-				}
-			}
-			return "", fmt.Errorf("tool %q returned no text content", cName)
-		}
-
-		if err := m.registry.RegisterRaw(toolName, toolDesc, schema, execute); err != nil {
+		name, err := m.registerToolOnServer(server, tool)
+		if err != nil {
 			// Roll back any tools already registered from this server.
 			for _, rn := range registered {
 				m.registry.Remove(rn)
 			}
 			server.Close()
-			return nil, fmt.Errorf("failed to register tool %q: %w", toolName, err)
+			return nil, fmt.Errorf("failed to register tool %q: %w", tool.Name, err)
 		}
-		registered = append(registered, toolName)
+		registered = append(registered, name)
 	}
 
 	// Acquire the lock only to update the server map — after the slow network work is done.
@@ -177,10 +144,148 @@ func (m *Manager) Register(ctx context.Context, url string, auth map[string]stri
 		zap.Strings("tools", registered),
 		zap.Int("health_max_fails", server.HealthMaxFails),
 		zap.Duration("health_interval", server.HealthInterval),
+		zap.Duration("tool_rediscovery_interval", server.ToolRediscoveryInterval),
 		zap.Duration("reconnect_interval", server.ReconnectInterval),
 		zap.Duration("timeout", server.Timeout),
 		zap.Bool("insecure", server.Insecure))
 	return registered, nil
+}
+
+// registerToolOnServer builds and registers one tool from an MCPServer into the registry.
+func (m *Manager) registerToolOnServer(server *MCPServer, tool mcp.Tool) (string, error) {
+	toolName := tool.Name
+	toolDesc := tool.Description
+
+	schemaBytes, err := json.Marshal(tool.InputSchema)
+	schema := map[string]any{}
+	if err == nil {
+		if jsonErr := json.Unmarshal(schemaBytes, &schema); jsonErr != nil {
+			m.log.Warn("failed to unmarshal tool schema, using empty schema",
+				zap.String("tool", toolName), zap.Error(jsonErr))
+			schema = map[string]any{}
+		}
+	}
+	if len(schema) == 0 {
+		schema = map[string]any{"type": "object"}
+	}
+
+	cClient := server.Client
+	cTimeout := server.Timeout
+
+	execute := func(ctx context.Context, args string) (string, error) {
+		var parsed map[string]any
+		if args != "" {
+			if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+				return "", fmt.Errorf("invalid args for %q: %w", toolName, err)
+			}
+		}
+		callCtx, cancel := context.WithTimeout(ctx, cTimeout)
+		defer cancel()
+		result, err := CallTool(callCtx, cClient, toolName, parsed)
+		if err != nil {
+			return "", err
+		}
+		for _, content := range result.Content {
+			if tc, ok := mcp.AsTextContent(content); ok {
+				return tc.Text, nil
+			}
+		}
+		return "", fmt.Errorf("tool %q returned no text content", toolName)
+	}
+
+	if err := m.registry.RegisterRaw(toolName, toolDesc, schema, execute); err != nil {
+		return "", err
+	}
+	return toolName, nil
+}
+
+// toolEqual reports whether two MCP tool definitions are identical (name, description, schema).
+func toolEqual(a, b mcp.Tool) bool {
+	if a.Name != b.Name || a.Description != b.Description {
+		return false
+	}
+	ba, err1 := json.Marshal(a.InputSchema)
+	bb, err2 := json.Marshal(b.InputSchema)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return string(ba) == string(bb)
+}
+
+// rediscoverTools fetches the current tool list from a connected server, diffs it
+// against what is registered, and syncs additions, removals, and updates.
+func (m *Manager) rediscoverTools(ctx context.Context, url string, server *MCPServer) {
+	listCtx, cancel := context.WithTimeout(ctx, defaultRediscoveryTimeout)
+	freshTools, err := ListTools(listCtx, server.Client)
+	cancel()
+	if err != nil {
+		m.log.Warn("tool rediscovery: list tools failed", zap.String("url", url), zap.Error(err))
+		return
+	}
+
+	freshByName := make(map[string]mcp.Tool, len(freshTools))
+	for _, t := range freshTools {
+		freshByName[t.Name] = t
+	}
+
+	// Snapshot the current tool list without holding the lock during network I/O.
+	server.mu.RLock()
+	currentTools := make([]mcp.Tool, len(server.Tools))
+	copy(currentTools, server.Tools)
+	server.mu.RUnlock()
+
+	currentByName := make(map[string]mcp.Tool, len(currentTools))
+	for _, t := range currentTools {
+		currentByName[t.Name] = t
+	}
+
+	var added, removed, updated []string
+
+	// Detect removed or updated tools.
+	for name, old := range currentByName {
+		fresh, stillPresent := freshByName[name]
+		if !stillPresent {
+			m.registry.Remove(name)
+			removed = append(removed, name)
+			continue
+		}
+		if !toolEqual(old, fresh) {
+			m.registry.Remove(name)
+			if _, err := m.registerToolOnServer(server, fresh); err != nil {
+				m.log.Warn("tool rediscovery: failed to re-register updated tool",
+					zap.String("url", url), zap.String("tool", name), zap.Error(err))
+			} else {
+				updated = append(updated, name)
+			}
+		}
+	}
+
+	// Detect newly added tools.
+	for name, fresh := range freshByName {
+		if _, exists := currentByName[name]; !exists {
+			if _, err := m.registerToolOnServer(server, fresh); err != nil {
+				m.log.Warn("tool rediscovery: failed to register new tool",
+					zap.String("url", url), zap.String("tool", name), zap.Error(err))
+			} else {
+				added = append(added, name)
+			}
+		}
+	}
+
+	// Commit the fresh snapshot to the server.
+	server.mu.Lock()
+	server.Tools = freshTools
+	server.mu.Unlock()
+
+	if len(added)+len(removed)+len(updated) > 0 {
+		m.log.Info("tool rediscovery: tools updated",
+			zap.String("url", url),
+			zap.Strings("added", added),
+			zap.Strings("removed", removed),
+			zap.Strings("updated", updated))
+	} else {
+		m.log.Debug("tool rediscovery: no changes", zap.String("url", url))
+	}
 }
 
 // QueueRetry schedules a background reconnect for a server that failed to
@@ -189,18 +294,22 @@ func (m *Manager) QueueRetry(url string, auth map[string]string, headers map[str
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = m.reconnectInterval
 	}
+	if cfg.ToolRediscoveryInterval <= 0 {
+		cfg.ToolRediscoveryInterval = m.toolRediscoveryInterval
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.pendingReconnect[url]; !exists {
 		m.pendingReconnect[url] = pendingInfo{
-			auth:              auth,
-			headers:           headers,
-			reconnectInterval: cfg.ReconnectInterval,
-			healthMaxFails:    cfg.HealthMaxFails,
-			healthInterval:    cfg.HealthInterval,
-			timeout:           cfg.Timeout,
-			insecure:          cfg.Insecure,
-			nextRetry:         time.Now(), // attempt on the next health tick
+			auth:                    auth,
+			headers:                 headers,
+			reconnectInterval:       cfg.ReconnectInterval,
+			healthMaxFails:          cfg.HealthMaxFails,
+			healthInterval:          cfg.HealthInterval,
+			toolRediscoveryInterval: cfg.ToolRediscoveryInterval,
+			timeout:                 cfg.Timeout,
+			insecure:                cfg.Insecure,
+			nextRetry:               time.Now(), // attempt on the next health tick
 		}
 	}
 }
@@ -221,14 +330,15 @@ func (m *Manager) Unregister(url string) error {
 		ri = m.reconnectInterval
 	}
 	m.pendingReconnect[url] = pendingInfo{
-		auth:              server.Auth,
-		headers:           server.Headers,
-		reconnectInterval: ri,
-		healthMaxFails:    server.HealthMaxFails,
-		healthInterval:    server.HealthInterval,
-		timeout:           server.Timeout,
-		insecure:          server.Insecure,
-		nextRetry:         time.Now().Add(ri),
+		auth:                    server.Auth,
+		headers:                 server.Headers,
+		reconnectInterval:       ri,
+		healthMaxFails:          server.HealthMaxFails,
+		healthInterval:          server.HealthInterval,
+		toolRediscoveryInterval: server.ToolRediscoveryInterval,
+		timeout:                 server.Timeout,
+		insecure:                server.Insecure,
+		nextRetry:               time.Now().Add(ri),
 	}
 	m.mu.Unlock()
 
@@ -268,12 +378,13 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 
 	go func() {
 		// The ticker runs at the global interval (the shortest meaningful period).
-		// Per-server intervals are enforced via nextCheck below.
+		// Per-server intervals are enforced via nextCheck / nextRediscovery below.
 		ticker := time.NewTicker(globalInterval)
 		defer ticker.Stop()
 
 		failCounts := make(map[string]int)
 		nextCheck := make(map[string]time.Time) // per-server next health-check time
+		nextRediscovery := make(map[string]time.Time) // per-server next tool-rediscovery time
 		var failMu sync.Mutex
 
 		for {
@@ -340,6 +451,7 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 								zap.String("url", url), zap.Int("fails", failCounts[url]), zap.Int("threshold", smf))
 							delete(failCounts, url)
 							delete(nextCheck, url)
+							delete(nextRediscovery, url)
 							go func(u string) {
 								if err := m.Unregister(u); err != nil {
 									m.log.Error("failed to unregister unhealthy MCP server",
@@ -351,6 +463,23 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 						failCounts[url] = 0
 					}
 					failMu.Unlock()
+				}
+
+				// ── Periodic tool rediscovery ─────────────────────────────────
+				for _, url := range urls {
+					server := servers[url]
+					if server == nil {
+						continue
+					}
+					ri := server.ToolRediscoveryInterval
+					if ri <= 0 {
+						continue // disabled for this server
+					}
+					if t, ok := nextRediscovery[url]; ok && time.Now().Before(t) {
+						continue
+					}
+					nextRediscovery[url] = time.Now().Add(ri)
+					go m.rediscoverTools(healthCtx, url, server)
 				}
 
 				// ── Reconnect pending servers ─────────────────────────────────
@@ -391,11 +520,12 @@ func (m *Manager) StartHealthMonitor(ctx context.Context) {
 						}()
 
 						scfg := ServerConfig{
-							ReconnectInterval: pi.reconnectInterval,
-							HealthMaxFails:    pi.healthMaxFails,
-							HealthInterval:    pi.healthInterval,
-							Timeout:           pi.timeout,
-							Insecure:          pi.insecure,
+							ReconnectInterval:       pi.reconnectInterval,
+							HealthMaxFails:          pi.healthMaxFails,
+							HealthInterval:          pi.healthInterval,
+							ToolRediscoveryInterval: pi.toolRediscoveryInterval,
+							Timeout:                 pi.timeout,
+							Insecure:                pi.insecure,
 						}
 						_, err := m.Register(healthCtx, u, pi.auth, pi.headers, scfg)
 						if err != nil {

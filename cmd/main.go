@@ -147,11 +147,12 @@ type Config struct {
 		Level string `yaml:"level"`
 	} `yaml:"log"`
 	MCP struct {
-		HealthMaxFailures int               `yaml:"health_max_failures"`
-		HealthInterval    time.Duration     `yaml:"health_interval"`
-		ReconnectInterval Duration          `yaml:"reconnect_interval"`
-		Timeout           Duration          `yaml:"timeout"`
-		Servers           []MCPServerConfig `yaml:"servers"`
+		HealthMaxFailures       int               `yaml:"health_max_failures"`
+		HealthInterval          time.Duration     `yaml:"health_interval"`
+		ReconnectInterval       Duration          `yaml:"reconnect_interval"`
+		Timeout                 Duration          `yaml:"timeout"`
+		ToolRediscoveryInterval Duration          `yaml:"tool_rediscovery_interval"`
+		Servers                 []MCPServerConfig `yaml:"servers"`
 	} `yaml:"mcp"`
 	Tools struct {
 		SystemPrompts []SystemPromptConfig `yaml:"system_prompts"`
@@ -206,16 +207,17 @@ func loadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []ha
 }
 
 type MCPServerConfig struct {
-	Name              string            `yaml:"name"`
-	URL               string            `yaml:"url"`
-	Auth              map[string]string `yaml:"auth"`
-	Headers           map[string]string `yaml:"headers"`
-	Disabled          bool              `yaml:"disabled"`
-	ReconnectInterval Duration          `yaml:"reconnect_interval"`
-	HealthMaxFails    int               `yaml:"health_max_failures"`
-	HealthInterval    Duration          `yaml:"health_interval"`
-	Timeout           Duration          `yaml:"timeout"`
-	Insecure          bool              `yaml:"insecure"`
+	Name                    string            `yaml:"name"`
+	URL                     string            `yaml:"url"`
+	Auth                    map[string]string `yaml:"auth"`
+	Headers                 map[string]string `yaml:"headers"`
+	Disabled                bool              `yaml:"disabled"`
+	ReconnectInterval       Duration          `yaml:"reconnect_interval"`
+	HealthMaxFails          int               `yaml:"health_max_failures"`
+	HealthInterval          Duration          `yaml:"health_interval"`
+	ToolRediscoveryInterval Duration          `yaml:"tool_rediscovery_interval"`
+	Timeout                 Duration          `yaml:"timeout"`
+	Insecure                bool              `yaml:"insecure"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -370,7 +372,7 @@ func main() {
 
 	registry := buildRegistry(logger)
 
-	mcpManager := mcp.NewManager(registry, logger, cfg.MCP.HealthMaxFailures, cfg.MCP.HealthInterval, cfg.MCP.ReconnectInterval.AsDuration())
+	mcpManager := mcp.NewManager(registry, logger, cfg.MCP.HealthMaxFailures, cfg.MCP.HealthInterval, cfg.MCP.ReconnectInterval.AsDuration(), cfg.MCP.ToolRediscoveryInterval.AsDuration())
 
 	for _, sc := range cfg.MCP.Servers {
 		if sc.Disabled {
@@ -386,11 +388,12 @@ func main() {
 			to = cfg.MCP.Timeout.AsDuration()
 		}
 		scfg := mcp.ServerConfig{
-			ReconnectInterval: ri,
-			HealthMaxFails:    sc.HealthMaxFails,
-			HealthInterval:    sc.HealthInterval.AsDuration(),
-			Timeout:           to,
-			Insecure:          sc.Insecure,
+			ReconnectInterval:       ri,
+			HealthMaxFails:          sc.HealthMaxFails,
+			HealthInterval:          sc.HealthInterval.AsDuration(),
+			ToolRediscoveryInterval: sc.ToolRediscoveryInterval.AsDuration(),
+			Timeout:                 to,
+			Insecure:                sc.Insecure,
 		}
 		_, err := mcpManager.Register(ctx, sc.URL, sc.Auth, sc.Headers, scfg)
 		if err != nil {

@@ -15,17 +15,18 @@ import (
 
 // MCPServer represents a single connected MCP server.
 type MCPServer struct {
-	URL               string
-	Client            *client.Client
-	Tools             []mcp.Tool
-	Auth              map[string]string
-	Headers           map[string]string
-	ReconnectInterval time.Duration
-	HealthMaxFails    int
-	HealthInterval    time.Duration
-	Timeout           time.Duration
-	Insecure          bool
-	mu                sync.RWMutex
+	URL                    string
+	Client                 *client.Client
+	Tools                  []mcp.Tool
+	Auth                   map[string]string
+	Headers                map[string]string
+	ReconnectInterval      time.Duration
+	HealthMaxFails         int
+	HealthInterval         time.Duration
+	ToolRediscoveryInterval time.Duration
+	Timeout                time.Duration
+	Insecure               bool
+	mu                     sync.RWMutex
 }
 
 // ToolNames returns the names of all tools from this server.
