@@ -1,4 +1,4 @@
-import { Button, Collapse, Drawer, Tag, Tooltip, Typography, theme } from 'antd'
+import { Button, Collapse, Drawer, Empty, Input, Tag, Tooltip, Typography, theme } from 'antd'
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -354,6 +354,86 @@ function TokenBar({ usage }: { usage: NonNullable<LLMRound['usage']> }) {
   )
 }
 
+// ── AvailableToolsList ────────────────────────────────────────────────────
+type ToolDef = { name: string; description: string; parameters?: any }
+
+function AvailableToolsList({ tools }: { tools: ToolDef[] }) {
+  const { token } = useToken()
+  const [search, setSearch] = useState('')
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? tools.filter(t => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+    : tools
+
+  const paramCount = (t: ToolDef) => {
+    const props = t.parameters?.properties
+    return props && typeof props === 'object' ? Object.keys(props).length : 0
+  }
+
+  return (
+    <div>
+      {tools.length > 5 && (
+        <Input.Search
+          placeholder="Filter tools…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          allowClear
+          size="small"
+          style={{ marginBottom: 8 }}
+        />
+      )}
+      {filtered.length === 0 ? (
+        <Empty description="No matching tools" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '12px 0' }} />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {filtered.map((tool, i) => {
+            const pc = paramCount(tool)
+            return (
+              <div
+                key={tool.name ?? i}
+                style={{
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 8,
+                  padding: '10px 14px',
+                  background: token.colorBgContainer,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: tool.description ? 4 : 0 }}>
+                  <Tag color="blue" style={{ fontFamily: token.fontFamilyCode, fontSize: 12, margin: 0 }}>
+                    {tool.name}
+                  </Tag>
+                  {pc > 0 && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {pc} param{pc === 1 ? '' : 's'}
+                    </Text>
+                  )}
+                </div>
+                {tool.description && (
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', lineHeight: 1.5 }}>
+                    {tool.description}
+                  </Text>
+                )}
+                {pc > 0 && (
+                  <Collapse
+                    size="small"
+                    ghost
+                    style={{ marginTop: 6 }}
+                    items={[{
+                      key: 'params',
+                      label: <Text style={{ fontSize: 12 }}>Parameters</Text>,
+                      children: <ParamsTable parameters={tool.parameters} />,
+                    }]}
+                  />
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── TraceDrawer ───────────────────────────────────────────────────────────
 export function TraceDrawer({ open, onClose, rounds }: {
   open: boolean
@@ -430,29 +510,7 @@ export function TraceDrawer({ open, onClose, rounds }: {
                   <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
                 </Text>
               ),
-              children: (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {round.available_tools.map((tool, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        borderRadius: 6,
-                        padding: '8px 10px',
-                        background: token.colorFillAlter,
-                      }}
-                    >
-                      <Text strong style={{ fontSize: 12, fontFamily: token.fontFamilyCode }}>{tool.name}</Text>
-                      {tool.description && (
-                        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.5 }}>
-                          {tool.description}
-                        </Text>
-                      )}
-                      {tool.parameters && <ParamsTable parameters={tool.parameters} />}
-                    </div>
-                  ))}
-                </div>
-              ),
+              children: <AvailableToolsList tools={round.available_tools} />,
             }] : []),
             // ── Messages sent ──
             {
