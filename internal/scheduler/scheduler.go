@@ -131,7 +131,7 @@ func (s *Scheduler) Trigger(ctx context.Context, id string) error {
 	if _, err := s.store.LoadSchedule(id); err != nil {
 		return err
 	}
-	go s.execute(s.ctx, id)
+	go s.execute(s.ctx, id, true)
 	return nil
 }
 
@@ -142,7 +142,7 @@ func (s *Scheduler) schedule(sc *Schedule) error {
 	switch sc.Type {
 	case ScheduleTypeCron:
 		entryID, err := s.cron.AddFunc(sc.CronExpr, func() {
-			s.execute(s.ctx, sc.ID)
+			s.execute(s.ctx, sc.ID, false)
 		})
 		if err != nil {
 			return fmt.Errorf("invalid cron expression %q: %w", sc.CronExpr, err)
@@ -160,7 +160,7 @@ func (s *Scheduler) schedule(sc *Schedule) error {
 			return nil // already past — skip silently
 		}
 		t := time.AfterFunc(delay, func() {
-			s.execute(s.ctx, sc.ID)
+			s.execute(s.ctx, sc.ID, false)
 		})
 		s.mu.Lock()
 		s.timers[sc.ID] = t
@@ -185,7 +185,8 @@ func (s *Scheduler) unschedule(id string) {
 
 // execute runs a single schedule. It is concurrency-safe: concurrent invocations
 // for the same schedule are skipped (the previous run takes precedence).
-func (s *Scheduler) execute(ctx context.Context, scheduleID string) {
+// Manual triggers bypass the Enabled guard so "Run now" works for disabled schedules.
+func (s *Scheduler) execute(ctx context.Context, scheduleID string, manual bool) {
 	// Guard against concurrent runs of the same schedule.
 	s.mu.Lock()
 	if s.running[scheduleID] {
@@ -206,7 +207,7 @@ func (s *Scheduler) execute(ctx context.Context, scheduleID string) {
 		s.log.Error("execute: load schedule failed", zap.String("id", scheduleID), zap.Error(err))
 		return
 	}
-	if !sc.Enabled {
+	if !manual && !sc.Enabled {
 		return
 	}
 

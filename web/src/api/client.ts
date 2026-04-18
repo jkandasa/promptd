@@ -19,10 +19,12 @@ export type ChatResponse = {
 
 export class ChatError extends Error {
   model?: string
-  constructor(message: string, model?: string) {
+  provider?: string
+  constructor(message: string, model?: string, provider?: string) {
     super(message)
     this.name = 'ChatError'
     this.model = model
+    this.provider = provider
   }
 }
 
@@ -77,8 +79,11 @@ export async function apiGetUIConfig(): Promise<UIConfig> {
   return res.json()
 }
 
-export async function apiGetModels(provider?: string): Promise<ModelData> {
-  const url = provider ? `/models?provider=${encodeURIComponent(provider)}` : '/models'
+export async function apiGetModels(provider?: string, discover = false): Promise<ModelData> {
+  const params = new URLSearchParams()
+  if (provider) params.set('provider', provider)
+  if (discover) params.set('discover', 'true')
+  const url = params.size > 0 ? `/models?${params.toString()}` : '/models'
   const res = await fetch(url)
   if (!res.ok) return { models: [], selection_method: 'auto', count: 0 }
   return res.json()
@@ -99,7 +104,7 @@ export async function apiChat(
     body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
   })
   const data = await res.json()
-  if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model)
+  if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model, data.provider)
   return data as ChatResponse
 }
 

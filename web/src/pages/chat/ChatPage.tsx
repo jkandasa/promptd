@@ -18,6 +18,7 @@ import {
   apiDeleteConversation,
   apiDeleteMessage,
   apiDeleteMessagesFrom,
+  apiGetModels,
   apiListConversations,
   apiLoadConversation,
   apiRenameConversation,
@@ -61,7 +62,7 @@ interface ChatPageProps {
   isDark: boolean
   siderCollapsed: boolean
   setSiderCollapsed: (collapsed: boolean) => void
-  onRefreshModels: () => Promise<void>
+  onRefreshModels: (provider?: string) => Promise<void>
 }
 
 export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, setSiderCollapsed, onRefreshModels }: ChatPageProps) {
@@ -80,8 +81,10 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
-  const [selectedModel, setSelectedModel] = useState<string>('auto')
+  const [selectedModel, setSelectedModel] = useState<string>('')
   const [selectedProvider, setSelectedProvider] = useState<string>('')
+  const [providerModels, setProviderModels] = useState<ModelInfo[]>([])
+  const [loadingProviderModels, setLoadingProviderModels] = useState(false)
   const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>('')
   const [llmParams, setLlmParams] = useState<LLMParamsOverride>({})
   const llmParamsRef = useRef<LLMParamsOverride>({})
@@ -145,7 +148,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     const nextPrompt = getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [uiConfig.systemPrompts])
+  }, [uiConfig])
 
   const handleLoadConversation = useCallback(async (id: string, silent = false) => {
     const detail = await apiLoadConversation(id)
@@ -175,7 +178,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       }))
     setMessages(uiMsgs)
     const nextProvider = detail.provider || ''
-    const nextModel = detail.model || 'auto'
+    const nextModel = nextProvider ? detail.model || '' : ''
     if (detail.params && Object.keys(detail.params).length > 0) {
       pendingParamsRef.current = detail.params
     } else {
@@ -190,7 +193,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       : getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [antMessage, uiConfig.systemPrompts])
+  }, [antMessage, uiConfig])
 
   useEffect(() => {
     void handleLoadConversation(sessionId, true)
@@ -242,12 +245,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       if (gp.top_p != null)       globalDefaults.top_p       = gp.top_p
       if (gp.top_k)               globalDefaults.top_k       = gp.top_k
     }
-    if (selectedModel === 'auto') {
+    if (!selectedModel) {
       setLlmParams(globalDefaults)
       llmParamsRef.current = globalDefaults
       return
     }
-    const m = models.find((m) => m.id === selectedModel)
+    const candidateModels = selectedProvider ? providerModels : []
+    const m = candidateModels.find((m) => m.id === selectedModel)
     const p: LLMParamsOverride = { ...globalDefaults }
     if (m?.params) {
       if (m.params.temperature != null) p.temperature = m.params.temperature
@@ -257,7 +261,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     }
     setLlmParams(p)
     llmParamsRef.current = p
-  }, [selectedModel, models, modelData.global_params])
+  }, [selectedModel, selectedProvider, providerModels, modelData.global_params])
 
   const selectedSystemPromptRef = useRef(selectedSystemPrompt)
   useEffect(() => { selectedSystemPromptRef.current = selectedSystemPrompt }, [selectedSystemPrompt])
@@ -286,7 +290,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     try {
       const fileUrls = files.map((f) => f.url)
       const modelId = selectedModelRef.current
-      const modelToSend = modelId === 'auto' ? undefined : modelId
+      const modelToSend = modelId || undefined
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
       const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend, llmParamsRef.current, selectedProviderRef.current || undefined)
       if (response.user_msg_id) {
@@ -311,7 +315,9 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       refreshConversations()
     } catch (err) {
       const serverModel = err instanceof ChatError ? err.model : undefined
+      const serverProvider = err instanceof ChatError ? err.provider : undefined
       const requestedModel = selectedModelRef.current
+      const requestedProvider = selectedProviderRef.current
       const errorModel = serverModel || requestedModel || 'unknown'
       const errMsg: Message = {
         id: uid(),
@@ -319,6 +325,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
         content: err instanceof Error ? err.message : 'Something went wrong',
         ts: new Date(),
         model: errorModel,
+        provider: serverProvider || requestedProvider || undefined,
       }
       setMessages((prev) => [...prev, errMsg])
     } finally {
@@ -373,19 +380,87 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  const refreshCurrentProviderModels = useCallback(async () => {
+    await onRefreshModels(selectedProvider || undefined)
+    if (!selectedProvider) return
+    const data = await apiGetModels(selectedProvider)
+    const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
+    setProviderModels(tagged)
+  }, [onRefreshModels, selectedProvider])
+
   const isMultiProvider = (modelData.providers?.length ?? 0) > 1
 
-  const filteredModels = useMemo(() =>
-    selectedProvider ? models.filter(m => m.provider === selectedProvider) : models,
-    [models, selectedProvider]
-  )
+  useEffect(() => {
+    if (!selectedProvider) {
+      setProviderModels([])
+      setLoadingProviderModels(false)
+      return
+    }
+
+    let cancelled = false
+    setLoadingProviderModels(true)
+    void apiGetModels(selectedProvider).then((data) => {
+      if (cancelled) return
+      const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
+      setProviderModels(tagged)
+    }).catch(() => {
+      if (cancelled) return
+      setProviderModels([])
+    }).finally(() => {
+      if (!cancelled) setLoadingProviderModels(false)
+    })
+
+    return () => { cancelled = true }
+  }, [selectedProvider])
+
+  const availableModels = useMemo(() => selectedProvider ? providerModels : [], [providerModels, selectedProvider])
+
+  const filterSelectOption = (input: string, option?: { label?: unknown; value?: unknown; data?: { searchText?: string } }) => {
+    if (!input) return true
+    const haystack = option?.data?.searchText ?? `${option?.label ?? ''} ${option?.value ?? ''}`
+    return String(haystack).toLowerCase().includes(input.toLowerCase())
+  }
+
+  const providerOptions = useMemo(() => [
+    { label: 'Auto', value: '', searchText: 'auto server default all providers' },
+    ...(modelData.providers?.map(p => ({ label: p.name, value: p.name, searchText: `${p.name} provider` })) ?? []),
+  ], [modelData.providers])
 
   const modelOptions = useMemo(() => [
-    { label: 'Auto', value: 'auto', source: 'static' as const, is_manual: false, params: undefined as ModelInfo['params'], provider: undefined as string | undefined },
-    ...[...filteredModels]
+    {
+      label: 'Auto',
+      value: '',
+      source: 'static' as const,
+      is_manual: false,
+      params: undefined,
+      provider: undefined,
+      searchText: 'auto server default default model',
+    },
+    ...[...availableModels]
       .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-      .map((m) => ({ label: m.name || m.id, value: m.id, source: m.source ?? 'static' as const, is_manual: m.is_manual ?? false, params: m.params, provider: m.provider })),
-  ], [filteredModels])
+      .map((m) => ({
+        label: m.name || m.id,
+        value: m.id,
+        source: m.source ?? 'static' as const,
+        is_manual: m.is_manual ?? false,
+        params: m.params,
+        provider: m.provider,
+        searchText: `${m.name || m.id} ${m.id} ${m.provider ?? ''}`,
+      })),
+  ], [availableModels])
+
+  useEffect(() => {
+    if (!selectedProvider) {
+      if (!selectedModel) return
+      setSelectedModel('')
+      selectedModelRef.current = ''
+      return
+    }
+    if (!selectedModel) return
+    if (availableModels.some((m) => m.id === selectedModel)) return
+    setSelectedModel('')
+    selectedModelRef.current = ''
+  }, [availableModels, selectedModel, selectedProvider])
 
   const configDefaults = useMemo<LLMParamsOverride>(() => {
     const gp = modelData.global_params
@@ -396,8 +471,8 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       if (gp.top_p != null)       d.top_p       = gp.top_p
       if (gp.top_k)               d.top_k       = gp.top_k
     }
-    if (selectedModel !== 'auto') {
-      const m = models.find((m) => m.id === selectedModel)
+    if (selectedModel) {
+      const m = availableModels.find((m) => m.id === selectedModel)
       if (m?.params) {
         if (m.params.temperature != null) d.temperature = m.params.temperature
         if (m.params.max_tokens)          d.max_tokens  = m.params.max_tokens
@@ -406,14 +481,14 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       }
     }
     return d
-  }, [selectedModel, models, modelData.global_params])
+  }, [selectedModel, availableModels, modelData.global_params])
 
   const systemPromptOptions = useMemo(() => [
     ...getSortedSystemPrompts(uiConfig).map((prompt) => ({
       label: prompt.name,
       value: prompt.name,
     })),
-  ], [uiConfig.systemPrompts])
+  ], [uiConfig])
 
   const charCount = input.length
   const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
@@ -637,11 +712,8 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       options={systemPromptOptions}
                       disabled={loading}
                       variant="borderless"
-                      popupMatchSelectWidth={false}
                       placement="topLeft"
-                      showSearch={{ filterOption: (input, opt) =>
-                        !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                      }}
+                      showSearch={{ filterOption: filterSelectOption }}
                       labelRender={(opt) => (
                         <span className="model-label">
                           <FileTextOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
@@ -657,20 +729,17 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       onChange={(v: string) => {
                         setSelectedProvider(v)
                         selectedProviderRef.current = v
-                        setSelectedModel('auto')
-                        selectedModelRef.current = 'auto'
+                        setSelectedModel('')
+                        selectedModelRef.current = ''
                       }}
                       size="small"
                       aria-label="Select provider"
                       variant="borderless"
-                      popupMatchSelectWidth={false}
+                      showSearch={{ filterOption: filterSelectOption }}
                       placement="topLeft"
-                      options={[
-                        { label: 'Auto', value: '' },
-                        ...(modelData.providers?.map(p => ({ label: p.name, value: p.name })) ?? []),
-                      ]}
+                      options={providerOptions}
                       disabled={loading}
-                      style={{ flex: '0 0 auto', minWidth: 0 }}
+                      style={{ flex: '0 0 168px', width: 168 }}
                     />
                   )}
                   {models.length > 0 && (
@@ -680,29 +749,23 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         : `Static — ${modelData.count} model${modelData.count !== 1 ? 's' : ''} from config`
                     }>
                       <Select
+                        key={`chat-model-${selectedProvider || 'auto'}`}
                         value={selectedModel}
                         onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
                         size="small"
                         aria-label="Select AI model"
                         options={modelOptions}
-                        disabled={loading}
+                        disabled={loading || !selectedProvider || loadingProviderModels}
                         variant="borderless"
-                        popupMatchSelectWidth={false}
+                        showSearch={{ filterOption: filterSelectOption }}
                         placement="topLeft"
-                        showSearch={{ filterOption: (input, opt) => {
-                          if (!input) return true
-                          const q = input.toLowerCase()
-                          const label = String(opt?.label ?? '').toLowerCase()
-                          const value = String(opt?.value ?? '').toLowerCase()
-                          return label.includes(q) || value.includes(q)
-                        } }}
                         labelRender={(opt) => (
                           <span className="model-label">
                             <RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
-                            {modelData.source === 'discovered' && (
-                              <span className="pill" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>DISC</span>
-                            )}
-                            <span>{opt.label}</span>
+                             {opt.value !== '' && modelData.source === 'discovered' && (
+                               <span className="pill" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>DISC</span>
+                             )}
+                             <span>{opt.label}</span>
                           </span>
                         )}
                         optionRender={(opt) => {
@@ -717,8 +780,8 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                             <div className="model-option">
                               <div className="model-option-left">
                                 <span className="model-option-name">{opt.label}</span>
-                                {opt.value !== 'auto' && (
-                                  <span className="model-option-sub" style={{ color: token.colorTextTertiary }}>
+                                {opt.value !== '' && (
+                                    <span className="model-option-sub" style={{ color: token.colorTextTertiary }}>
                                     {isMultiProvider && !selectedProvider && (opt.data.provider as string | undefined) && (
                                       <span className="provider-label" style={{ color: token.colorTextSecondary }}>
                                         {opt.data.provider as string} ·
@@ -742,7 +805,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                                   <Tooltip title="Auto-discovered from provider">
                                     <span className="pill-md" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>disc</span>
                                   </Tooltip>
-                                ) : opt.value !== 'auto' ? (
+                                ) : opt.value !== '' ? (
                                   <Tooltip title="Configured in server config">
                                     <span className="pill-cfg" style={{ background: token.colorFillSecondary, color: token.colorTextTertiary }}>cfg</span>
                                   </Tooltip>
@@ -761,8 +824,8 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         type="text"
                         size="small"
                         icon={<ReloadOutlined />}
-                        onClick={onRefreshModels}
-                        disabled={loading}
+                        onClick={() => { void refreshCurrentProviderModels() }}
+                        disabled={loading || loadingProviderModels}
                         style={{ height: 28, width: 28, padding: 0, color: token.colorTextSecondary, flexShrink: 0 }}
                       />
                     </Tooltip>

@@ -101,10 +101,12 @@ export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
     fetchTools()
   }, [fetchTools])
 
-  const handleRefreshModels = useCallback(async () => {
-    const data = await apiGetModels()
+  const handleRefreshModels = useCallback(async (provider?: string) => {
+    const data = await apiGetModels(provider, true)
     const tagged = data.models.map((m) => ({ ...m, source: (data.source ?? 'static') as 'static' | 'discovered' }))
-    setModels(tagged)
+    if (!provider) {
+      setModels(tagged)
+    }
     setModelData({ source: data.source, count: data.count, updated_at: data.updated_at, refresh_interval: data.refresh_interval, global_params: data.global_params, providers: data.providers })
   }, [])
 

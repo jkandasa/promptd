@@ -395,8 +395,9 @@ type chatResponse struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
-	Model string `json:"model,omitempty"`
+	Error    string `json:"error"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMessage {
@@ -723,7 +724,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Provider, req.Params)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model})
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model, Provider: providerUsed})
 		return
 	}
 
@@ -791,14 +792,19 @@ func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
+	providerFilter := r.URL.Query().Get("provider")
 	discover := r.URL.Query().Get("discover") == "true"
 	if discover {
 		h.providers.mu.RLock()
 		var autoDiscoverNames []string
 		for _, e := range h.providers.providers {
-			if e.AutoDiscover {
-				autoDiscoverNames = append(autoDiscoverNames, e.Name)
+			if !e.AutoDiscover {
+				continue
 			}
+			if providerFilter != "" && e.Name != providerFilter {
+				continue
+			}
+			autoDiscoverNames = append(autoDiscoverNames, e.Name)
 		}
 		h.providers.mu.RUnlock()
 		for _, name := range autoDiscoverNames {
@@ -809,7 +815,6 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	providerFilter := r.URL.Query().Get("provider")
 	var models []ModelInfo
 	if providerFilter != "" {
 		models = h.providers.ModelsByProvider(providerFilter)
@@ -857,24 +862,25 @@ func (h *Handler) DiscoverAndUpdateModels(ctx context.Context, providerName stri
 	}
 
 	staticByID := make(map[string]ModelInfo, len(entry.StaticModels))
+	infos := make([]ModelInfo, 0, len(entry.StaticModels)+len(resp.Models))
 	for _, m := range entry.StaticModels {
 		staticByID[m.ID] = m
+		infos = append(infos, m)
 	}
-	matchedStatic := make(map[string]bool, len(entry.StaticModels))
-
-	var infos []ModelInfo
+	seen := make(map[string]bool, len(entry.StaticModels)+len(resp.Models))
+	for _, m := range infos {
+		seen[m.ID] = true
+	}
 	for _, md := range resp.Models {
+		if seen[md.ID] {
+			continue
+		}
 		if sm, ok2 := staticByID[md.ID]; ok2 {
 			infos = append(infos, sm)
-			matchedStatic[md.ID] = true
 		} else {
 			infos = append(infos, ModelInfo{ID: md.ID, Provider: providerName, Params: entry.GlobalParams})
 		}
-	}
-	for _, sm := range entry.StaticModels {
-		if !matchedStatic[sm.ID] {
-			infos = append(infos, sm)
-		}
+		seen[md.ID] = true
 	}
 
 	entry.ModelSelector.UpdateModels(infos)

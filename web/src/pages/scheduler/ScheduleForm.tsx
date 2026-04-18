@@ -17,6 +17,7 @@ import {
   theme,
 } from 'antd'
 import dayjs from 'dayjs'
+import { apiGetModels } from '../../api/client'
 import type { Schedule, ScheduleType } from '../../types/scheduler'
 import type { ModelInfo } from '../../api/client'
 import type { ToolInfo, UIConfig } from '../../types/chat'
@@ -121,6 +122,8 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
   const [activeTab, setActiveTab]     = React.useState('schedule')
   const [tabErrors, setTabErrors]     = React.useState<Record<string, number>>({})
   const [providerFilter, setProviderFilter] = React.useState<string>('')
+  const [providerModels, setProviderModels] = React.useState<ModelInfo[]>([])
+  const [loadingProviderModels, setLoadingProviderModels] = React.useState(false)
   const schedType: ScheduleType       = Form.useWatch('type', form) ?? 'cron'
 
   const providerNames = useMemo(() =>
@@ -129,10 +132,35 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
   )
   const isMultiProvider = providerNames.length > 1
 
-  const filteredModels = useMemo(() =>
-    providerFilter ? models.filter(m => m.provider === providerFilter) : models,
-    [models, providerFilter]
-  )
+  React.useEffect(() => {
+    const selectedModel = form.getFieldValue('modelId') as string | undefined
+    if (!selectedModel) return
+    if (providerFilter && providerModels.some((m) => m.id === selectedModel)) return
+    form.setFieldValue('modelId', '')
+  }, [providerFilter, providerModels, form])
+
+  React.useEffect(() => {
+    if (!open || !providerFilter) {
+      setProviderModels([])
+      setLoadingProviderModels(false)
+      return
+    }
+
+    let cancelled = false
+    setLoadingProviderModels(true)
+    void apiGetModels(providerFilter).then((data) => {
+      if (cancelled) return
+      const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
+      setProviderModels(tagged)
+    }).catch(() => {
+      if (cancelled) return
+      setProviderModels([])
+    }).finally(() => {
+      if (!cancelled) setLoadingProviderModels(false)
+    })
+
+    return () => { cancelled = true }
+  }, [open, providerFilter])
 
   React.useEffect(() => {
     if (open) {
@@ -145,7 +173,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
         type:          initial?.type ?? 'cron',
         cronExpr:      initial?.cronExpr ?? '0 0 * * * *',
         runAt:         initial?.runAt ? dayjs(initial.runAt) : null,
-        modelId:       initial?.modelId ?? undefined,
+         modelId:       initial?.provider ? initial?.modelId ?? '' : '',
         systemPrompt:  initial?.systemPrompt ?? undefined,
         allowedTools:  initial?.allowedTools ?? undefined,
         params:        initial?.params ?? {},
@@ -193,9 +221,11 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
       }
       await onSubmit(payload)
       form.resetFields()
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Show which tabs have validation errors
-      if (e?.errorFields) computeTabErrors(e.errorFields)
+      if (typeof e === 'object' && e && 'errorFields' in e) {
+        computeTabErrors((e as { errorFields: { name: (string | number)[] }[] }).errorFields)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -336,37 +366,46 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
           <div className="tab-section" style={{ display: activeTab === 'model' ? 'block' : 'none' }}>
             {isMultiProvider && (
               <Form.Item label="Provider" extra="Auto = server picks provider based on selection method">
-                <Select
-                  value={providerFilter}
-                  onChange={(v: string) => {
-                    setProviderFilter(v)
-                    if (v) {
-                      // Switching to a specific provider → always reset model to server default
-                      form.setFieldValue('modelId', undefined)
-                    }
-                  }}
+                 <Select
+                   value={providerFilter}
+                   onChange={(v: string) => {
+                     setProviderFilter(v)
+                     // Reset selection and any internal search/filter state tied to the model list.
+                     form.setFieldValue('modelId', '')
+                   }}
+                  showSearch={{ filterOption: (input, opt) => {
+                    if (!input) return true
+                    const q = input.toLowerCase()
+                    return String(opt?.label ?? '').toLowerCase().includes(q) || String(opt?.value ?? '').toLowerCase().includes(q)
+                  } }}
+                  placeholder="Auto"
                   options={[
-                    { label: 'Auto (server default)', value: '' },
+                    { label: 'Auto', value: '' },
                     ...providerNames.map(p => ({ label: p, value: p })),
                   ]}
                 />
               </Form.Item>
             )}
             <div className="two-col">
-              <Form.Item name="modelId" label="Model" extra="Blank = server default">
+              <Form.Item name="modelId" label="Model" extra={providerFilter ? 'Choose a model for the selected provider' : 'Auto provider keeps model on Auto'}>
                 <Select
-                  allowClear
+                  key={`schedule-model-${providerFilter || 'auto'}`}
                   showSearch={{ filterOption: (input, opt) =>
                     !input ||
                     String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
                     String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
                   }}
-                  placeholder="Default model"
-                  options={[...filteredModels]
-                    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-                    .map(m => ({ value: m.id, label: m.name || m.id, provider: m.provider }))}
+                  placeholder="Auto"
+                  disabled={!providerFilter || loadingProviderModels}
+                  options={[
+                    { value: '', label: 'Auto' },
+                    ...[...providerModels]
+                      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+                      .map(m => ({ value: m.id, label: m.name || m.id, provider: m.provider })),
+                  ]}
                   optionRender={opt => {
-                    const providerName = (opt.data as any).provider as string | undefined
+                    const { provider } = opt.data as { provider?: string }
+                    const providerName = provider
                     const subtitle = isMultiProvider && !providerFilter && providerName
                       ? `${providerName} · ${opt.value as string}`
                       : String(opt.value) !== String(opt.label) ? opt.value as string : ''
