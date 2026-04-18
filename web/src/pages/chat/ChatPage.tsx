@@ -1,7 +1,6 @@
 import {
   App as AntApp,
   Avatar,
-  Badge,
   Button,
   Divider,
   Empty,
@@ -19,57 +18,53 @@ import {
   apiDeleteConversation,
   apiDeleteMessage,
   apiDeleteMessagesFrom,
-  apiGetModels,
-  apiGetUIConfig,
   apiListConversations,
-  apiListTools,
   apiLoadConversation,
   apiRenameConversation,
   apiTogglePin,
   apiUploadFile,
-} from './api/client'
-import type { ConversationMeta, LLMParamsOverride, Message, ToolInfo, UIConfig } from './types/chat'
+} from '../../api/client'
+import type { ConversationMeta, LLMParamsOverride, Message, UIConfig } from '../../types/chat'
 import {
   DownOutlined,
   FileOutlined,
   FileTextOutlined,
-  GithubOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  MoonOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
-  SunOutlined,
-  ToolOutlined,
 } from '@ant-design/icons'
-import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, isImageIcon, uid } from './utils/helpers'
-import type { ModelData, ModelInfo } from './api/client'
-import type { Role, UploadedFile } from './types/chat'
-import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from './types/chat'
+import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, isImageIcon, uid } from '../../utils/helpers'
+import type { ModelData, ModelInfo, ProviderInfo } from '../../api/client'
+import type { Role, UploadedFile } from '../../types/chat'
+import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from '../../types/chat'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { Bubble } from './components/Bubble'
-import { ConvItem } from './components/ConvItem'
+import { Bubble } from '../../components/Bubble'
+import { ConvItem } from '../../components/ConvItem'
 import { Input } from 'antd'
-import { LLMParamsPopover } from './components/LLMParamsPopover'
+import { LLMParamsPopover } from '../../components/LLMParamsPopover'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
-import { ToolsDrawer } from './components/ToolsDrawer'
-import { TypingIndicator } from './components/TypingIndicator'
+import { TypingIndicator } from '../../components/TypingIndicator'
+import './ChatPage.scss'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
 const { TextArea } = Input
 const { useToken } = theme
 
-interface ChatAppProps {
+interface ChatPageProps {
+  models: ModelInfo[]
+  modelData: { source?: string; count: number; updated_at?: string; refresh_interval?: string; global_params?: ModelData['global_params']; providers?: ProviderInfo[] }
+  uiConfig: UIConfig
   isDark: boolean
-  onToggleDark: () => void
+  siderCollapsed: boolean
+  setSiderCollapsed: (collapsed: boolean) => void
+  onRefreshModels: () => Promise<void>
 }
 
-export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
+export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, setSiderCollapsed, onRefreshModels }: ChatPageProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
 
@@ -85,22 +80,16 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
-  const [models, setModels] = useState<ModelInfo[]>([])
-  const [modelData, setModelData] = useState<{ source?: string; count: number; updated_at?: string; refresh_interval?: string; global_params?: ModelData['global_params'] }>({ count: 0 })
   const [selectedModel, setSelectedModel] = useState<string>('auto')
+  const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>('')
   const [llmParams, setLlmParams] = useState<LLMParamsOverride>({})
   const llmParamsRef = useRef<LLMParamsOverride>({})
   const pendingParamsRef = useRef<LLMParamsOverride | null>(null)
 
-  const [toolsOpen, setToolsOpen] = useState(false)
-  const [tools, setTools] = useState<ToolInfo[]>([])
-  const [toolsLoading, setToolsLoading] = useState(false)
-  const [uiConfig, setUIConfig] = useState<UIConfig>({})
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [uploading, setUploading] = useState(false)
 
-  const [siderCollapsed, setSiderCollapsed] = useState(false)
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [convsLoading, setConvsLoading] = useState(false)
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
@@ -129,35 +118,6 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    apiGetUIConfig().then((cfg) => {
-      if (cancelled) return
-      setUIConfig(cfg)
-      setSelectedSystemPrompt((prev) => prev || getFirstSystemPromptName(cfg))
-    }).catch(() => {})
-    apiGetModels().then((data) => {
-      if (cancelled) return
-      const tagged = data.models.map((m) => ({ ...m, source: (data.source ?? 'static') as 'static' | 'discovered' }))
-      setModels(tagged)
-      setModelData({ source: data.source, count: data.count, updated_at: data.updated_at, refresh_interval: data.refresh_interval, global_params: data.global_params })
-    }).catch(() => {})
-    apiListTools().then((list) => {
-      if (cancelled) return
-      setTools(list)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
-
-  useEffect(() => {
-    document.title = appName
-    if (!isImageIcon(appIcon)) return
-    const link = document.querySelector("link[rel='icon']") || document.createElement('link')
-    link.setAttribute('rel', 'icon')
-    link.setAttribute('href', appIcon || '')
-    if (!link.parentNode) document.head.appendChild(link)
-  }, [appIcon, appName])
 
   const refreshConversations = useCallback(async () => {
     setConvsLoading(true)
@@ -204,6 +164,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         role: m.role as Role,
         content: m.content,
         ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
+        provider: m.provider,
         model: m.model,
         timeTaken: m.time_taken_ms,
         llmCalls: m.llm_calls,
@@ -213,14 +174,17 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         usedParams: m.used_params,
       }))
     setMessages(uiMsgs)
-    const next = detail.model || 'auto'
+    const nextProvider = detail.provider || ''
+    const nextModel = detail.model || 'auto'
     if (detail.params && Object.keys(detail.params).length > 0) {
       pendingParamsRef.current = detail.params
     } else {
       pendingParamsRef.current = null
     }
-    setSelectedModel(next)
-    selectedModelRef.current = next
+    setSelectedModel(nextModel)
+    selectedModelRef.current = nextModel
+    setSelectedProvider(nextProvider)
+    selectedProviderRef.current = nextProvider
     const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
       ? detail.system_prompt || ''
       : getFirstSystemPromptName(uiConfig)
@@ -254,27 +218,13 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     })
   }, [])
 
-  const fetchTools = useCallback(async () => {
-    setToolsLoading(true)
-    try {
-      const list = await apiListTools()
-      setTools(list)
-    } catch {
-      antMessage.error('Could not load tools')
-    } finally {
-      setToolsLoading(false)
-    }
-  }, [antMessage])
-
-  const handleOpenTools = useCallback(() => {
-    setToolsOpen(true)
-    fetchTools()
-  }, [fetchTools])
-
   useEffect(() => { messagesRef.current = messages }, [messages])
 
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+
+  const selectedProviderRef = useRef(selectedProvider)
+  useEffect(() => { selectedProviderRef.current = selectedProvider }, [selectedProvider])
 
   useEffect(() => {
     if (pendingParamsRef.current !== null) {
@@ -338,7 +288,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
       const modelId = selectedModelRef.current
       const modelToSend = modelId === 'auto' ? undefined : modelId
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
-      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend, llmParamsRef.current)
+      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend, llmParamsRef.current, selectedProviderRef.current || undefined)
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
       }
@@ -351,6 +301,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         llmCalls: response.llm_calls,
         toolCalls: response.tool_calls,
         model: response.model,
+        provider: response.provider,
         files: response.files,
         msgId: response.assistant_msg_id,
         trace: response.trace,
@@ -422,10 +373,19 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  const isMultiProvider = (modelData.providers?.length ?? 0) > 1
+
+  const filteredModels = useMemo(() =>
+    selectedProvider ? models.filter(m => m.provider === selectedProvider) : models,
+    [models, selectedProvider]
+  )
+
   const modelOptions = useMemo(() => [
-    { label: 'Auto', value: 'auto', source: 'static' as const, is_manual: false },
-    ...models.map((m) => ({ label: m.name || m.id, value: m.id, source: m.source ?? 'static' as const, is_manual: m.is_manual ?? false })),
-  ], [models])
+    { label: 'Auto', value: 'auto', source: 'static' as const, is_manual: false, params: undefined as ModelInfo['params'], provider: undefined as string | undefined },
+    ...[...filteredModels]
+      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+      .map((m) => ({ label: m.name || m.id, value: m.id, source: m.source ?? 'static' as const, is_manual: m.is_manual ?? false, params: m.params, provider: m.provider })),
+  ], [filteredModels])
 
   const configDefaults = useMemo<LLMParamsOverride>(() => {
     const gp = modelData.global_params
@@ -459,7 +419,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
   const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
 
   return (
-    <Layout style={{ height: '100vh', background: token.colorBgLayout }}>
+    <Layout className="page">
       {/* ── Sidebar ── */}
       <Sider
         collapsible
@@ -468,32 +428,22 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         collapsedWidth={0}
         trigger={null}
         width={260}
+        className="sider"
         style={{
           background: token.colorBgContainer,
           borderRight: `1px solid ${token.colorBorderSecondary}`,
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ padding: '12px 12px 8px' }}>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              block
-              onClick={handleNewChat}
-              style={{ borderRadius: 8 }}
-            >
+        <div className="sider-content">
+          <div className="sider-header">
+            <Button type="primary" icon={<PlusOutlined />} block onClick={handleNewChat}>
               New Chat
             </Button>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
+          <div className="sider-list">
             {convsLoading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 24 }}>
-                <Spin size="small" />
-              </div>
+              <div className="spin-center"><Spin size="small" /></div>
             ) : conversations.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -556,136 +506,22 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
         </div>
       </Sider>
 
-      {/* ── Main area ── */}
-      <Layout style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* ── Header ── */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 20px',
-            background: token.colorBgContainer,
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            height: 56,
-            flexShrink: 0,
-            position: 'sticky',
-            top: 0,
-            zIndex: 10,
-            boxShadow: token.boxShadow,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Button
-              type="text"
-              icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setSiderCollapsed(!siderCollapsed)}
-              aria-label={siderCollapsed ? 'Open sidebar' : 'Close sidebar'}
-              style={{ color: token.colorTextSecondary }}
-            />
-            <Avatar
-              aria-hidden="true"
-              src={isImageIcon(appIcon) ? appIcon : undefined}
-              icon={!appIcon ? <RobotOutlined /> : undefined}
-              style={{
-                background: !appIcon ? token.colorPrimary : isImageIcon(appIcon) ? token.colorFillSecondary : token.colorBgContainer,
-                color: !appIcon ? '#fff' : token.colorText,
-                fontSize: appIcon && !isImageIcon(appIcon) ? 18 : undefined,
-                border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : undefined,
-              }}
-              size={36}
-            >
-              {appIcon && !isImageIcon(appIcon) ? appIcon : null}
-            </Avatar>
-            <div>
-              <Text strong style={{ fontSize: 15, display: 'block', lineHeight: 1.2 }}>
-                {appName}
-              </Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                AI Assistant
-              </Text>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Tooltip title={isDark ? 'Light mode' : 'Dark mode'}>
-              <Button
-                icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-                onClick={onToggleDark}
-                type="text"
-                aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-                style={{ color: token.colorTextSecondary }}
-              />
-            </Tooltip>
-            <Tooltip title="Active tools">
-              <Badge count={tools.length} size="small">
-                <Button
-                  icon={<ToolOutlined />}
-                  onClick={handleOpenTools}
-                  type="text"
-                  aria-label="View active tools"
-                  style={{ color: token.colorTextSecondary }}
-                />
-              </Badge>
-            </Tooltip>
-            <Tooltip title="GitHub (opens in new tab)">
-              <Button
-                icon={<GithubOutlined />}
-                href="https://github.com/jkandasa/promptd"
-                target="_blank"
-                rel="noopener noreferrer"
-                type="text"
-                aria-label="View source on GitHub (opens in new tab)"
-                style={{ color: token.colorTextSecondary }}
-              />
-            </Tooltip>
-          </div>
-        </div>
-
+      {/* ── Chat content ── */}
+      <Layout className="chat-col">
         {/* ── Messages ── */}
-        <Content
-          ref={contentRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '20px 0',
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'relative',
-          }}
-        >
-          <div
-            aria-live="polite"
-            aria-label="Chat messages"
-            role="log"
-            style={{
-              width: '100%',
-              maxWidth: 'min(92%, 1800px)',
-              margin: '0 auto',
-              padding: '0 16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 4,
-              flex: 1,
-            }}
-          >
+        <Content ref={contentRef} className="messages">
+          <div aria-live="polite" aria-label="Chat messages" role="log" className="message-log">
             {messages.length === 0 && !loading && (
               <div
+                className="empty-state"
                 style={{
-                  flex: 1,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 32,
-                  paddingBottom: 60,
                   background: isDark
                     ? 'radial-gradient(ellipse 80% 50% at 50% 10%, rgba(91,33,182,0.12) 0%, transparent 100%)'
                     : 'radial-gradient(ellipse 80% 50% at 50% 10%, rgba(91,33,182,0.07) 0%, transparent 100%)',
                 }}
               >
                 {/* Hero */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+                <div className="hero">
                   <Avatar
                     aria-hidden="true"
                     className="hero-avatar"
@@ -702,25 +538,18 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   >
                     {appIcon && !isImageIcon(appIcon) ? appIcon : null}
                   </Avatar>
-                  <div style={{ textAlign: 'center' }}>
-                    <Text style={{ fontSize: 22, display: 'block', fontWeight: 700, color: token.colorText, lineHeight: 1.2 }}>
+                  <div className="hero-text">
+                    <Text className="hero-title" style={{ color: token.colorText }}>
                       {uiConfig.welcomeTitle || 'How can I help you today?'}
                     </Text>
-                    <Text type="secondary" style={{ fontSize: 14, display: 'block', marginTop: 6 }}>
+                    <Text type="secondary" className="hero-subtitle">
                       {appName} · AI Assistant
                     </Text>
                   </div>
                 </div>
 
                 {/* Prompt suggestion cards */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                  gap: 10,
-                  maxWidth: 580,
-                  width: '100%',
-                  padding: '0 20px',
-                }}>
+                <div className="prompt-grid">
                   {(uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?']).map((prompt) => (
                     <button
                       key={prompt}
@@ -728,17 +557,11 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                       tabIndex={loading ? -1 : 0}
                       disabled={loading}
                       style={{
-                        padding: '12px 16px',
-                        fontSize: 13,
                         cursor: loading ? 'not-allowed' : 'pointer',
-                        borderRadius: 12,
                         border: `1px solid ${token.colorBorderSecondary}`,
                         background: token.colorBgContainer,
                         color: loading ? token.colorTextDisabled : token.colorText,
                         opacity: loading ? 0.5 : 1,
-                        textAlign: 'left',
-                        lineHeight: 1.45,
-                        fontFamily: 'inherit',
                         boxShadow: token.boxShadowTertiary,
                       }}
                       onClick={() => { if (!loading) send(prompt) }}
@@ -766,31 +589,19 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               icon={<DownOutlined />}
               onClick={scrollToBottom}
               aria-label="Scroll to bottom"
-              style={{
-                position: 'fixed',
-                bottom: 100,
-                right: 32,
-                width: 40,
-                height: 40,
-                boxShadow: token.boxShadow,
-                zIndex: 100,
-              }}
+              style={{ position: 'fixed', bottom: 100, right: 32, width: 40, height: 40, boxShadow: token.boxShadow, zIndex: 100 }}
             />
           )}
         </Content>
 
         {/* ── Input Footer ── */}
         <div
-          style={{
-            padding: '12px 16px 16px',
-            background: token.colorBgContainer,
-            borderTop: `1px solid ${token.colorBorderSecondary}`,
-            flexShrink: 0,
-          }}
+          className="input-footer"
+          style={{ background: token.colorBgContainer, borderTop: `1px solid ${token.colorBorderSecondary}` }}
         >
-          <div style={{ maxWidth: 'min(92%, 1800px)', margin: '0 auto' }}>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ position: 'relative' }}>
+          <div className="input-inner">
+            <div className="input-wrap">
+              <div className="input-relative">
                 <TextArea
                   ref={inputRef}
                   value={input}
@@ -800,25 +611,11 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                   autoSize={{ minRows: 2, maxRows: 6 }}
                   disabled={loading || uploading}
                   aria-label="Message input"
-                  style={{
-                    borderRadius: 12,
-                    resize: 'none',
-                    fontSize: 15,
-                    padding: '12px 50px 48px 16px',
-                  }}
+                  style={{ borderRadius: 12, resize: 'none', fontSize: 15, padding: '12px 50px 48px 16px' }}
                 />
                 <div
-                  style={{
-                    position: 'absolute',
-                    bottom: 6,
-                    left: 8,
-                    right: 54,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    pointerEvents: loading || uploading ? 'none' : 'auto',
-                    opacity: loading || uploading ? 0.5 : 1,
-                  }}
+                  className="input-toolbar"
+                  style={{ pointerEvents: loading || uploading ? 'none' : 'auto', opacity: loading || uploading ? 0.5 : 1 }}
                 >
                   <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
                     <Button
@@ -828,15 +625,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                       onClick={() => document.getElementById('file-upload')?.click()}
                       disabled={loading || uploading}
                       aria-label={uploading ? 'Uploading file…' : 'Attach file'}
-                      style={{
-                        height: 28,
-                        width: 28,
-                        borderRadius: 6,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: token.colorTextSecondary,
-                      }}
+                      style={{ height: 28, width: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
                     />
                   </Tooltip>
                   {systemPromptOptions.length > 0 && (
@@ -850,18 +639,38 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                       variant="borderless"
                       popupMatchSelectWidth={false}
                       placement="topLeft"
-                      showSearch
-                      optionFilterProp={['label', 'value'] as unknown as string}
-                      prefix={<FileTextOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />}
-                      optionRender={(opt) => (
-                        <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
-                          <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
-                          {opt.value && (
-                            <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3 }}>{String(opt.value)}</span>
-                          )}
-                        </div>
+                      showSearch={{ filterOption: (input, opt) =>
+                        !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }}
+                      labelRender={(opt) => (
+                        <span className="model-label">
+                          <FileTextOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
+                          <span>{opt.label}</span>
+                        </span>
                       )}
                       style={{ flex: 1, minWidth: 0 }}
+                    />
+                  )}
+                  {isMultiProvider && (
+                    <Select
+                      value={selectedProvider}
+                      onChange={(v: string) => {
+                        setSelectedProvider(v)
+                        selectedProviderRef.current = v
+                        setSelectedModel('auto')
+                        selectedModelRef.current = 'auto'
+                      }}
+                      size="small"
+                      aria-label="Select provider"
+                      variant="borderless"
+                      popupMatchSelectWidth={false}
+                      placement="topLeft"
+                      options={[
+                        { label: 'Auto', value: '' },
+                        ...(modelData.providers?.map(p => ({ label: p.name, value: p.name })) ?? []),
+                      ]}
+                      disabled={loading}
+                      style={{ flex: '0 0 auto', minWidth: 0 }}
                     />
                   )}
                   {models.length > 0 && (
@@ -880,60 +689,68 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                         variant="borderless"
                         popupMatchSelectWidth={false}
                         placement="topLeft"
-                        showSearch
-                        optionFilterProp={['label', 'value'] as unknown as string}
-                        prefix={
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
+                        showSearch={{ filterOption: (input, opt) => {
+                          if (!input) return true
+                          const q = input.toLowerCase()
+                          const label = String(opt?.label ?? '').toLowerCase()
+                          const value = String(opt?.value ?? '').toLowerCase()
+                          return label.includes(q) || value.includes(q)
+                        } }}
+                        labelRender={(opt) => (
+                          <span className="model-label">
+                            <RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
                             {modelData.source === 'discovered' && (
-                              <span style={{
-                                fontSize: 9,
-                                fontWeight: 700,
-                                lineHeight: 1,
-                                padding: '1px 3px',
-                                borderRadius: 3,
-                                background: token.colorSuccessBg,
-                                color: token.colorSuccess,
-                                letterSpacing: 0.3,
-                              }}>DISC</span>
+                              <span className="pill" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>DISC</span>
                             )}
+                            <span>{opt.label}</span>
                           </span>
-                        }
-                        optionRender={(opt) => (
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '2px 0' }}>
-                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                              <span style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.4 }}>{opt.label}</span>
-                              {opt.value !== 'auto' && (
-                                <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.value}</span>
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-                              {opt.data.is_manual && (
-                                <span style={{
-                                  fontSize: 9, fontWeight: 700, lineHeight: 1,
-                                  padding: '1px 4px', borderRadius: 3,
-                                  background: token.colorInfoBg, color: token.colorInfo,
-                                  letterSpacing: 0.3,
-                                }}>M</span>
-                              )}
-                              {!opt.data.is_manual && opt.data.source === 'discovered' ? (
-                                <span style={{
-                                  fontSize: 9, fontWeight: 700, lineHeight: 1,
-                                  padding: '1px 4px', borderRadius: 3,
-                                  background: token.colorSuccessBg, color: token.colorSuccess,
-                                  letterSpacing: 0.3,
-                                }}>DISC</span>
-                              ) : !opt.data.is_manual && opt.value !== 'auto' ? (
-                                <span style={{
-                                  fontSize: 9, fontWeight: 600, lineHeight: 1,
-                                  padding: '1px 4px', borderRadius: 3,
-                                  background: token.colorFillSecondary, color: token.colorTextTertiary,
-                                  letterSpacing: 0.3,
-                                }}>CFG</span>
-                              ) : null}
-                            </div>
-                          </div>
                         )}
+                        optionRender={(opt) => {
+                          const p = opt.data.params as ModelInfo['params']
+                          const paramHints = p ? [
+                            p.temperature != null && `T=${p.temperature}`,
+                            p.top_p        != null && `P=${p.top_p}`,
+                            p.top_k        != null && `K=${p.top_k}`,
+                            p.max_tokens              && `max=${p.max_tokens}`,
+                          ].filter(Boolean) : []
+                          return (
+                            <div className="model-option">
+                              <div className="model-option-left">
+                                <span className="model-option-name">{opt.label}</span>
+                                {opt.value !== 'auto' && (
+                                  <span className="model-option-sub" style={{ color: token.colorTextTertiary }}>
+                                    {isMultiProvider && !selectedProvider && (opt.data.provider as string | undefined) && (
+                                      <span className="provider-label" style={{ color: token.colorTextSecondary }}>
+                                        {opt.data.provider as string} ·
+                                      </span>
+                                    )}
+                                    {opt.value as string}
+                                    {paramHints.length > 0 && (
+                                      <span style={{ marginLeft: 6, color: token.colorPrimary, fontFamily: 'monospace' }}>
+                                        {paramHints.join(' ')}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="model-option-right">
+                                {opt.data.is_manual ? (
+                                  <Tooltip title="Manually configured model">
+                                    <span className="pill-md" style={{ background: token.colorInfoBg, color: token.colorInfo }}>manual</span>
+                                  </Tooltip>
+                                ) : opt.data.source === 'discovered' ? (
+                                  <Tooltip title="Auto-discovered from provider">
+                                    <span className="pill-md" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>disc</span>
+                                  </Tooltip>
+                                ) : opt.value !== 'auto' ? (
+                                  <Tooltip title="Configured in server config">
+                                    <span className="pill-cfg" style={{ background: token.colorFillSecondary, color: token.colorTextTertiary }}>cfg</span>
+                                  </Tooltip>
+                                ) : null}
+                              </div>
+                            </div>
+                          )
+                        }}
                         style={{ flex: 1, minWidth: 0 }}
                       />
                     </Tooltip>
@@ -944,12 +761,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                         type="text"
                         size="small"
                         icon={<ReloadOutlined />}
-                        onClick={async () => {
-                          const data = await apiGetModels()
-                          const tagged = data.models.map((m) => ({ ...m, source: (data.source ?? 'static') as 'static' | 'discovered' }))
-                          setModels(tagged)
-                          setModelData({ source: data.source, count: data.count, updated_at: data.updated_at, refresh_interval: data.refresh_interval, global_params: data.global_params })
-                        }}
+                        onClick={onRefreshModels}
                         disabled={loading}
                         style={{ height: 28, width: 28, padding: 0, color: token.colorTextSecondary, flexShrink: 0 }}
                       />
@@ -962,7 +774,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                     disabled={loading}
                   />
                 </div>
-                <div style={{ position: 'absolute', bottom: 6, right: 8 }}>
+                <div className="input-send">
                   <Tooltip title="Send">
                     <Button
                       type="primary"
@@ -970,14 +782,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
                       onClick={() => send()}
                       disabled={(!input.trim() && uploadedFiles.length === 0) || loading}
                       aria-label="Send message"
-                      style={{
-                        height: 34,
-                        width: 34,
-                        borderRadius: 10,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
+                      style={{ height: 34, width: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     />
                   </Tooltip>
                 </div>
@@ -985,7 +790,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               {showCharCount && (
                 <Text
                   type={charCount >= MAX_MESSAGE_LENGTH ? 'danger' : 'secondary'}
-                  style={{ fontSize: 11, textAlign: 'right' }}
+                  className="char-count"
                 >
                   {charCount} / {MAX_MESSAGE_LENGTH}
                 </Text>
@@ -1035,7 +840,7 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
             />
           </div>
           {uploadedFiles.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, maxWidth: 'min(92%, 1800px)', margin: '8px auto 0' }}>
+            <div className="files-row">
               {uploadedFiles.map((file) => (
                 <Tag
                   key={file.id}
@@ -1048,20 +853,12 @@ export function ChatApp({ isDark, onToggleDark }: ChatAppProps) {
               ))}
             </div>
           )}
-          <div style={{ textAlign: 'center', marginTop: 8 }}>
+          <div className="disclaimer">
             <Text type="secondary" style={{ fontSize: 11 }}>
               {uiConfig.aiDisclaimer || 'AI can make mistakes. Verify important info.'}
             </Text>
           </div>
         </div>
-
-        <ToolsDrawer
-          open={toolsOpen}
-          onClose={() => setToolsOpen(false)}
-          tools={tools}
-          loading={toolsLoading}
-          onRefresh={fetchTools}
-        />
       </Layout>
     </Layout>
   )

@@ -1,0 +1,136 @@
+// ── Outer wrapper ─────────────────────────────────────────────────────────────
+
+.page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+// ── Left panel (schedule list) ────────────────────────────────────────────────
+
+.left-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.left-header {
+  padding: 10px 12px 8px;
+}
+
+.left-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.schedule-list {
+  flex: 1;
+  overflow: auto;
+  padding: 10px;
+}
+
+// ── Schedule card ─────────────────────────────────────────────────────────────
+
+.schedule-card {
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.schedule-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.schedule-card-actions {
+  // click isolation handled inline
+}
+
+.schedule-card-meta {
+  margin-top: 6px;
+  width: 100%;
+}
+
+// ── Right panel (executions) ──────────────────────────────────────────────────
+
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.right-header {
+  padding: 10px 16px;
+}
+
+.right-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.meta-section {
+  padding: 6px 16px 8px;
+}
+
+.exec-filter-bar {
+  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.exec-list {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+}
+
+// ── Execution item ────────────────────────────────────────────────────────────
+
+.exec-item {
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.exec-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.exec-error {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+// ── Token stats row ───────────────────────────────────────────────────────────
+
+.token-stats {
+  font-size: 11px;
+}
+
+// ── Empty / centered states ───────────────────────────────────────────────────
+
+.centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.spin-center {
+  display: flex;
+  justify-content: center;
+  padding-top: 40px;
+}

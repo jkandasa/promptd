@@ -78,6 +78,7 @@ export interface Message {
   llmCalls?: number
   toolCalls?: number
   model?: string
+  provider?: string
   files?: UploadedFile[]
   msgId?: string
   trace?: LLMRound[]
@@ -107,6 +108,7 @@ export interface ConversationMeta {
   id: string
   title: string
   model: string
+  provider?: string
   system_prompt?: string
   params?: LLMParamsOverride
   pinned?: boolean
@@ -120,6 +122,7 @@ export interface StorageMessage {
   content: string
   sent_at: string
   model?: string
+  provider?: string
   time_taken_ms?: number
   llm_calls?: number
   tool_calls?: number

@@ -12,47 +12,15 @@ server:
   address: "localhost:8080"
 
 llm:
-  # Required: API key for your LLM provider
-  api_key: ""
-
-  # Base URL of OpenAI-compatible API (default: OpenRouter)
-  base_url: "https://openrouter.ai/api/v1"
-
-  # Model selection method: random or round_robin
+  # Global model selection method: random or round_robin (default: round_robin).
+  # Can be overridden per-provider below.
   selection_method: "round_robin"
 
-  auto_discover:
-    # Enable automatic discovery of available models from the provider's /v1/models endpoint.
-    # When enabled, replaces the static 'models' list above. Background refreshes every refresh_interval.
-    # Supports OpenAI-compatible APIs (OpenRouter, etc.). Initial fetch on startup + ticker.
-    enabled: false
-    # Refresh interval (default: 60m, minimum: 1m). Go duration format: 10s, 30m, 1h, etc.
-    refresh_interval: 60m
-
-  # Global LLM generation parameters — applied to all models unless overridden per-model.
-  # All fields are optional; omit to use the provider's default.
-  # Per-model params (under models[].params) override these globals.
-  # Per-request UI overrides (sliders in the chat input) override both.
-  #
-  # params:
-  #   temperature: 0.7      # Output randomness (0.0 = deterministic, 2.0 = very random)
-  #   top_p: 0.95           # Nucleus sampling threshold (0.0–1.0)
-  #   max_tokens: 4096      # Maximum output tokens per reply
-  #   top_k: 40             # Top-K sampling (provider support varies)
-
-  # List of models (string or object with id, optional name, and optional params).
-  # Per-model params override the global params above.
-  models:
-    # Simple string form:
-    # - "model-id"
-    #
-    # Object form with optional display name and per-model param overrides:
-    # - id: "openai/gpt-4o"
-    #   name: "GPT-4o"
-    #   params:
-    #     temperature: 0.3
-    #     max_tokens: 8192
-
+  # Global auto-discover defaults applied to every provider that does not
+  # explicitly set its own auto_discover block.
+  # auto_discover:
+  #   enabled: true
+  #   refresh_interval: 60m
 
   # Trace settings for LLM round-trip data
   trace:
@@ -60,9 +28,49 @@ llm:
     enabled: true
     # How long raw LLM trace data is kept on assistant messages (default: 168h = 7 days).
     # Minimum allowed value is 1h (anything lower is clamped to 1h).
-    # The cleanup job runs every <ttl> when ttl ≤ 12h, otherwise every 12h.
     # Examples: 1m, 6h, 1d, 7d, 30d
     ttl: 7d
+
+  # One or more LLM providers. Each must have a unique name, api_key, and base_url.
+  # Model IDs should be unique across providers (first provider wins on collision).
+  providers:
+    - name: "openrouter"
+      api_key: ""
+      base_url: "https://openrouter.ai/api/v1"
+
+      # Optional: override global selection_method for this provider
+      # selection_method: "round_robin"
+
+      # Optional: global LLM generation parameters for this provider's models.
+      # Per-model params (models[].params) override these. UI sliders override both.
+      # params:
+      #   temperature: 0.7      # 0.0 = deterministic, 2.0 = very random
+      #   top_p: 0.95
+      #   max_tokens: 4096
+      #   top_k: 40
+
+      # Models to expose. Simple string or object with id/name/params.
+      models:
+        # - "openai/gpt-4o"
+        # - id: "anthropic/claude-sonnet-4-6"
+        #   name: "Claude Sonnet"
+        #   params:
+        #     temperature: 0.3
+        #     max_tokens: 8192
+
+      # Auto-discover available models from the provider's /v1/models endpoint.
+      # When enabled, replaces the static models list above. Initial fetch on startup.
+      # Overrides the global llm.auto_discover setting for this provider.
+      auto_discover:
+        enabled: false
+        refresh_interval: 60m  # Minimum: 1m. Go duration: 10s, 30m, 1h, etc.
+
+    # Add more providers as needed:
+    # - name: "groq"
+    #   api_key: ""
+    #   base_url: "https://api.groq.com/openai/v1/"
+    #   models:
+    #     - "llama-3.3-70b-versatile"
 
 log:
   # Log level: debug, info, warn, error (default: info)

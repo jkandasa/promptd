@@ -14,6 +14,7 @@ import (
 	"promptd/internal/chat"
 	"promptd/internal/handler"
 	"promptd/internal/mcp"
+	"promptd/internal/scheduler"
 	"promptd/internal/storage"
 	"promptd/internal/tools"
 	"promptd/internal/ui"
@@ -66,6 +67,21 @@ type LLMModel struct {
 	Params LLMParams `yaml:"params,omitempty"`
 }
 
+type AutoDiscoverConfig struct {
+	Enabled         *bool         `yaml:"enabled"`
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
+}
+
+type LLMProviderConfig struct {
+	Name            string             `yaml:"name"`
+	APIKey          string             `yaml:"api_key"`
+	BaseURL         string             `yaml:"base_url"`
+	SelectionMethod string             `yaml:"selection_method,omitempty"`
+	Models          []LLMModel         `yaml:"models"`
+	Params          LLMParams          `yaml:"params"`
+	AutoDiscover    AutoDiscoverConfig `yaml:"auto_discover"`
+}
+
 type SystemPromptConfig struct {
 	Name string `yaml:"name"`
 	File string `yaml:"file"`
@@ -91,7 +107,7 @@ func (m *LLMModel) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func buildModelInfos(models []LLMModel, globalParams LLMParams) []handler.ModelInfo {
+func buildModelInfos(models []LLMModel, globalParams LLMParams, providerName string) []handler.ModelInfo {
 	infos := make([]handler.ModelInfo, len(models))
 	for i, m := range models {
 		p := handler.LLMParams{
@@ -100,7 +116,6 @@ func buildModelInfos(models []LLMModel, globalParams LLMParams) []handler.ModelI
 			TopP:        globalParams.TopP,
 			TopK:        globalParams.TopK,
 		}
-		// Per-model params override global.
 		if m.Params.Temperature != nil {
 			p.Temperature = m.Params.Temperature
 		}
@@ -113,7 +128,7 @@ func buildModelInfos(models []LLMModel, globalParams LLMParams) []handler.ModelI
 		if m.Params.TopK != 0 {
 			p.TopK = m.Params.TopK
 		}
-		infos[i] = handler.ModelInfo{ID: m.ID, Name: m.Name, Params: p, IsManual: true}
+		infos[i] = handler.ModelInfo{ID: m.ID, Name: m.Name, Provider: providerName, Params: p, IsManual: true}
 	}
 	return infos
 }
@@ -126,21 +141,12 @@ type Config struct {
 		Address string `yaml:"address"`
 	} `yaml:"server"`
 	LLM struct {
-		APIKey          string     `yaml:"api_key"`
-		BaseURL         string     `yaml:"base_url"`
-		SelectionMethod string     `yaml:"selection_method"`
-		Models          []LLMModel `yaml:"models"`
-		Params          LLMParams  `yaml:"params"` // global defaults
-		AutoDiscover    struct {
-			Enabled         bool          `yaml:"enabled"`
-			RefreshInterval time.Duration `yaml:"refresh_interval"`
-		} `yaml:"auto_discover"`
-		Trace struct {
-			// TTL controls how long raw LLM trace data is retained on assistant messages.
-			// Default: 168h (7 days). Minimum: 1h. Supports d for days (e.g. 30d).
-			TTL Duration `yaml:"ttl"`
-			// Enable or disable the LLM trace drawer in the UI (default: true)
-			Enabled *bool `yaml:"enabled"`
+		SelectionMethod string              `yaml:"selection_method"` // global default for providers
+		AutoDiscover    AutoDiscoverConfig  `yaml:"auto_discover"`
+		Providers       []LLMProviderConfig `yaml:"providers"`
+		Trace           struct {
+			TTL     Duration `yaml:"ttl"`
+			Enabled *bool    `yaml:"enabled"`
 		} `yaml:"trace"`
 	} `yaml:"llm"`
 	Log struct {
@@ -234,20 +240,35 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Server.Address == "" {
 		cfg.Server.Address = "localhost:8080"
 	}
-	if cfg.LLM.BaseURL == "" {
-		cfg.LLM.BaseURL = "https://openrouter.ai/api/v1"
+	// Apply per-provider defaults.
+	globalSelectionMethod := cfg.LLM.SelectionMethod
+	if globalSelectionMethod == "" {
+		globalSelectionMethod = "round_robin"
 	}
-	if cfg.LLM.SelectionMethod == "" {
-		cfg.LLM.SelectionMethod = "auto"
-	}
-	if len(cfg.LLM.Models) == 0 {
-		cfg.LLM.Models = []LLMModel{{ID: "anthropic/claude-sonnet-4-6"}}
-	}
-	if cfg.LLM.AutoDiscover.RefreshInterval == 0 {
-		cfg.LLM.AutoDiscover.RefreshInterval = 60 * time.Minute
-	}
-	if cfg.LLM.AutoDiscover.RefreshInterval < time.Minute {
-		cfg.LLM.AutoDiscover.RefreshInterval = time.Minute
+	for i := range cfg.LLM.Providers {
+		p := &cfg.LLM.Providers[i]
+		if p.BaseURL == "" {
+			p.BaseURL = "https://openrouter.ai/api/v1"
+		}
+		if p.SelectionMethod == "" {
+			p.SelectionMethod = globalSelectionMethod
+		}
+		// Inherit global auto_discover settings when not explicitly set on the provider.
+		if p.AutoDiscover.Enabled == nil && cfg.LLM.AutoDiscover.Enabled != nil {
+			p.AutoDiscover.Enabled = cfg.LLM.AutoDiscover.Enabled
+		}
+		if p.AutoDiscover.RefreshInterval == 0 && cfg.LLM.AutoDiscover.RefreshInterval != 0 {
+			p.AutoDiscover.RefreshInterval = cfg.LLM.AutoDiscover.RefreshInterval
+		}
+		autoDiscoverOn := p.AutoDiscover.Enabled != nil && *p.AutoDiscover.Enabled
+		if autoDiscoverOn {
+			if p.AutoDiscover.RefreshInterval == 0 {
+				p.AutoDiscover.RefreshInterval = 60 * time.Minute
+			}
+			if p.AutoDiscover.RefreshInterval < time.Minute {
+				p.AutoDiscover.RefreshInterval = time.Minute
+			}
+		}
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -361,10 +382,24 @@ func main() {
 	dataDir := cfg.Data.Dir
 	storageDir := dataDir + "/conversations"
 	uploadDir := dataDir + "/uploads"
+	schedulerDir := dataDir
 	logger.Info("data root", zap.String("dir", dataDir), zap.String("conversations", storageDir), zap.String("uploads", uploadDir))
 
-	if strings.TrimSpace(cfg.LLM.APIKey) == "" {
-		logger.Fatal("LLM API key is required in config")
+	if len(cfg.LLM.Providers) == 0 {
+		logger.Fatal("at least one LLM provider is required under llm.providers")
+	}
+	seenProviders := make(map[string]bool, len(cfg.LLM.Providers))
+	for _, p := range cfg.LLM.Providers {
+		if p.Name == "" {
+			logger.Fatal("each LLM provider must have a name")
+		}
+		if seenProviders[p.Name] {
+			logger.Fatal("duplicate LLM provider name", zap.String("provider", p.Name))
+		}
+		seenProviders[p.Name] = true
+		if strings.TrimSpace(p.APIKey) == "" {
+			logger.Fatal("LLM provider api_key is required", zap.String("provider", p.Name))
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -441,29 +476,63 @@ func main() {
 		}
 	}
 
-	modelSelector := handler.NewModelSelector(buildModelInfos(cfg.LLM.Models, cfg.LLM.Params), cfg.LLM.SelectionMethod)
-	if cfg.LLM.AutoDiscover.Enabled {
-		modelSelector.SetRefreshInterval(cfg.LLM.AutoDiscover.RefreshInterval)
-	}
-	h := handler.New(cfg.LLM.APIKey, cfg.LLM.BaseURL, systemPrompts, defaultSystemPrompt, modelSelector, registry, store, st, logger, ui.FS(), uiConfig, uploadDir, cfg.LLM.Trace.Enabled != nil && *cfg.LLM.Trace.Enabled)
-	h.GlobalParams = handler.LLMParams{
-		Temperature: cfg.LLM.Params.Temperature,
-		MaxTokens:   cfg.LLM.Params.MaxTokens,
-		TopP:        cfg.LLM.Params.TopP,
-		TopK:        cfg.LLM.Params.TopK,
-	}
-	// Keep a copy of manually-configured models so DiscoverAndUpdateModels can
-	// preserve their per-model params and manual flag after autodiscover replaces the list.
-	h.StaticModels = buildModelInfos(cfg.LLM.Models, cfg.LLM.Params)
-	if cfg.LLM.AutoDiscover.Enabled {
-		if err := h.DiscoverAndUpdateModels(ctx); err != nil {
-			logger.Warn("initial auto discover failed", zap.Error(err))
-		} else {
-			logger.Info("initial auto discover complete", zap.Int("count", len(h.ModelSelector.GetAvailableModels())))
+	traceEnabled := cfg.LLM.Trace.Enabled != nil && *cfg.LLM.Trace.Enabled
+
+	providerEntries := make([]*handler.ProviderEntry, 0, len(cfg.LLM.Providers))
+	for _, p := range cfg.LLM.Providers {
+		globalParams := handler.LLMParams{
+			Temperature: p.Params.Temperature,
+			MaxTokens:   p.Params.MaxTokens,
+			TopP:        p.Params.TopP,
+			TopK:        p.Params.TopK,
 		}
-		go h.StartAutoDiscover(ctx, cfg.LLM.AutoDiscover.RefreshInterval)
+		staticModels := buildModelInfos(p.Models, p.Params, p.Name)
+		client := handler.NewLLMClient(p.APIKey, p.BaseURL, logger)
+		sel := handler.NewModelSelector(staticModels, p.SelectionMethod)
+		autoDiscoverOn := p.AutoDiscover.Enabled != nil && *p.AutoDiscover.Enabled
+		if autoDiscoverOn {
+			sel.SetRefreshInterval(p.AutoDiscover.RefreshInterval)
+		}
+		providerEntries = append(providerEntries, &handler.ProviderEntry{
+			Name:          p.Name,
+			Client:        client,
+			ModelSelector: sel,
+			GlobalParams:  globalParams,
+			StaticModels:  staticModels,
+			AutoDiscover:  autoDiscoverOn,
+		})
+		logger.Info("provider registered",
+			zap.String("name", p.Name),
+			zap.String("base_url", p.BaseURL),
+			zap.Int("models", len(staticModels)),
+			zap.Bool("auto_discover", autoDiscoverOn))
+	}
+	providerRegistry := handler.NewProviderRegistry(providerEntries, logger)
+	h := handler.New(providerRegistry, systemPrompts, defaultSystemPrompt, registry, store, st, logger, ui.FS(), uiConfig, uploadDir, traceEnabled)
+
+	for _, p := range cfg.LLM.Providers {
+		if p.AutoDiscover.Enabled != nil && *p.AutoDiscover.Enabled {
+			if err := h.DiscoverAndUpdateModels(ctx, p.Name); err != nil {
+				logger.Warn("initial auto discover failed", zap.String("provider", p.Name), zap.Error(err))
+			} else {
+				logger.Info("initial auto discover complete", zap.String("provider", p.Name))
+			}
+			go h.StartAutoDiscover(ctx, p.Name, p.AutoDiscover.RefreshInterval)
+		}
 	}
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
+
+	// Scheduler
+	schedStore, err := scheduler.NewStore(schedulerDir)
+	if err != nil {
+		logger.Fatal("failed to create scheduler store", zap.Error(err))
+	}
+	schedRunner := scheduler.NewRunner(providerRegistry, registry, logger, traceEnabled)
+	sched := scheduler.New(schedStore, schedRunner, systemPrompts, logger)
+	if err := sched.Start(ctx); err != nil {
+		logger.Fatal("failed to start scheduler", zap.Error(err))
+	}
+	schedHandler := handler.NewScheduleHandler(sched, logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.ServeUI)
@@ -483,6 +552,14 @@ func main() {
 	mux.HandleFunc("PATCH /conversations/{id}/pin", h.TogglePinConversation)
 	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}", h.DeleteMessage)
 	mux.HandleFunc("DELETE /conversations/{id}/messages/{msgId}/after", h.DeleteMessagesFrom)
+	mux.HandleFunc("GET /schedules", schedHandler.List)
+	mux.HandleFunc("POST /schedules", schedHandler.Create)
+	mux.HandleFunc("GET /schedules/{id}", schedHandler.Get)
+	mux.HandleFunc("PUT /schedules/{id}", schedHandler.Update)
+	mux.HandleFunc("DELETE /schedules/{id}", schedHandler.Delete)
+	mux.HandleFunc("POST /schedules/{id}/trigger", schedHandler.Trigger)
+	mux.HandleFunc("GET /schedules/{id}/executions", schedHandler.ListExecutions)
+	mux.HandleFunc("DELETE /schedules/{id}/executions/{execId}", schedHandler.DeleteExecution)
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,
@@ -493,13 +570,10 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("server started", zap.String("address", cfg.Server.Address), zap.Strings("models", func() []string {
-			ids := make([]string, len(cfg.LLM.Models))
-			for i, m := range cfg.LLM.Models {
-				ids[i] = m.ID
-			}
-			return ids
-		}()), zap.String("model_selection_method", cfg.LLM.SelectionMethod), zap.String("llm_base_url", cfg.LLM.BaseURL))
+		logger.Info("server started",
+			zap.String("address", cfg.Server.Address),
+			zap.Int("providers", len(cfg.LLM.Providers)),
+			zap.Int("models", len(providerRegistry.AllModels())))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server error", zap.Error(err))
 		}
@@ -508,6 +582,7 @@ func main() {
 	<-ctx.Done()
 	logger.Info("shutting down...")
 
+	sched.Stop()
 	mcpManager.StopHealthMonitor()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

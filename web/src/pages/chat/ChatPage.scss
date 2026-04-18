@@ -1,0 +1,253 @@
+// ── Page layout ───────────────────────────────────────────────────────────────
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: row;
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+
+.sider {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sider-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sider-header {
+  padding: 12px 12px 8px;
+}
+
+.sider-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+
+.spin-center {
+  display: flex;
+  justify-content: center;
+  padding-top: 24px;
+}
+
+// ── Chat content column ───────────────────────────────────────────────────────
+
+.chat-col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// ── Messages ──────────────────────────────────────────────────────────────────
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.message-log {
+  width: 100%;
+  max-width: min(92%, 1800px);
+  margin: 0 auto;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding-bottom: 60px;
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.hero-text {
+  text-align: center;
+}
+
+.hero-title {
+  font-size: 22px;
+  display: block;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.hero-subtitle {
+  font-size: 14px;
+  display: block;
+  margin-top: 6px;
+}
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  max-width: 580px;
+  width: 100%;
+  padding: 0 20px;
+}
+
+// ── Input footer ──────────────────────────────────────────────────────────────
+
+.input-footer {
+  padding: 12px 16px 16px;
+  flex-shrink: 0;
+}
+
+.input-inner {
+  max-width: min(92%, 1800px);
+  margin: 0 auto;
+}
+
+.input-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.input-relative {
+  position: relative;
+}
+
+.input-toolbar {
+  position: absolute;
+  bottom: 6px;
+  left: 8px;
+  right: 54px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.input-send {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+}
+
+.char-count {
+  font-size: 11px;
+  text-align: right;
+}
+
+.files-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px auto 0;
+  max-width: min(92%, 1800px);
+}
+
+.disclaimer {
+  text-align: center;
+  margin-top: 8px;
+}
+
+// ── Model selector ────────────────────────────────────────────────────────────
+
+.model-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// Inline pill badges (DISC / manual / disc / cfg)
+.pill {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
+
+.pill-md {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
+
+.pill-cfg {
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
+
+// Model dropdown option row
+.model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.model-option-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.model-option-name {
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.model-option-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-option-right {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.provider-label {
+  font-weight: 500;
+  margin-right: 3px;
+}

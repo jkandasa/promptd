@@ -304,8 +304,8 @@ export const Bubble = memo(function Bubble({
           </Tooltip>
           {msg.model !== undefined && (
             isError
-              ? <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{msg.model}</Tag>
-              : <Text type="secondary" style={{ fontSize: 10 }}>{msg.model}</Text>
+              ? <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{msg.provider ? `${msg.provider} · ${msg.model}` : msg.model}</Tag>
+              : <Text type="secondary" style={{ fontSize: 10 }}>{msg.provider ? `${msg.provider} · ${msg.model}` : msg.model}</Text>
           )}
           {msg.timeTaken !== undefined && (
             <Text type="secondary" style={{ fontSize: 10 }}>

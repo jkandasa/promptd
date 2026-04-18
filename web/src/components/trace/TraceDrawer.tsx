@@ -434,6 +434,131 @@ function AvailableToolsList({ tools }: { tools: ToolDef[] }) {
   )
 }
 
+// ── LLMTraceView — reusable panel (no Drawer shell) ──────────────────────
+export function LLMTraceView({ rounds }: { rounds: LLMRound[] }) {
+  const { token } = useToken()
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {rounds.map((round, idx) => {
+        const hasTools    = (round.tool_results?.length ?? 0) > 0
+        const toolCount   = round.tool_results?.length ?? 0
+        const roundToolMs = round.tool_results?.reduce((s, t) => s + t.duration_ms, 0) ?? 0
+        const isFinal     = !hasTools
+        const isLast      = idx === rounds.length - 1
+
+        const borderColor = isFinal ? token.colorSuccessBorder : token.colorWarningBorder
+        const headerBg    = isFinal ? token.colorSuccessBg     : token.colorWarningBg
+        const iconColor   = isFinal ? token.colorSuccess       : token.colorWarning
+
+        const innerItems = [
+          ...(round.available_tools && round.available_tools.length > 0 ? [{
+            key: 'available_tools',
+            label: (
+              <Text style={{ fontSize: 12 }}>
+                Available Tools
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
+              </Text>
+            ),
+            children: <AvailableToolsList tools={round.available_tools} />,
+          }] : []),
+          {
+            key: 'messages',
+            label: (
+              <Text style={{ fontSize: 12 }}>
+                Messages Sent
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.request.length})</Text>
+              </Text>
+            ),
+            children: (
+              <div>
+                {round.request.map((msg, i) => (
+                  <MessageCard key={i} msg={msg} />
+                ))}
+              </div>
+            ),
+          },
+          {
+            key: 'response',
+            label: (
+              <Text style={{ fontSize: 12 }}>
+                {isFinal ? 'LLM Response' : 'LLM Decision'}
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{fmtMs(round.llm_duration_ms)}</Text>
+              </Text>
+            ),
+            children: (
+              <div>
+                <MessageCard msg={round.response} />
+                {round.usage && <TokenBar usage={round.usage} />}
+              </div>
+            ),
+          },
+          ...(hasTools ? [{
+            key: 'tools',
+            label: (
+              <Text style={{ fontSize: 12 }}>
+                Tool Execution
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+                  {toolCount} call{toolCount === 1 ? '' : 's'} · {fmtMs(roundToolMs)}
+                </Text>
+              </Text>
+            ),
+            children: (
+              <div>
+                {round.tool_results!.map((tr, ti) => (
+                  <ToolResultCard key={ti} tr={tr} />
+                ))}
+              </div>
+            ),
+          }] : []),
+        ]
+
+        return (
+          <div
+            key={idx}
+            style={{ border: `1px solid ${borderColor}`, borderRadius: 10, overflow: 'hidden' }}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '9px 14px',
+              background: headerBg,
+              flexWrap: 'wrap',
+            }}>
+              {isFinal
+                ? <CheckCircleOutlined style={{ color: iconColor, fontSize: 15 }} />
+                : <ToolOutlined style={{ color: iconColor, fontSize: 14 }} />
+              }
+              <Text strong style={{ fontSize: 13 }}>Round {idx + 1}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                — {isFinal ? 'final answer' : `${toolCount} tool call${toolCount === 1 ? '' : 's'}`}
+              </Text>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>LLM {fmtMs(round.llm_duration_ms)}</Tag>
+                {hasTools && (
+                  <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>tools {fmtMs(roundToolMs)}</Tag>
+                )}
+                {round.usage && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {round.usage.prompt_tokens.toLocaleString()}↑ {round.usage.completion_tokens.toLocaleString()}↓ tok
+                  </Text>
+                )}
+              </div>
+            </div>
+            <Collapse
+              size="small"
+              defaultActiveKey={isLast ? ['response', ...(hasTools ? ['tools'] : [])] : []}
+              style={{ background: 'transparent', borderRadius: 0, border: 'none' }}
+              items={innerItems}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── TraceDrawer ───────────────────────────────────────────────────────────
 export function TraceDrawer({ open, onClose, rounds }: {
   open: boolean
@@ -443,13 +568,13 @@ export function TraceDrawer({ open, onClose, rounds }: {
   const { token } = useToken()
   if (!rounds?.length) return null
 
-  const totalLLMMs    = rounds.reduce((s, r) => s + r.llm_duration_ms, 0)
-  const totalToolMs   = rounds.reduce((s, r) => s + (r.tool_results?.reduce((a, t) => a + t.duration_ms, 0) ?? 0), 0)
+  const totalLLMMs     = rounds.reduce((s, r) => s + r.llm_duration_ms, 0)
+  const totalToolMs    = rounds.reduce((s, r) => s + (r.tool_results?.reduce((a, t) => a + t.duration_ms, 0) ?? 0), 0)
   const totalToolCalls = rounds.reduce((s, r) => s + (r.tool_results?.length ?? 0), 0)
-  const totalPrompt   = rounds.reduce((s, r) => s + (r.usage?.prompt_tokens ?? 0), 0)
-  const totalCompl    = rounds.reduce((s, r) => s + (r.usage?.completion_tokens ?? 0), 0)
-  const totalReason   = rounds.reduce((s, r) => s + (r.usage?.reasoning_tokens ?? 0), 0)
-  const totalCached   = rounds.reduce((s, r) => s + (r.usage?.cached_tokens ?? 0), 0)
+  const totalPrompt    = rounds.reduce((s, r) => s + (r.usage?.prompt_tokens ?? 0), 0)
+  const totalCompl     = rounds.reduce((s, r) => s + (r.usage?.completion_tokens ?? 0), 0)
+  const totalReason    = rounds.reduce((s, r) => s + (r.usage?.reasoning_tokens ?? 0), 0)
+  const totalCached    = rounds.reduce((s, r) => s + (r.usage?.cached_tokens ?? 0), 0)
 
   return (
     <Drawer
@@ -488,137 +613,7 @@ export function TraceDrawer({ open, onClose, rounds }: {
       onClose={onClose}
       styles={{ body: { padding: '16px 20px' }, header: { paddingBottom: 12 } }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {rounds.map((round, idx) => {
-          const hasTools  = (round.tool_results?.length ?? 0) > 0
-          const toolCount = round.tool_results?.length ?? 0
-          const roundToolMs = round.tool_results?.reduce((s, t) => s + t.duration_ms, 0) ?? 0
-          const isFinal   = !hasTools
-          const isLast    = idx === rounds.length - 1
-
-          const borderColor = isFinal ? token.colorSuccessBorder : token.colorWarningBorder
-          const headerBg    = isFinal ? token.colorSuccessBg     : token.colorWarningBg
-          const iconColor   = isFinal ? token.colorSuccess       : token.colorWarning
-
-          const innerItems = [
-            // ── Available tools (top) ──
-            ...(round.available_tools && round.available_tools.length > 0 ? [{
-              key: 'available_tools',
-              label: (
-                <Text style={{ fontSize: 12 }}>
-                  Available Tools
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.available_tools.length})</Text>
-                </Text>
-              ),
-              children: <AvailableToolsList tools={round.available_tools} />,
-            }] : []),
-            // ── Messages sent ──
-            {
-              key: 'messages',
-              label: (
-                <Text style={{ fontSize: 12 }}>
-                  Messages Sent
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>({round.request.length})</Text>
-                </Text>
-              ),
-              children: (
-                <div>
-                  {round.request.map((msg, i) => (
-                    <MessageCard key={i} msg={msg} />
-                  ))}
-                </div>
-              ),
-            },
-            // ── LLM response ──
-            {
-              key: 'response',
-              label: (
-                <Text style={{ fontSize: 12 }}>
-                  {isFinal ? 'LLM Response' : 'LLM Decision'}
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{fmtMs(round.llm_duration_ms)}</Text>
-                </Text>
-              ),
-              children: (
-                <div>
-                  <MessageCard msg={round.response} />
-                  {round.usage && <TokenBar usage={round.usage} />}
-                </div>
-              ),
-            },
-            // ── Tool execution ──
-            ...(hasTools ? [{
-              key: 'tools',
-              label: (
-                <Text style={{ fontSize: 12 }}>
-                  Tool Execution
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-                    {toolCount} call{toolCount === 1 ? '' : 's'} · {fmtMs(roundToolMs)}
-                  </Text>
-                </Text>
-              ),
-              children: (
-                <div>
-                  {round.tool_results!.map((tr, ti) => (
-                    <ToolResultCard key={ti} tr={tr} />
-                  ))}
-                </div>
-              ),
-            }] : []),
-          ]
-
-          return (
-            <div
-              key={idx}
-              style={{
-                border: `1px solid ${borderColor}`,
-                borderRadius: 10,
-                overflow: 'hidden',
-              }}
-            >
-              {/* Round header */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '9px 14px',
-                background: headerBg,
-                flexWrap: 'wrap',
-              }}>
-                {isFinal
-                  ? <CheckCircleOutlined style={{ color: iconColor, fontSize: 15 }} />
-                  : <ToolOutlined style={{ color: iconColor, fontSize: 14 }} />
-                }
-                <Text strong style={{ fontSize: 13 }}>Round {idx + 1}</Text>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  — {isFinal ? 'final answer' : `${toolCount} tool call${toolCount === 1 ? '' : 's'}`}
-                </Text>
-                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>LLM {fmtMs(round.llm_duration_ms)}</Tag>
-                  {hasTools && (
-                    <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>tools {fmtMs(roundToolMs)}</Tag>
-                  )}
-                  {round.usage && (
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {round.usage.prompt_tokens.toLocaleString()}↑ {round.usage.completion_tokens.toLocaleString()}↓ tok
-                    </Text>
-                  )}
-                </div>
-              </div>
-
-              {/* Inner sections */}
-              <Collapse
-                size="small"
-                defaultActiveKey={isLast
-                  ? ['response', ...(hasTools ? ['tools'] : [])]
-                  : []
-                }
-                style={{ background: 'transparent', borderRadius: 0, border: 'none' }}
-                items={innerItems}
-              />
-            </div>
-          )
-        })}
-      </div>
+      <LLMTraceView rounds={rounds} />
     </Drawer>
   )
 }

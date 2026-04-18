@@ -1,0 +1,93 @@
+// ── Root layout ───────────────────────────────────────────────────────────────
+
+.app-root {
+  height: 100vh;
+  flex-direction: row;
+}
+
+// ── Nav rail ──────────────────────────────────────────────────────────────────
+
+.nav-rail {
+  width: 48px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 5;
+}
+
+.nav-spacer {
+  height: 56px;
+  flex-shrink: 0;
+  width: 100%;
+}
+
+.nav-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 4px;
+}
+
+.nav-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// ── Main column ───────────────────────────────────────────────────────────────
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// ── Header ────────────────────────────────────────────────────────────────────
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  height: 56px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.app-name {
+  font-size: 15px;
+  display: block;
+  line-height: 1.2;
+}
+
+.app-subtitle {
+  font-size: 11px;
+}
+
+// ── Scheduler page wrapper ────────────────────────────────────────────────────
+
+.scheduler-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}

@@ -1,6 +1,6 @@
 import { App as AntApp, ConfigProvider, theme } from 'antd'
 import { useState } from 'react'
-import { ChatApp } from './ChatApp'
+import { PromptdApp } from './pages'
 
 export default function App() {
   const [isDark, setIsDark] = useState(
@@ -20,7 +20,7 @@ export default function App() {
       }}
     >
       <AntApp>
-        <ChatApp isDark={isDark} onToggleDark={() => setIsDark(!isDark)} />
+        <PromptdApp isDark={isDark} onToggleDark={() => setIsDark(!isDark)} />
       </AntApp>
     </ConfigProvider>
   )

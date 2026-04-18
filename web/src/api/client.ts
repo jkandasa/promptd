@@ -6,6 +6,7 @@ import type {
 export type ChatResponse = {
   reply: string
   model: string
+  provider?: string
   time_taken_ms: number
   llm_calls: number
   tool_calls: number
@@ -28,6 +29,7 @@ export class ChatError extends Error {
 export interface ModelInfo {
   id: string
   name?: string
+  provider?: string
   source?: 'static' | 'discovered'
   is_manual?: boolean
   params?: {
@@ -38,8 +40,17 @@ export interface ModelInfo {
   }
 }
 
+export interface ProviderInfo {
+  name: string
+  source?: string
+  count: number
+  updated_at?: string
+  refresh_interval?: string
+}
+
 export interface ModelData {
   models: ModelInfo[]
+  providers?: ProviderInfo[]
   selection_method: string
   source?: string
   count: number
@@ -66,8 +77,9 @@ export async function apiGetUIConfig(): Promise<UIConfig> {
   return res.json()
 }
 
-export async function apiGetModels(): Promise<ModelData> {
-  const res = await fetch('/models')
+export async function apiGetModels(provider?: string): Promise<ModelData> {
+  const url = provider ? `/models?provider=${encodeURIComponent(provider)}` : '/models'
+  const res = await fetch(url)
   if (!res.ok) return { models: [], selection_method: 'auto', count: 0 }
   return res.json()
 }
@@ -79,11 +91,12 @@ export async function apiChat(
   model?: string,
   systemPrompt?: string,
   params?: LLMParamsOverride,
+  provider?: string,
 ): Promise<ChatResponse> {
   const res = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message, files, model, system_prompt: systemPrompt, params }),
+    body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
   })
   const data = await res.json()
   if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model)

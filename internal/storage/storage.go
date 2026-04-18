@@ -19,8 +19,18 @@ type TraceToolCall struct {
 
 // TraceToolDef records one tool definition that was offered to the LLM in a round.
 type TraceToolDef struct {
-	Name        string `yaml:"name"        json:"name"`
-	Description string `yaml:"description" json:"description"`
+	Name        string      `yaml:"name"                   json:"name"`
+	Description string      `yaml:"description,omitempty"  json:"description,omitempty"`
+	Parameters  interface{} `yaml:"parameters,omitempty"   json:"parameters,omitempty"`
+}
+
+// ToolDefFromOpenAI converts an openai.Tool to a TraceToolDef for trace recording.
+func ToolDefFromOpenAI(t openai.Tool) TraceToolDef {
+	return TraceToolDef{
+		Name:        t.Function.Name,
+		Description: t.Function.Description,
+		Parameters:  t.Function.Parameters,
+	}
 }
 
 // TokenUsage records prompt/completion/total token counts for one LLM round,
@@ -124,6 +134,7 @@ type Message struct {
 	SentAt  time.Time `yaml:"sent_at" json:"sent_at"`
 	// Metadata — non-zero only for final assistant replies.
 	Model       string `yaml:"model,omitempty"         json:"model,omitempty"`
+	Provider    string `yaml:"provider,omitempty"      json:"provider,omitempty"`
 	TimeTakenMs int64  `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
 	LLMCalls    int    `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
 	ToolCalls   int    `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
@@ -147,6 +158,7 @@ type Conversation struct {
 	ID           string      `yaml:"id"         json:"id"`
 	Title        string      `yaml:"title"      json:"title"`
 	Model        string      `yaml:"model"      json:"model"`
+	Provider     string      `yaml:"provider,omitempty"      json:"provider,omitempty"`
 	SystemPrompt string      `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 	Params       *UsedParams `yaml:"params,omitempty"        json:"params,omitempty"`
 	Pinned       bool        `yaml:"pinned,omitempty" json:"pinned,omitempty"`

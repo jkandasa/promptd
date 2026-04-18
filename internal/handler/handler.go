@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"promptd/internal/chat"
-	"promptd/internal/llmlog"
 	"promptd/internal/storage"
 	"promptd/internal/tools"
 
@@ -38,6 +37,7 @@ type LLMParams struct {
 type ModelInfo struct {
 	ID       string    `json:"id"`
 	Name     string    `json:"name,omitempty"`
+	Provider string    `json:"provider,omitempty"`
 	Params   LLMParams `json:"params,omitempty"`
 	IsManual bool      `json:"is_manual,omitempty"`
 }
@@ -121,11 +121,211 @@ func (m *ModelSelector) GetSelectionMethod() string {
 	return m.selectionMethod
 }
 
+// ProviderInfo summarises a configured LLM provider for the /models API response.
+type ProviderInfo struct {
+	Name            string `json:"name"`
+	Source          string `json:"source,omitempty"`
+	Count           int    `json:"count"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+	RefreshInterval string `json:"refresh_interval,omitempty"`
+}
+
+// ProviderEntry holds a single LLM provider's client and model list.
+type ProviderEntry struct {
+	Name          string
+	Client        *openai.Client
+	ModelSelector *ModelSelector
+	GlobalParams  LLMParams
+	StaticModels  []ModelInfo
+	AutoDiscover  bool
+}
+
+// ProviderRegistry manages multiple LLM providers and routes requests to the
+// correct provider client based on model ID.
+type ProviderRegistry struct {
+	providers []*ProviderEntry
+	byName    map[string]*ProviderEntry
+	modelMap  map[string]*ProviderEntry // model ID → owning provider
+	log       *zap.Logger
+	mu        sync.RWMutex
+}
+
+// NewProviderRegistry creates a ProviderRegistry from a slice of entries and
+// builds the initial model→provider routing table.
+func NewProviderRegistry(entries []*ProviderEntry, log *zap.Logger) *ProviderRegistry {
+	r := &ProviderRegistry{
+		providers: entries,
+		byName:    make(map[string]*ProviderEntry, len(entries)),
+		modelMap:  make(map[string]*ProviderEntry),
+		log:       log,
+	}
+	for _, e := range entries {
+		r.byName[e.Name] = e
+	}
+	r.rebuildModelMap()
+	return r
+}
+
+// rebuildModelMap rebuilds the model-ID → provider routing table.
+// Must not be called while holding mu (called from NewProviderRegistry before
+// the registry is shared, and from UpdateModelMap which holds mu.Lock).
+func (r *ProviderRegistry) rebuildModelMap() {
+	newMap := make(map[string]*ProviderEntry)
+	for _, entry := range r.providers {
+		for _, m := range entry.ModelSelector.GetAvailableModels() {
+			if _, exists := newMap[m.ID]; !exists {
+				newMap[m.ID] = entry
+			}
+		}
+	}
+	r.modelMap = newMap
+}
+
+// UpdateModelMap rebuilds the routing table — call after any model list update.
+func (r *ProviderRegistry) UpdateModelMap() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rebuildModelMap()
+}
+
+// ResolveModel returns the model ID, display name, provider name, and openai.Client to use.
+// When provider is non-empty, routes to that specific provider (used by the scheduler).
+func (r *ProviderRegistry) ResolveModel(preferred, provider string) (id, name, providerUsed string, client *openai.Client) {
+	return r.ResolveModelWithProvider(preferred, provider)
+}
+
+// ResolveModelWithProvider is like ResolveModel but routes to a specific provider
+// when provider is non-empty. This allows the same model ID to be served by
+// different providers (e.g. when two providers both offer the same model).
+func (r *ProviderRegistry) ResolveModelWithProvider(preferred, provider string) (id, name, providerUsed string, client *openai.Client) {
+	if provider != "" {
+		r.mu.RLock()
+		entry, ok := r.byName[provider]
+		r.mu.RUnlock()
+		if ok {
+			id, name = entry.ModelSelector.GetModel(preferred)
+			return id, name, entry.Name, entry.Client
+		}
+	}
+	if preferred != "" {
+		r.mu.RLock()
+		entry, ok := r.modelMap[preferred]
+		r.mu.RUnlock()
+		if ok {
+			id, name = entry.ModelSelector.GetModel(preferred)
+			return id, name, entry.Name, entry.Client
+		}
+	}
+	r.mu.RLock()
+	var entry *ProviderEntry
+	if len(r.providers) > 0 {
+		entry = r.providers[0]
+	}
+	r.mu.RUnlock()
+	if entry != nil {
+		id, name = entry.ModelSelector.GetModel("")
+		return id, name, entry.Name, entry.Client
+	}
+	return "", "", "", nil
+}
+
+// GetModelParams returns the effective LLM params for the given model ID,
+// optionally scoped to a specific provider.
+func (r *ProviderRegistry) GetModelParams(modelID string) LLMParams {
+	return r.GetModelParamsForProvider(modelID, "")
+}
+
+// GetModelParamsForProvider looks up model params within a specific provider first,
+// then falls back to the default modelMap lookup.
+func (r *ProviderRegistry) GetModelParamsForProvider(modelID, provider string) LLMParams {
+	var entry *ProviderEntry
+	if provider != "" {
+		r.mu.RLock()
+		e, ok := r.byName[provider]
+		r.mu.RUnlock()
+		if ok {
+			entry = e
+		}
+	}
+	if entry == nil {
+		r.mu.RLock()
+		e, ok := r.modelMap[modelID]
+		r.mu.RUnlock()
+		if !ok {
+			return LLMParams{}
+		}
+		entry = e
+	}
+	for _, m := range entry.ModelSelector.GetAvailableModels() {
+		if m.ID == modelID {
+			return m.Params
+		}
+	}
+	return entry.GlobalParams
+}
+
+// AllModels returns a flat list of all models across all providers, tagged with
+// their provider name.
+func (r *ProviderRegistry) AllModels() []ModelInfo {
+	r.mu.RLock()
+	entries := make([]*ProviderEntry, len(r.providers))
+	copy(entries, r.providers)
+	r.mu.RUnlock()
+	var all []ModelInfo
+	for _, entry := range entries {
+		for _, m := range entry.ModelSelector.GetAvailableModels() {
+			m.Provider = entry.Name
+			all = append(all, m)
+		}
+	}
+	return all
+}
+
+// ModelsByProvider returns models for a single provider, tagged with its name.
+func (r *ProviderRegistry) ModelsByProvider(provider string) []ModelInfo {
+	r.mu.RLock()
+	entry, ok := r.byName[provider]
+	r.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	models := entry.ModelSelector.GetAvailableModels()
+	result := make([]ModelInfo, len(models))
+	for i, m := range models {
+		m.Provider = entry.Name
+		result[i] = m
+	}
+	return result
+}
+
+// GetProviderInfos returns metadata for all providers (used by /models endpoint).
+func (r *ProviderRegistry) GetProviderInfos() []ProviderInfo {
+	r.mu.RLock()
+	entries := make([]*ProviderEntry, len(r.providers))
+	copy(entries, r.providers)
+	r.mu.RUnlock()
+	infos := make([]ProviderInfo, 0, len(entries))
+	for _, e := range entries {
+		e.ModelSelector.mu.Lock()
+		info := ProviderInfo{
+			Name:   e.Name,
+			Source: e.ModelSelector.source,
+			Count:  len(e.ModelSelector.models),
+		}
+		if !e.ModelSelector.lastUpdated.IsZero() {
+			info.UpdatedAt = e.ModelSelector.lastUpdated.Format(time.RFC3339)
+		}
+		if e.ModelSelector.refreshInterval > 0 {
+			info.RefreshInterval = e.ModelSelector.refreshInterval.String()
+		}
+		e.ModelSelector.mu.Unlock()
+		infos = append(infos, info)
+	}
+	return infos
+}
+
 type Handler struct {
-	client              *openai.Client
-	ModelSelector       *ModelSelector
-	GlobalParams        LLMParams   // global config defaults; applied to discovered models
-	StaticModels        []ModelInfo // models explicitly listed in config (is_manual=true)
+	providers           *ProviderRegistry
 	systemPrompts       map[string]string
 	defaultSystemPrompt string
 	registry            *tools.Registry
@@ -151,19 +351,13 @@ type SystemPromptInfo struct {
 	Name string `json:"name"`
 }
 
-func New(apiKey, baseURL string, systemPrompts map[string]string, defaultSystemPrompt string, modelSelector *ModelSelector, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string, traceEnabled bool) *Handler {
-	cfg := openai.DefaultConfig(apiKey)
-	cfg.BaseURL = baseURL
-	cfg.HTTPClient = &http.Client{Transport: llmlog.NewTransport(nil, log)}
-
+// New creates a Handler.
+func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string, traceEnabled bool) *Handler {
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		// Fatal: the upload handler will fail on every request if the directory cannot be created.
 		log.Fatal("failed to create upload directory", zap.String("dir", uploadDir), zap.Error(err))
 	}
-
 	return &Handler{
-		client:              openai.NewClientWithConfig(cfg),
-		ModelSelector:       modelSelector,
+		providers:           providers,
 		systemPrompts:       systemPrompts,
 		defaultSystemPrompt: defaultSystemPrompt,
 		registry:            registry,
@@ -182,6 +376,7 @@ type chatRequest struct {
 	Message      string    `json:"message"`
 	Files        []string  `json:"files,omitempty"`
 	Model        string    `json:"model,omitempty"`
+	Provider     string    `json:"provider,omitempty"`
 	SystemPrompt string    `json:"system_prompt,omitempty"`
 	Params       LLMParams `json:"params,omitempty"` // UI overrides; zero values ignored
 }
@@ -189,6 +384,7 @@ type chatRequest struct {
 type chatResponse struct {
 	Reply          string              `json:"reply"`
 	Model          string              `json:"model"`
+	Provider       string              `json:"provider,omitempty"`
 	TimeTaken      int64               `json:"time_taken_ms"`
 	LLMCalls       int                 `json:"llm_calls"`
 	ToolCalls      int                 `json:"tool_calls"`
@@ -297,22 +493,14 @@ const maxToolIterations = 20
 // Returns the reply text, the final assistant message, model used, LLM call count,
 // tool call count, the full trace of all LLM round-trips, the effective params used,
 // and any error.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel string, reqParams LLMParams) (string, openai.ChatCompletionMessage, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
-	model, _ := h.ModelSelector.GetModel(preferredModel)
+	model, _, providerUsed, llmClient := h.providers.ResolveModelWithProvider(preferredModel, provider)
 
 	// Resolve effective params: model-config defaults, overridden by UI request.
-	var modelParams LLMParams
-	h.ModelSelector.mu.Lock()
-	for _, m := range h.ModelSelector.models {
-		if m.ID == model {
-			modelParams = m.Params
-			break
-		}
-	}
-	h.ModelSelector.mu.Unlock()
+	modelParams := h.providers.GetModelParamsForProvider(model, provider)
 	// UI request params override model-config params.
 	if reqParams.Temperature != nil {
 		modelParams.Temperature = reqParams.Temperature
@@ -342,7 +530,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 
 	for {
 		if llmCalls >= maxToolIterations {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
+			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
 		requestMsgs := h.buildMessages(session)
@@ -366,10 +554,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		// Snapshot available tools for the trace before the API call.
 		var availableTools []storage.TraceToolDef
 		for _, t := range req.Tools {
-			availableTools = append(availableTools, storage.TraceToolDef{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-			})
+			availableTools = append(availableTools, storage.ToolDefFromOpenAI(t))
 		}
 
 		h.log.Debug("llm request",
@@ -379,14 +564,14 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		)
 
 		llmStart := time.Now()
-		resp, err := h.client.CreateChatCompletion(ctx, req)
+		resp, err := llmClient.CreateChatCompletion(ctx, req)
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
+			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
+			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
 		}
 		choice := resp.Choices[0]
 
@@ -402,7 +587,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		// No tool calls — we have the final answer. Record the round and return.
 		if choice.FinishReason != openai.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", openai.ChatCompletionMessage{}, model, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
 			if h.TraceEnabled {
 				trace = append(trace, storage.LLMRound{
@@ -414,7 +599,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 				})
 			}
 
-			return choice.Message.Content, choice.Message, model, llmCalls, toolCalls, trace, usedParams, nil
+			return choice.Message.Content, choice.Message, model, providerUsed, llmCalls, toolCalls, trace, usedParams, nil
 		}
 
 		// Append the assistant message that contains the tool call requests.
@@ -519,6 +704,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session.SetModel(req.Model)
+	session.SetProvider(req.Provider)
 	session.SetSystemPrompt(req.SystemPrompt)
 	// Persist the current UI param overrides on the conversation so they can be
 	// restored when the conversation is loaded again. Nil means "use config defaults".
@@ -534,7 +720,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	session.SetParams(convParams)
 	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
 
-	reply, finalMsg, model, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Params)
+	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Provider, req.Params)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model})
@@ -542,9 +728,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	assistantMsgID := session.AddFinalMessage(finalMsg, model, timeTaken, llmCalls, toolCalls, trace, usedParams)
-	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams})
+	assistantMsgID := session.AddFinalMessage(finalMsg, model, providerUsed, timeTaken, llmCalls, toolCalls, trace, usedParams)
+	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model), zap.String("provider", providerUsed))
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, Provider: providerUsed, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
@@ -607,74 +793,97 @@ func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	discover := r.URL.Query().Get("discover") == "true"
 	if discover {
-		if err := h.DiscoverAndUpdateModels(r.Context()); err != nil {
-			http.Error(w, fmt.Sprintf("discover failed: %v", err), http.StatusInternalServerError)
-			return
+		h.providers.mu.RLock()
+		var autoDiscoverNames []string
+		for _, e := range h.providers.providers {
+			if e.AutoDiscover {
+				autoDiscoverNames = append(autoDiscoverNames, e.Name)
+			}
+		}
+		h.providers.mu.RUnlock()
+		for _, name := range autoDiscoverNames {
+			if err := h.DiscoverAndUpdateModels(r.Context(), name); err != nil {
+				http.Error(w, fmt.Sprintf("discover failed for %q: %v", name, err), http.StatusInternalServerError)
+				return
+			}
 		}
 	}
-	models := h.ModelSelector.GetAvailableModels()
-	m := h.ModelSelector
-	m.mu.Lock()
-	source := m.source
-	count := len(m.models)
-	updatedAt := m.lastUpdated.Format(time.RFC3339)
-	refreshInterval := ""
-	if m.refreshInterval > 0 {
-		refreshInterval = m.refreshInterval.String()
-	}
-	method := m.selectionMethod
-	m.mu.Unlock()
 
-	resp := map[string]interface{}{
+	providerFilter := r.URL.Query().Get("provider")
+	var models []ModelInfo
+	if providerFilter != "" {
+		models = h.providers.ModelsByProvider(providerFilter)
+	} else {
+		models = h.providers.AllModels()
+	}
+	providerInfos := h.providers.GetProviderInfos()
+
+	sources := make(map[string]bool)
+	for _, p := range providerInfos {
+		if p.Source != "" {
+			sources[p.Source] = true
+		}
+	}
+	overallSource := "static"
+	if len(sources) > 1 {
+		overallSource = "mixed"
+	} else if sources["discovered"] {
+		overallSource = "discovered"
+	}
+
+	resp := map[string]any{
 		"models":           models,
-		"selection_method": method,
-		"source":           source,
-		"count":            count,
-		"updated_at":       updatedAt,
-		"refresh_interval": refreshInterval,
-		"global_params":    h.GlobalParams,
+		"providers":        providerInfos,
+		"selection_method": "round_robin",
+		"source":           overallSource,
+		"count":            len(models),
+		"updated_at":       time.Now().Format(time.RFC3339),
+		"global_params":    LLMParams{},
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) DiscoverAndUpdateModels(ctx context.Context) error {
-	resp, err := h.client.ListModels(ctx)
-	if err != nil {
-		return fmt.Errorf("list models: %w", err)
+func (h *Handler) DiscoverAndUpdateModels(ctx context.Context, providerName string) error {
+	h.providers.mu.RLock()
+	entry, ok := h.providers.byName[providerName]
+	h.providers.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown provider %q", providerName)
 	}
-	// Build a lookup of static (manually-configured) models by ID so we can
-	// preserve their per-model params and manual flag when autodiscover runs.
-	staticByID := make(map[string]ModelInfo, len(h.StaticModels))
-	for _, m := range h.StaticModels {
+
+	resp, err := entry.Client.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("list models for provider %q: %w", providerName, err)
+	}
+
+	staticByID := make(map[string]ModelInfo, len(entry.StaticModels))
+	for _, m := range entry.StaticModels {
 		staticByID[m.ID] = m
 	}
-	// Track which static model IDs were matched by the provider response.
-	matchedStatic := make(map[string]bool, len(h.StaticModels))
+	matchedStatic := make(map[string]bool, len(entry.StaticModels))
 
 	var infos []ModelInfo
 	for _, md := range resp.Models {
-		if sm, ok := staticByID[md.ID]; ok {
-			// Static model: keep its merged params and mark it as manual.
+		if sm, ok2 := staticByID[md.ID]; ok2 {
 			infos = append(infos, sm)
 			matchedStatic[md.ID] = true
 		} else {
-			// Discovered-only model: apply global params baseline.
-			infos = append(infos, ModelInfo{ID: md.ID, Params: h.GlobalParams})
+			infos = append(infos, ModelInfo{ID: md.ID, Provider: providerName, Params: entry.GlobalParams})
 		}
 	}
-	// Append static models that the provider didn't return — they may be
-	// hosted elsewhere or the provider list may be incomplete.
-	for _, sm := range h.StaticModels {
+	for _, sm := range entry.StaticModels {
 		if !matchedStatic[sm.ID] {
 			infos = append(infos, sm)
 		}
 	}
-	h.ModelSelector.UpdateModels(infos)
-	h.log.Info("models updated from provider", zap.Int("count", len(infos)))
+
+	entry.ModelSelector.UpdateModels(infos)
+	h.providers.UpdateModelMap()
+	h.log.Info("models updated from provider", zap.String("provider", providerName), zap.Int("count", len(infos)))
 	return nil
 }
 
-func (h *Handler) StartAutoDiscover(ctx context.Context, interval time.Duration) {
+func (h *Handler) StartAutoDiscover(ctx context.Context, providerName string, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -682,8 +891,8 @@ func (h *Handler) StartAutoDiscover(ctx context.Context, interval time.Duration)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := h.DiscoverAndUpdateModels(ctx); err != nil {
-				h.log.Warn("autodiscover tick failed", zap.Error(err))
+			if err := h.DiscoverAndUpdateModels(ctx, providerName); err != nil {
+				h.log.Warn("autodiscover tick failed", zap.String("provider", providerName), zap.Error(err))
 			}
 		}
 	}

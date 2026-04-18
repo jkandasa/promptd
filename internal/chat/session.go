@@ -50,7 +50,7 @@ func (s *Session) Add(role, content string) string {
 
 // AddFinalMessage appends the final assistant reply with its associated
 // performance metadata and LLM trace. Returns the new message ID.
-func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
+func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model, provider string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -62,6 +62,7 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model string
 		Name:        msg.Name,
 		SentAt:      time.Now(),
 		Model:       model,
+		Provider:    provider,
 		TimeTakenMs: timeTakenMs,
 		LLMCalls:    llmCalls,
 		ToolCalls:   toolCalls,
@@ -109,6 +110,19 @@ func (s *Session) SetModel(model string) {
 		return
 	}
 	s.conv.Model = model
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+}
+
+// SetProvider records the user's explicit provider choice for this conversation.
+// Pass an empty string to clear it (i.e. revert to auto).
+func (s *Session) SetProvider(provider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conv.Provider == provider {
+		return
+	}
+	s.conv.Provider = provider
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 }
