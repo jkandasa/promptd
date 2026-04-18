@@ -51,14 +51,96 @@
   flex: 1;
   overflow: auto;
   padding: 0 20px 20px;
+  min-width: 0;
 }
 
 .schedule-table {
   background: transparent;
+  min-width: 0;
+}
+
+.schedule-table .ant-table,
+.schedule-table .ant-table-container,
+.schedule-table .ant-spin-nested-loading,
+.schedule-table .ant-spin-container {
+  height: 100%;
+}
+
+.schedule-table .ant-table-thead > tr > th,
+.schedule-table .ant-table-tbody > tr > td {
+  padding-block: 10px;
+  padding-inline: 12px;
+}
+
+.schedule-table .ant-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.schedule-table .ant-table-thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.schedule-table .ant-table-column-sort,
+.schedule-table .ant-table-thead > tr > th.ant-table-column-sort,
+.schedule-table .ant-table-tbody > tr > td.ant-table-column-sort {
+  background: transparent !important;
+}
+
+.schedule-table .ant-table-column-sorter-up.active,
+.schedule-table .ant-table-column-sorter-down.active {
+  color: var(--ant-color-primary);
 }
 
 .schedule-row-selected > td {
   background: rgba(91, 33, 182, 0.08) !important;
+}
+
+.schedule-mobile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.schedule-mobile-card {
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.schedule-mobile-card-selected {
+  box-shadow: 0 0 0 1px rgba(91, 33, 182, 0.12);
+}
+
+.schedule-mobile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.schedule-mobile-prompt {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.schedule-mobile-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.schedule-mobile-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .history-meta {
@@ -145,8 +227,27 @@
     margin-left: 0;
   }
 
+  .list-toolbar {
+    align-items: stretch;
+  }
+
+  .list-toolbar .ant-segmented {
+    width: 100%;
+  }
+
   .history-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .schedule-table .ant-table-thead > tr > th,
+  .schedule-table .ant-table-tbody > tr > td {
+    padding-inline: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .schedule-mobile-meta {
+    grid-template-columns: 1fr;
   }
 }

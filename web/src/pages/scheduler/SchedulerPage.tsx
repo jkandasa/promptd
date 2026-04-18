@@ -4,6 +4,7 @@ import {
   Collapse,
   Descriptions,
   Empty,
+  Grid,
   Input,
   Popconfirm,
   Radio,
@@ -49,6 +50,7 @@ import './SchedulerPage.scss'
 
 const { Text, Title } = Typography
 const { useToken } = theme
+const { useBreakpoint } = Grid
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -284,6 +286,7 @@ export function SchedulerPage({
   onCloseEditor,
 }: Props) {
   const { token } = useToken()
+  const screens = useBreakpoint()
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(selectedScheduleId ?? null)
   const [executions, setExecutions] = useState<Execution[]>([])
@@ -295,6 +298,7 @@ export function SchedulerPage({
   // Schedule filters
   const [nameFilter, setNameFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [scheduleSortKey, setScheduleSortKey] = useState<'default' | 'name' | 'lastRun' | 'nextRun'>('default')
 
   // Execution filter
   const [execStatusFilter, setExecStatusFilter] = useState<ExecStatusFilter>('all')
@@ -352,13 +356,24 @@ export function SchedulerPage({
 
   // Filtered + derived schedules
   const filteredSchedules = useMemo(() => {
-    return schedules.filter(sc => {
+    const base = schedules.filter(sc => {
       if (nameFilter && !sc.name.toLowerCase().includes(nameFilter.toLowerCase())) return false
       if (statusFilter === 'enabled' && !sc.enabled) return false
       if (statusFilter === 'disabled' && sc.enabled) return false
       return true
     })
-  }, [schedules, nameFilter, statusFilter])
+
+    if (scheduleSortKey === 'name') {
+      return [...base].sort((a, b) => a.name.localeCompare(b.name))
+    }
+    if (scheduleSortKey === 'lastRun') {
+      return [...base].sort((a, b) => new Date(b.lastRunAt || 0).getTime() - new Date(a.lastRunAt || 0).getTime())
+    }
+    if (scheduleSortKey === 'nextRun') {
+      return [...base].sort((a, b) => new Date(a.nextRunAt || 0).getTime() - new Date(b.nextRunAt || 0).getTime())
+    }
+    return base
+  }, [schedules, nameFilter, statusFilter, scheduleSortKey])
 
   // Filtered + sorted executions (newest first)
   const filteredExecutions = useMemo(() => {
@@ -454,10 +469,13 @@ export function SchedulerPage({
   const clearScheduleFilters = () => { setNameFilter(''); setStatusFilter('all') }
 
   const runningCount = executions.filter(e => e.status === 'running').length
+  const isMobile = !screens.md
   const scheduleColumns = [
     {
       title: 'Name',
       key: 'name',
+      width: '48%',
+      sorter: (a: Schedule, b: Schedule) => a.name.localeCompare(b.name),
       render: (_: unknown, sc: Schedule) => (
         <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
           <Space size={8} wrap>
@@ -476,7 +494,7 @@ export function SchedulerPage({
     {
       title: 'Schedule',
       key: 'schedule',
-      width: 220,
+      width: '20%',
       render: (_: unknown, sc: Schedule) => (
         <Text style={{ fontSize: 12 }}>
           {sc.type === 'cron' ? sc.cronExpr || '—' : fmtDate(sc.runAt)}
@@ -486,7 +504,8 @@ export function SchedulerPage({
     {
       title: 'Last Run',
       key: 'lastRunAt',
-      width: 140,
+      width: '12%',
+      sorter: (a: Schedule, b: Schedule) => new Date(a.lastRunAt || 0).getTime() - new Date(b.lastRunAt || 0).getTime(),
       render: (_: unknown, sc: Schedule) => {
         if (!sc.lastRunAt) return <Text style={{ fontSize: 12 }}>-</Text>
         return (
@@ -499,7 +518,8 @@ export function SchedulerPage({
     {
       title: 'Next Run',
       key: 'nextRunAt',
-      width: 140,
+      width: '12%',
+      sorter: (a: Schedule, b: Schedule) => new Date(a.nextRunAt || 0).getTime() - new Date(b.nextRunAt || 0).getTime(),
       render: (_: unknown, sc: Schedule) => {
         if (!sc.enabled) return <Text style={{ fontSize: 12 }}>-</Text>
         if (!sc.nextRunAt) return <Text style={{ fontSize: 12 }}>-</Text>
@@ -513,7 +533,7 @@ export function SchedulerPage({
     {
       title: 'Actions',
       key: 'actions',
-      width: 180,
+      width: '8%',
       render: (_: unknown, sc: Schedule) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Tooltip title="Run now">
@@ -691,6 +711,18 @@ export function SchedulerPage({
                   { label: 'Disabled', value: 'disabled' },
                 ]}
               />
+              {isMobile && (
+                <Segmented
+                  value={scheduleSortKey}
+                  onChange={v => setScheduleSortKey(v as 'default' | 'name' | 'lastRun' | 'nextRun')}
+                  options={[
+                    { label: 'Default', value: 'default' },
+                    { label: 'Name', value: 'name' },
+                    { label: 'Last run', value: 'lastRun' },
+                    { label: 'Next run', value: 'nextRun' },
+                  ]}
+                />
+              )}
               <Text type="secondary" className="schedule-count">
                 {hasScheduleFilters
                   ? `${filteredSchedules.length} of ${schedules.length} schedules`
@@ -713,6 +745,55 @@ export function SchedulerPage({
                     <Button onClick={clearScheduleFilters}>Clear filters</Button>
                   </Empty>
                 </div>
+              ) : isMobile ? (
+                <div className="schedule-mobile-list">
+                  {filteredSchedules.map((sc) => (
+                    <div
+                      key={sc.id}
+                      className={`schedule-mobile-card${sc.id === selectedId ? ' schedule-mobile-card-selected' : ''}`}
+                      style={{
+                        border: `1px solid ${sc.id === selectedId ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
+                        background: token.colorBgContainer,
+                      }}
+                      onClick={() => handleSelectSchedule(sc.id)}
+                    >
+                      <div className="schedule-mobile-head">
+                        <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
+                          <Space size={8} wrap>
+                            <Text strong>{sc.name}</Text>
+                            <Tag color={sc.enabled ? 'green' : 'default'}>{sc.enabled ? 'enabled' : 'disabled'}</Tag>
+                            <Tag color={sc.type === 'cron' ? 'blue' : 'purple'}>{sc.type}</Tag>
+                          </Space>
+                          <Text type="secondary" className="schedule-mobile-prompt">{sc.prompt}</Text>
+                        </Space>
+                      </div>
+
+                      <div className="schedule-mobile-meta">
+                        <div className="schedule-mobile-meta-item">
+                          <Text type="secondary">Schedule</Text>
+                          <Text>{sc.type === 'cron' ? sc.cronExpr || '—' : fmtDate(sc.runAt)}</Text>
+                        </div>
+                        <div className="schedule-mobile-meta-item">
+                          <Text type="secondary">Last run</Text>
+                          <Text>{sc.lastRunAt ? relativeTime(sc.lastRunAt) : '-'}</Text>
+                        </div>
+                        <div className="schedule-mobile-meta-item">
+                          <Text type="secondary">Next run</Text>
+                          <Text>{!sc.enabled || !sc.nextRunAt ? '-' : relativeTime(sc.nextRunAt)}</Text>
+                        </div>
+                      </div>
+
+                      <Space size={6} wrap onClick={(e) => e.stopPropagation()}>
+                        <Button size="small" icon={<ThunderboltOutlined />} onClick={() => handleTrigger(sc.id)}>Run now</Button>
+                        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(sc)}>Edit</Button>
+                        <Switch size="small" checked={sc.enabled} onChange={(enabled) => handleToggle(sc, enabled)} />
+                        <Popconfirm title="Delete this schedule?" okText="Delete" okType="danger" onConfirm={() => handleDeleteSchedule(sc.id)}>
+                          <Button size="small" danger icon={<DeleteOutlined />} />
+                        </Popconfirm>
+                      </Space>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <Table
                   size="middle"
@@ -722,9 +803,11 @@ export function SchedulerPage({
                   pagination={false}
                   rowHoverable
                   className="schedule-table"
+                  tableLayout="auto"
+                  sticky
                   rowClassName={(record) => record.id === selectedId ? 'schedule-row-selected' : ''}
                   onRow={(record) => ({ onClick: () => handleSelectSchedule(record.id) })}
-                  scroll={{ x: 980 }}
+                  scroll={{ y: 'calc(100vh - 320px)' }}
                 />
               )}
             </div>
