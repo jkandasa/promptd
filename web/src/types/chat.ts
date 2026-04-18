@@ -121,6 +121,7 @@ export interface StorageMessage {
   role: string
   content: string
   sent_at: string
+  files?: UploadedFile[]
   model?: string
   provider?: string
   time_taken_ms?: number

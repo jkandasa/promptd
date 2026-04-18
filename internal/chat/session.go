@@ -33,12 +33,13 @@ func (s *Session) Title() string {
 	return s.conv.Title
 }
 
-// Add appends a plain role/content message and persists. Returns the new message ID.
-func (s *Session) Add(role, content string) string {
+// Add appends a plain role/content message and persists. Optional file metadata is
+// kept on the stored message for UI rendering and attachment replay.
+func (s *Session) Add(role, content string, files []storage.UploadedFile) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
-	s.conv.Messages = append(s.conv.Messages, storage.Message{ID: id, Role: role, Content: content, SentAt: time.Now()})
+	s.conv.Messages = append(s.conv.Messages, storage.Message{ID: id, Role: role, Content: content, Files: files, SentAt: time.Now()})
 	s.conv.UpdatedAt = time.Now()
 	// Auto-title from first user message (truncated to 60 runes).
 	if s.conv.Title == "" && role == openai.ChatMessageRoleUser {
@@ -68,6 +69,26 @@ func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model, provi
 		ToolCalls:   toolCalls,
 		Trace:       trace,
 		UsedParams:  usedParams,
+	})
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+	return id
+}
+
+// AddErrorMessage appends a persisted UI-visible error message for the
+// conversation. Error messages are intentionally excluded from future LLM
+// context, but remain part of the stored conversation transcript.
+func (s *Session) AddErrorMessage(content, model, provider string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := uuid.New().String()
+	s.conv.Messages = append(s.conv.Messages, storage.Message{
+		ID:       id,
+		Role:     storage.MessageRoleError,
+		Content:  content,
+		SentAt:   time.Now(),
+		Model:    model,
+		Provider: provider,
 	})
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
@@ -197,7 +218,7 @@ func (s *Session) persist() {
 	c := s.conv
 	msgs := make([]storage.Message, 0, len(s.conv.Messages))
 	for _, m := range s.conv.Messages {
-		if !m.Transient && (m.Role == openai.ChatMessageRoleUser || m.Role == openai.ChatMessageRoleAssistant) {
+		if !m.Transient && (m.Role == openai.ChatMessageRoleUser || m.Role == openai.ChatMessageRoleAssistant || m.Role == storage.MessageRoleError) {
 			msgs = append(msgs, m)
 		}
 	}

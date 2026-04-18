@@ -22,11 +22,13 @@ export type ChatResponse = {
 export class ChatError extends Error {
   model?: string
   provider?: string
-  constructor(message: string, model?: string, provider?: string) {
+  errorMsgId?: string
+  constructor(message: string, model?: string, provider?: string, errorMsgId?: string) {
     super(message)
     this.name = 'ChatError'
     this.model = model
     this.provider = provider
+    this.errorMsgId = errorMsgId
   }
 }
 
@@ -94,7 +96,7 @@ export async function apiGetModels(provider?: string, discover = false): Promise
 export async function apiChat(
   sessionId: string,
   message: string,
-  files?: string[],
+  files?: UploadedFile[],
   model?: string,
   systemPrompt?: string,
   params?: LLMParamsOverride,
@@ -106,7 +108,7 @@ export async function apiChat(
     body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
   })
   const data = await res.json()
-  if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model, data.provider)
+  if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model, data.provider, data.error_msg_id)
   return data as ChatResponse
 }
 
@@ -155,4 +157,8 @@ export async function apiDeleteMessage(convId: string, msgId: string): Promise<v
 
 export async function apiDeleteMessagesFrom(convId: string, msgId: string): Promise<void> {
   await fetch(`${API_BASE}/conversations/${convId}/messages/${msgId}/after`, { method: 'DELETE' })
+}
+
+export async function apiDeleteFile(fileId: string): Promise<void> {
+  await fetch(`${API_BASE}/files/${fileId}`, { method: 'DELETE' })
 }

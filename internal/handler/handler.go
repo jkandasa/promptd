@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -374,7 +375,7 @@ func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSy
 type chatRequest struct {
 	SessionID    string    `json:"session_id"`
 	Message      string    `json:"message"`
-	Files        []string  `json:"files,omitempty"`
+	Files        []storage.UploadedFile `json:"files,omitempty"`
 	Model        string    `json:"model,omitempty"`
 	Provider     string    `json:"provider,omitempty"`
 	SystemPrompt string    `json:"system_prompt,omitempty"`
@@ -395,12 +396,13 @@ type chatResponse struct {
 }
 
 type errorResponse struct {
-	Error    string `json:"error"`
-	Model    string `json:"model,omitempty"`
-	Provider string `json:"provider,omitempty"`
+	Error      string `json:"error"`
+	Model      string `json:"model,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	ErrorMsgID string `json:"error_msg_id,omitempty"`
 }
 
-func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMessage {
+func (h *Handler) buildMessages(session *chat.Session, currentFiles []storage.UploadedFile) []openai.ChatCompletionMessage {
 	var messages []openai.ChatCompletionMessage
 	promptName := session.SystemPrompt()
 	if promptName == "" {
@@ -412,7 +414,237 @@ func (h *Handler) buildMessages(session *chat.Session) []openai.ChatCompletionMe
 			Content: prompt,
 		})
 	}
-	return append(messages, filterHistory(session.History())...)
+	history := filterHistory(session.History())
+	if len(currentFiles) > 0 && len(history) > 0 {
+		last := len(history) - 1
+		if history[last].Role == openai.ChatMessageRoleUser {
+			history[last] = h.buildUserLLMMessage(history[last].Content, currentFiles)
+		}
+	}
+	return append(messages, history...)
+}
+
+const maxInlinedTextFileBytes = 128 * 1024
+
+func (h *Handler) buildUserMessageContent(message string, files []storage.UploadedFile) string {
+	if len(files) == 0 {
+		return message
+	}
+	var b strings.Builder
+	b.WriteString("Attached files:\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "- %s\n", f.Filename)
+	}
+	if message != "" {
+		b.WriteString("\nUser request: ")
+		b.WriteString(message)
+	}
+	return b.String()
+}
+
+func (h *Handler) buildUserLLMMessage(content string, files []storage.UploadedFile) openai.ChatCompletionMessage {
+	parts := []openai.ChatMessagePart{{
+		Type: openai.ChatMessagePartTypeText,
+		Text: h.buildAttachmentText(content, files),
+	}}
+	for _, f := range files {
+		imageURL, ok := h.inlineImageDataURL(f)
+		if !ok {
+			continue
+		}
+		parts = append(parts, openai.ChatMessagePart{
+			Type: openai.ChatMessagePartTypeImageURL,
+			ImageURL: &openai.ChatMessageImageURL{
+				URL:    imageURL,
+				Detail: openai.ImageURLDetailAuto,
+			},
+		})
+	}
+	return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
+}
+
+func (h *Handler) buildAttachmentText(content string, files []storage.UploadedFile) string {
+	if len(files) == 0 {
+		return content
+	}
+	var b strings.Builder
+	b.WriteString(content)
+	if content != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Attachment details:\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "- %s", f.Filename)
+		text, note := h.readAttachmentForPrompt(f)
+		switch {
+		case text != "":
+			fmt.Fprintf(&b, "\n  Inlined contents:\n%s\n", indentText(text, "  "))
+		case note != "":
+			fmt.Fprintf(&b, " (%s)\n", note)
+		default:
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (h *Handler) readAttachmentForPrompt(file storage.UploadedFile) (string, string) {
+	data, err := h.readUploadedFile(file)
+	if err != nil {
+		return "", "attachment could not be read by the server"
+	}
+	if isImageFile(file.Filename, data) {
+		return "", "image attached separately"
+	}
+	if !isTextLikeFile(file.Filename, data) {
+		return "", "binary attachment metadata only"
+	}
+	if len(data) > maxInlinedTextFileBytes {
+		data = data[:maxInlinedTextFileBytes]
+		return string(data) + "\n[truncated]", ""
+	}
+	return string(data), ""
+}
+
+func (h *Handler) inlineImageDataURL(file storage.UploadedFile) (string, bool) {
+	data, err := h.readUploadedFile(file)
+	if err != nil || !isImageFile(file.Filename, data) {
+		return "", false
+	}
+	contentType := http.DetectContentType(data)
+	if !strings.HasPrefix(contentType, "image/") {
+		contentType = imageContentTypeFromName(file.Filename)
+	}
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), true
+}
+
+func (h *Handler) readUploadedFile(file storage.UploadedFile) ([]byte, error) {
+	filePath := filepath.Join(h.uploadDir, file.ID)
+	if !isUnderDir(filePath, h.uploadDir) {
+		return nil, fmt.Errorf("forbidden path")
+	}
+	return os.ReadFile(filePath)
+}
+
+func collectFiles(messages []storage.Message) []storage.UploadedFile {
+	if len(messages) == 0 {
+		return nil
+	}
+	files := make([]storage.UploadedFile, 0)
+	seen := make(map[string]struct{})
+	for _, msg := range messages {
+		for _, file := range msg.Files {
+			if file.ID == "" {
+				continue
+			}
+			if _, ok := seen[file.ID]; ok {
+				continue
+			}
+			seen[file.ID] = struct{}{}
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+func filesForDeletedSuffix(messages []storage.Message, msgID string) ([]storage.UploadedFile, error) {
+	for i, msg := range messages {
+		if msg.ID == msgID {
+			return collectFiles(messages[i:]), nil
+		}
+	}
+	return nil, storage.ErrNotFound
+}
+
+func fileIDsSet(files []storage.UploadedFile) map[string]struct{} {
+	ids := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file.ID != "" {
+			ids[file.ID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func excludeFiles(files []storage.UploadedFile, stillReferenced []storage.UploadedFile) []storage.UploadedFile {
+	if len(files) == 0 {
+		return nil
+	}
+	keep := fileIDsSet(stillReferenced)
+	filtered := make([]storage.UploadedFile, 0, len(files))
+	for _, file := range files {
+		if _, ok := keep[file.ID]; ok {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	return filtered
+}
+
+func (h *Handler) removeUploadedFiles(files []storage.UploadedFile) {
+	for _, file := range files {
+		if file.ID == "" {
+			continue
+		}
+		filePath := filepath.Join(h.uploadDir, file.ID)
+		if !isUnderDir(filePath, h.uploadDir) {
+			h.log.Warn("refused to delete attachment outside upload dir", zap.String("file_id", file.ID), zap.String("path", filePath))
+			continue
+		}
+		if err := os.Remove(filePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			h.log.Warn("failed to delete attachment file", zap.String("file_id", file.ID), zap.String("filename", file.Filename), zap.Error(err))
+		}
+	}
+}
+
+func isImageFile(filename string, data []byte) bool {
+	return strings.HasPrefix(http.DetectContentType(data), "image/") || imageContentTypeFromName(filename) != ""
+}
+
+func imageContentTypeFromName(filename string) string {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return ""
+	}
+}
+
+func isTextLikeFile(filename string, data []byte) bool {
+	contentType := strings.ToLower(http.DetectContentType(data))
+	if strings.HasPrefix(contentType, "text/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".csv", ".tsv", ".log", ".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".py", ".go", ".java", ".rb", ".php", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".sh", ".sql":
+		return true
+	default:
+		return strings.Contains(contentType, "json") || strings.Contains(contentType, "xml") || strings.Contains(contentType, "javascript")
+	}
+}
+
+func indentText(text, prefix string) string {
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // filterHistory strips intermediate tool-call scaffolding from completed prior
@@ -494,7 +726,7 @@ const maxToolIterations = 20
 // Returns the reply text, the final assistant message, model used, LLM call count,
 // tool call count, the full trace of all LLM round-trips, the effective params used,
 // and any error.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
+func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams, currentFiles []storage.UploadedFile) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
@@ -534,7 +766,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
-		requestMsgs := h.buildMessages(session)
+		requestMsgs := h.buildMessages(session, currentFiles)
 		req := openai.ChatCompletionRequest{
 			Model:    model,
 			Messages: requestMsgs,
@@ -644,6 +876,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		if h.TraceEnabled {
 			trace = append(trace, round)
 		}
+		currentFiles = nil
 		// Loop: send tool results back to the LLM.
 	}
 }
@@ -682,21 +915,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	session := h.store.Get(req.SessionID)
 
-	// Build user message content - include file info if files are attached
-	var userContent string
-	if len(req.Files) > 0 {
-		fileInfo := "Attached files:\n"
-		for _, f := range req.Files {
-			fileInfo += "- " + f + "\n"
-		}
-		if req.Message != "" {
-			userContent = fileInfo + "\nUser request: " + req.Message
-		} else {
-			userContent = fileInfo
-		}
-	} else {
-		userContent = req.Message
-	}
+	userContent := h.buildUserMessageContent(req.Message, req.Files)
 
 	// Record the user's explicit model choice before the first persist so it's
 	// included in the very first save (triggered by Add below).
@@ -719,12 +938,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	session.SetParams(convParams)
-	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent)
+	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent, req.Files)
 
-	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Provider, req.Params)
+	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model, Provider: providerUsed})
+		errorMsgID := session.AddErrorMessage(err.Error(), model, providerUsed)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Model: model, Provider: providerUsed, ErrorMsgID: errorMsgID})
 		return
 	}
 
@@ -913,14 +1133,6 @@ func (h *Handler) ListTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.List()})
 }
 
-type UploadedFile struct {
-	ID        string `json:"id"`
-	Filename  string `json:"filename"`
-	Size      int64  `json:"size"`
-	URL       string `json:"url"`
-	CreatedAt int64  `json:"created_at"`
-}
-
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to parse form"})
@@ -956,11 +1168,11 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadedFile := UploadedFile{
+	uploadedFile := storage.UploadedFile{
 		ID:        fileID,
 		Filename:  header.Filename,
 		Size:      header.Size,
-		URL:       "/files/" + fileID,
+		URL:       "/api/files/" + fileID,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 
@@ -969,7 +1181,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
-	fileID := strings.TrimPrefix(r.URL.Path, "/files/")
+	fileID := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if fileID == "" {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
@@ -984,7 +1196,7 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
-	fileID := strings.TrimPrefix(r.URL.Path, "/files/")
+	fileID := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if fileID == "" {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
@@ -1058,11 +1270,22 @@ func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
 		return
 	}
+	var filesToDelete []storage.UploadedFile
+	if h.storageStore != nil {
+		if conv, err := h.storageStore.Load(id); err == nil {
+			filesToDelete = collectFiles(conv.Messages)
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			h.log.Error("failed to load conversation before delete", zap.String("id", id), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete conversation"})
+			return
+		}
+	}
 	if err := h.store.Delete(id); err != nil {
 		h.log.Error("failed to delete conversation", zap.String("id", id), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete conversation"})
 		return
 	}
+	h.removeUploadedFiles(filesToDelete)
 	h.log.Info("conversation deleted", zap.String("id", id))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -1075,6 +1298,31 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
 		return
 	}
+	var filesToDelete []storage.UploadedFile
+	if h.storageStore != nil {
+		conv, err := h.storageStore.Load(convID)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+				return
+			}
+			h.log.Error("failed to load conversation before message delete", zap.String("conv_id", convID), zap.String("msg_id", msgID), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete message"})
+			return
+		}
+		found := false
+		for _, msg := range conv.Messages {
+			if msg.ID == msgID {
+				filesToDelete = collectFiles([]storage.Message{msg})
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+			return
+		}
+	}
 	if err := h.store.DeleteMessage(convID, msgID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
@@ -1084,6 +1332,12 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if h.storageStore != nil {
+		if conv, err := h.storageStore.Load(convID); err == nil {
+			filesToDelete = excludeFiles(filesToDelete, collectFiles(conv.Messages))
+		}
+	}
+	h.removeUploadedFiles(filesToDelete)
 	h.log.Info("message deleted", zap.String("conv_id", convID), zap.String("msg_id", msgID))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -1097,6 +1351,29 @@ func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
 		return
 	}
+	var filesToDelete []storage.UploadedFile
+	if h.storageStore != nil {
+		conv, err := h.storageStore.Load(convID)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+				return
+			}
+			h.log.Error("failed to load conversation before truncation", zap.String("conv_id", convID), zap.String("msg_id", msgID), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to truncate messages"})
+			return
+		}
+		filesToDelete, err = filesForDeletedSuffix(conv.Messages, msgID)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+				return
+			}
+			h.log.Error("failed to collect attachments for truncation", zap.String("conv_id", convID), zap.String("msg_id", msgID), zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to truncate messages"})
+			return
+		}
+	}
 	if err := h.store.DeleteMessagesFrom(convID, msgID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
@@ -1106,6 +1383,12 @@ func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if h.storageStore != nil {
+		if conv, err := h.storageStore.Load(convID); err == nil {
+			filesToDelete = excludeFiles(filesToDelete, collectFiles(conv.Messages))
+		}
+	}
+	h.removeUploadedFiles(filesToDelete)
 	h.log.Info("messages truncated from", zap.String("conv_id", convID), zap.String("msg_id", msgID))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "truncated"})
 }

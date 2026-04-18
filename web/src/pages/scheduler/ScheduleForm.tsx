@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react'
+import './ScheduleForm.scss'
+
 import {
   Button,
   DatePicker,
@@ -6,7 +7,6 @@ import {
   Input,
   InputNumber,
   Radio,
-  Segmented,
   Select,
   Space,
   Switch,
@@ -14,12 +14,13 @@ import {
   Typography,
   theme,
 } from 'antd'
-import dayjs from 'dayjs'
-import { apiGetModels } from '../../api/client'
+import React, { useMemo } from 'react'
 import type { Schedule, ScheduleType } from '../../types/scheduler'
-import type { ModelInfo } from '../../api/client'
 import type { ToolInfo, UIConfig } from '../../types/chat'
-import './ScheduleForm.scss'
+
+import type { ModelInfo } from '../../api/client'
+import { apiGetModels } from '../../api/client'
+import dayjs from 'dayjs'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -217,16 +218,16 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
   return (
     open ? (
       <div className="schedule-form-panel">
-      <Form form={form} layout="vertical" size="middle">
-        <div className="form-scroll">
-          <div className="form-section-card">
-            <div className="form-section">
-              <Text strong className="section-title">Schedule</Text>
-              <div className="top-controls-row">
-                <Form.Item name="enabled" label="Enabled" valuePropName="checked" style={{ marginBottom: 0 }}>
-                  <Switch />
-                </Form.Item>
-              </div>
+        <Form form={form} layout="vertical" size="middle" className="schedule-form-shell">
+          <div className="form-scroll">
+            <div className="form-section-card">
+              <div className="form-section">
+                <Text strong className="section-title">Schedule</Text>
+                <div className="top-controls-row">
+                  <Form.Item name="enabled" label="Enabled" valuePropName="checked" style={{ marginBottom: 0 }}>
+                    <Switch />
+                  </Form.Item>
+                </div>
 
               <Form.Item
                 name="name"
@@ -297,14 +298,11 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
                   label="LLM trace"
                   extra={<Text type="secondary" style={{ fontSize: 11 }}>Default follows global config</Text>}
                 >
-                  <Segmented
-                    size="small"
-                    options={[
-                      { label: 'Default', value: 'default' },
-                      { label: 'On', value: 'on' },
-                      { label: 'Off', value: 'off' },
-                    ]}
-                  />
+                  <Radio.Group optionType="button" buttonStyle="solid" size="small">
+                    <Radio.Button value="default">Default</Radio.Button>
+                    <Radio.Button value="on">On</Radio.Button>
+                    <Radio.Button value="off">Off</Radio.Button>
+                  </Radio.Group>
                 </Form.Item>
               </div>
             </div>
@@ -457,15 +455,14 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
             </div>
           </div>
 
+          </div>
           <div className="schedule-form-footer">
             <Button onClick={handleClose}>Cancel</Button>
             <Button type="primary" onClick={() => { void handleOk() }} loading={submitting}>
               {initial?.id ? 'Save changes' : 'Create schedule'}
             </Button>
           </div>
-
-        </div>
-      </Form>
+        </Form>
       </div>
     ) : null
   )

@@ -479,7 +479,13 @@ export function SchedulerPage({
       render: (_: unknown, sc: Schedule) => (
         <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
           <Space size={8} wrap>
-            <Button type="link" size="small" style={{ padding: 0, height: 'auto', fontWeight: 600 }} onClick={() => handleSelectSchedule(sc.id)}>
+            <Button
+              type="link"
+              size="small"
+              className="schedule-name-link"
+              style={{ padding: 0, height: 'auto', fontWeight: 600 }}
+              onClick={() => handleSelectSchedule(sc.id)}
+            >
               {sc.name}
             </Button>
             <Tag color={sc.enabled ? 'green' : 'default'}>{sc.enabled ? 'enabled' : 'disabled'}</Tag>
@@ -760,7 +766,15 @@ export function SchedulerPage({
                       <div className="schedule-mobile-head">
                         <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                           <Space size={8} wrap>
-                            <Text strong>{sc.name}</Text>
+                            <Button
+                              type="link"
+                              size="small"
+                              className="schedule-name-link"
+                              style={{ padding: 0, height: 'auto', fontWeight: 600 }}
+                              onClick={() => handleSelectSchedule(sc.id)}
+                            >
+                              {sc.name}
+                            </Button>
                             <Tag color={sc.enabled ? 'green' : 'default'}>{sc.enabled ? 'enabled' : 'disabled'}</Tag>
                             <Tag color={sc.type === 'cron' ? 'blue' : 'purple'}>{sc.type}</Tag>
                           </Space>
@@ -784,6 +798,7 @@ export function SchedulerPage({
                       </div>
 
                       <Space size={6} wrap onClick={(e) => e.stopPropagation()}>
+                        <Button size="small" onClick={() => handleSelectSchedule(sc.id)}>History</Button>
                         <Button size="small" icon={<ThunderboltOutlined />} onClick={() => handleTrigger(sc.id)}>Run now</Button>
                         <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(sc)}>Edit</Button>
                         <Switch size="small" checked={sc.enabled} onChange={(enabled) => handleToggle(sc, enabled)} />
@@ -806,7 +821,6 @@ export function SchedulerPage({
                   tableLayout="auto"
                   sticky
                   rowClassName={(record) => record.id === selectedId ? 'schedule-row-selected' : ''}
-                  onRow={(record) => ({ onClick: () => handleSelectSchedule(record.id) })}
                   scroll={{ y: 'calc(100vh - 320px)' }}
                 />
               )}

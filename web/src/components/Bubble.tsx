@@ -193,9 +193,20 @@ export const Bubble = memo(function Bubble({
         />
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: 3, flex: isUser ? undefined : 1, minWidth: 0, maxWidth: isUser ? '80%' : undefined }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: isUser ? 'flex-end' : 'flex-start',
+          gap: 3,
+          flex: isUser ? undefined : 1,
+          minWidth: 0,
+          width: isUser && isEditing ? '80%' : undefined,
+          maxWidth: isUser ? '80%' : undefined,
+        }}
+      >
         {isEditing ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: '80%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
             <TextArea
               autoFocus
               value={editText}
@@ -204,7 +215,7 @@ export const Bubble = memo(function Bubble({
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditSubmit() }
                 if (e.key === 'Escape') { setIsEditing(false) }
               }}
-              autoSize={{ minRows: 2, maxRows: 10 }}
+              autoSize={{ minRows: 4, maxRows: 12 }}
               style={{ borderRadius: 8, fontSize: 14 }}
             />
             <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -253,11 +264,12 @@ export const Bubble = memo(function Bubble({
                   onClick={() => handleImageClick(safeUrl(file.url))}
                   onKeyDown={(e) => e.key === 'Enter' && handleImageClick(safeUrl(file.url))}
                   style={{
-                    maxWidth: 200,
-                    maxHeight: 150,
+                    width: 'min(360px, 100%)',
+                    maxWidth: '100%',
+                    maxHeight: 320,
                     borderRadius: 4,
                     cursor: 'pointer',
-                    objectFit: 'cover',
+                    objectFit: 'contain',
                   }}
                 />
               ) : (

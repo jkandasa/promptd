@@ -16,6 +16,7 @@ import {
   ChatError,
   apiChat,
   apiDeleteConversation,
+  apiDeleteFile,
   apiDeleteMessage,
   apiDeleteMessagesFrom,
   apiGetModels,
@@ -92,6 +93,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [convsLoading, setConvsLoading] = useState(false)
+  const [loadingConversation, setLoadingConversation] = useState(false)
   const [conversationSearch, setConversationSearch] = useState('')
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
@@ -103,6 +105,17 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   const inputRef = useRef<TextAreaRef>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const conversationLoadSeqRef = useRef(0)
+  const loadingConversationIdRef = useRef<string | null>(null)
+  const loadedConversationIdRef = useRef<string | null>(null)
+  const uploadedFilesRef = useRef(uploadedFiles)
+
+  const discardUploadedFiles = useCallback((files: UploadedFile[]) => {
+    if (files.length === 0) return
+    for (const file of files) {
+      void apiDeleteFile(file.id).catch(() => {})
+    }
+  }, [])
 
   const lastMsgId = messages.length > 0 ? messages[messages.length - 1].id : null
   useEffect(() => {
@@ -137,53 +150,73 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   }, [refreshConversations])
 
   const handleNewChat = useCallback(() => {
+    discardUploadedFiles(uploadedFilesRef.current)
+    setLoadingConversation(false)
+    loadingConversationIdRef.current = null
+    loadedConversationIdRef.current = null
     onConversationChange?.(null)
-  }, [onConversationChange])
+  }, [discardUploadedFiles, onConversationChange])
 
   const handleLoadConversation = useCallback(async (id: string, silent = false, navigateToConversation = true) => {
-    const detail = await apiLoadConversation(id)
-    if (!detail) {
-      if (!silent) antMessage.error('Failed to load conversation')
-      return
-    }
+    loadingConversationIdRef.current = id
     setSessionId(id)
     if (navigateToConversation) onConversationChange?.(id)
+    setLoadingConversation(true)
     setInput('')
+    discardUploadedFiles(uploadedFilesRef.current)
     setUploadedFiles([])
-    const uiMsgs: Message[] = detail.messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({
-        id: uid(),
-        role: m.role as Role,
-        content: m.content,
-        ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
-        provider: m.provider,
-        model: m.model,
-        timeTaken: m.time_taken_ms,
-        llmCalls: m.llm_calls,
-        toolCalls: m.tool_calls,
-        msgId: m.id,
-        trace: m.trace,
-        usedParams: m.used_params,
-      }))
-    setMessages(uiMsgs)
-    const nextProvider = detail.provider || ''
-    const nextModel = nextProvider ? detail.model || '' : ''
-    if (detail.params && Object.keys(detail.params).length > 0) {
-      pendingParamsRef.current = detail.params
-    } else {
-      pendingParamsRef.current = null
+    setMessages([])
+
+    const requestSeq = ++conversationLoadSeqRef.current
+    try {
+      const detail = await apiLoadConversation(id)
+      if (conversationLoadSeqRef.current !== requestSeq) return
+      if (!detail) {
+        if (!silent) antMessage.error('Failed to load conversation')
+        return
+      }
+      const uiMsgs: Message[] = detail.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
+        .map((m) => ({
+          id: uid(),
+          role: m.role as Role,
+          content: m.content,
+          files: m.files,
+          ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
+          provider: m.provider,
+          model: m.model,
+          timeTaken: m.time_taken_ms,
+          llmCalls: m.llm_calls,
+          toolCalls: m.tool_calls,
+          msgId: m.id,
+          trace: m.trace,
+          usedParams: m.used_params,
+        }))
+      setMessages(uiMsgs)
+      const nextProvider = detail.provider || ''
+      const nextModel = nextProvider ? detail.model || '' : ''
+      if (detail.params && Object.keys(detail.params).length > 0) {
+        pendingParamsRef.current = detail.params
+      } else {
+        pendingParamsRef.current = null
+      }
+      setSelectedModel(nextModel)
+      selectedModelRef.current = nextModel
+      setSelectedProvider(nextProvider)
+      selectedProviderRef.current = nextProvider
+      const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
+        ? detail.system_prompt || ''
+        : getFirstSystemPromptName(uiConfig)
+      setSelectedSystemPrompt(nextPrompt)
+      selectedSystemPromptRef.current = nextPrompt
+      loadedConversationIdRef.current = id
+    } finally {
+      if (conversationLoadSeqRef.current === requestSeq) {
+        loadingConversationIdRef.current = null
+        setLoadingConversation(false)
+      }
     }
-    setSelectedModel(nextModel)
-    selectedModelRef.current = nextModel
-    setSelectedProvider(nextProvider)
-    selectedProviderRef.current = nextProvider
-    const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
-      ? detail.system_prompt || ''
-      : getFirstSystemPromptName(uiConfig)
-    setSelectedSystemPrompt(nextPrompt)
-    selectedSystemPromptRef.current = nextPrompt
-  }, [antMessage, onConversationChange, uiConfig])
+  }, [antMessage, discardUploadedFiles, onConversationChange, uiConfig])
 
   const handleDeleteConversation = useCallback(async (id: string) => {
     await apiDeleteConversation(id)
@@ -253,13 +286,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   useEffect(() => { selectedSystemPromptRef.current = selectedSystemPrompt }, [selectedSystemPrompt])
   useEffect(() => { llmParamsRef.current = llmParams }, [llmParams])
 
-  const uploadedFilesRef = useRef(uploadedFiles)
   useEffect(() => { uploadedFilesRef.current = uploadedFiles }, [uploadedFiles])
 
   const sessionIdRef = useRef(sessionId)
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   const resetDraftConversation = useCallback(() => {
+    discardUploadedFiles(uploadedFilesRef.current)
     setSessionId(null)
     setMessages([])
     setInput('')
@@ -269,16 +302,36 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     setSelectedProvider('')
     selectedProviderRef.current = ''
     pendingParamsRef.current = null
+    loadingConversationIdRef.current = null
+    loadedConversationIdRef.current = null
     const nextPrompt = getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [uiConfig])
+  }, [discardUploadedFiles, uiConfig])
+
+  const removeUploadedFile = useCallback((fileId: string) => {
+    setUploadedFiles((prev) => {
+      const removed = prev.find((f) => f.id === fileId)
+      const next = prev.filter((f) => f.id !== fileId)
+      if (removed) {
+        void apiDeleteFile(removed.id).catch(() => {})
+      }
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (!selectedConversationId) {
+      conversationLoadSeqRef.current += 1
+      setLoadingConversation(false)
       resetDraftConversation()
       return
     }
+    if (selectedConversationId === loadingConversationIdRef.current || selectedConversationId === loadedConversationIdRef.current) {
+      setSessionId(selectedConversationId)
+      return
+    }
+    setSessionId(selectedConversationId)
     void handleLoadConversation(selectedConversationId, true, false)
   }, [handleLoadConversation, resetDraftConversation, selectedConversationId])
 
@@ -301,11 +354,10 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     loadingRef.current = true
 
     try {
-      const fileUrls = files.map((f) => f.url)
       const modelId = selectedModelRef.current
       const modelToSend = modelId || undefined
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
-      const response = await apiChat(currentSessionId, text, fileUrls, modelToSend, systemPromptToSend, llmParamsRef.current, selectedProviderRef.current || undefined)
+      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, selectedProviderRef.current || undefined)
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
       }
@@ -339,6 +391,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
         ts: new Date(),
         model: errorModel,
         provider: serverProvider || requestedProvider || undefined,
+        msgId: err instanceof ChatError ? err.errorMsgId : undefined,
       }
       setMessages((prev) => [...prev, errMsg])
     } finally {
@@ -584,7 +637,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         <ConvItem
                           key={conv.id}
                           conv={conv}
-                          isActive={conv.id === selectedConversationId}
+                          isActive={conv.id === sessionId}
                           isDark={isDark}
                          editingConvId={editingConvId}
                          editingTitle={editingTitle}
@@ -610,7 +663,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                     <ConvItem
                       key={conv.id}
                       conv={conv}
-                      isActive={conv.id === selectedConversationId}
+                      isActive={conv.id === sessionId}
                       isDark={isDark}
                      editingConvId={editingConvId}
                      editingTitle={editingTitle}
@@ -654,7 +707,14 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
         {/* ── Messages ── */}
         <Content ref={contentRef} className="messages">
           <div aria-live="polite" aria-label="Chat messages" role="log" className="message-log">
-            {messages.length === 0 && !loading && (
+            {loadingConversation && (
+              <div className="conversation-loading-state">
+                <Spin size="large" />
+                <Text type="secondary">Loading conversation...</Text>
+              </div>
+            )}
+
+            {messages.length === 0 && !loading && !loadingConversation && (
               <div
                 className="empty-state"
                 style={{
@@ -718,11 +778,11 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
               </div>
             )}
 
-            {messages.map((msg) => (
+            {!loadingConversation && messages.map((msg) => (
               <Bubble key={msg.id} msg={msg} onDelete={handleDeleteMessage} onEdit={handleEditMessage} />
             ))}
 
-            {loading && <TypingIndicator />}
+            {loading && !loadingConversation && <TypingIndicator />}
 
             <div ref={bottomRef} />
           </div>
@@ -754,13 +814,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message…"
                   autoSize={{ minRows: 2, maxRows: 6 }}
-                  disabled={loading || uploading}
+                  disabled={loading || uploading || loadingConversation}
                   aria-label="Message input"
                   style={{ borderRadius: 12, resize: 'none', fontSize: 15, padding: '12px 50px 48px 16px' }}
                 />
                 <div
                   className="input-toolbar"
-                  style={{ pointerEvents: loading || uploading ? 'none' : 'auto', opacity: loading || uploading ? 0.5 : 1 }}
+                  style={{ pointerEvents: loading || uploading || loadingConversation ? 'none' : 'auto', opacity: loading || uploading || loadingConversation ? 0.5 : 1 }}
                 >
                   <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
                     <Button
@@ -768,7 +828,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       size="small"
                       icon={<PaperClipOutlined />}
                       onClick={() => document.getElementById('file-upload')?.click()}
-                      disabled={loading || uploading}
+                        disabled={loading || uploading || loadingConversation}
                       aria-label={uploading ? 'Uploading file…' : 'Attach file'}
                       style={{ height: 28, width: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
                     />
@@ -781,7 +841,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       size="small"
                       aria-label="Select system prompt"
                       options={systemPromptOptions}
-                      disabled={loading}
+                      disabled={loading || loadingConversation}
                       variant="borderless"
                       placement="topLeft"
                       showSearch={{ filterOption: filterSelectOption }}
@@ -804,7 +864,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       showSearch={{ filterOption: filterSelectOption }}
                       placement="topLeft"
                       options={providerOptions}
-                      disabled={loading}
+                      disabled={loading || loadingConversation}
                       style={{ flex: '0 0 168px', width: 168 }}
                     />
                   )}
@@ -822,7 +882,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         size="small"
                         aria-label="Select AI model"
                         options={modelOptions}
-                        disabled={loading || !selectedProvider || loadingProviderModels}
+                        disabled={loading || loadingConversation || !selectedProvider || loadingProviderModels}
                         variant="borderless"
                         showSearch={{ filterOption: filterSelectOption }}
                         placement="topLeft"
@@ -883,7 +943,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         size="small"
                         icon={<ReloadOutlined />}
                         onClick={() => { void refreshCurrentProviderModels() }}
-                        disabled={loading || loadingProviderModels}
+                        disabled={loading || loadingConversation || loadingProviderModels}
                         style={{ height: 28, width: 28, padding: 0, color: token.colorTextSecondary, flexShrink: 0 }}
                       />
                     </Tooltip>
@@ -892,7 +952,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                     params={llmParams}
                     configDefaults={configDefaults}
                     onChange={(p) => { setLlmParams(p); llmParamsRef.current = p }}
-                    disabled={loading}
+                    disabled={loading || loadingConversation}
                   />
                 </div>
                 <div className="input-send">
@@ -963,12 +1023,12 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
           {uploadedFiles.length > 0 && (
             <div className="files-row">
               {uploadedFiles.map((file) => (
-                <Tag
-                  key={file.id}
-                  closable
-                  onClose={() => setUploadedFiles((prev) => prev.filter((f) => f.id !== file.id))}
-                  style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                >
+                  <Tag
+                    key={file.id}
+                    closable
+                    onClose={() => removeUploadedFile(file.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
                   <FileOutlined /> {file.filename} ({(file.size / 1024).toFixed(0)} KB)
                 </Tag>
               ))}

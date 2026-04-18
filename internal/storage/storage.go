@@ -10,6 +10,8 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const MessageRoleError = "error"
+
 // TraceToolCall captures a single function call request inside an assistant message.
 type TraceToolCall struct {
 	ID   string `yaml:"id"   json:"id"`
@@ -124,6 +126,15 @@ type MessageToolCall struct {
 	Arguments string `yaml:"-" json:"-"`
 }
 
+// UploadedFile stores file metadata attached to a user message.
+type UploadedFile struct {
+	ID        string `yaml:"id"         json:"id"`
+	Filename  string `yaml:"filename"   json:"filename"`
+	Size      int64  `yaml:"size"       json:"size"`
+	URL       string `yaml:"url"        json:"url"`
+	CreatedAt int64  `yaml:"created_at" json:"created_at"`
+}
+
 // Message is a single turn in a conversation.
 // Only user and assistant messages are persisted for display; intermediate
 // tool/function messages are stored for LLM context but carry no display metadata.
@@ -135,6 +146,7 @@ type Message struct {
 	// Metadata — non-zero only for final assistant replies.
 	Model       string `yaml:"model,omitempty"         json:"model,omitempty"`
 	Provider    string `yaml:"provider,omitempty"      json:"provider,omitempty"`
+	Files       []UploadedFile `yaml:"files,omitempty" json:"files,omitempty"`
 	TimeTakenMs int64  `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
 	LLMCalls    int    `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
 	ToolCalls   int    `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
@@ -190,8 +202,11 @@ type Store interface {
 
 // ToOpenAI converts storage messages back to the openai SDK type.
 func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
-	out := make([]openai.ChatCompletionMessage, len(msgs))
-	for i, m := range msgs {
+	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == MessageRoleError {
+			continue
+		}
 		msg := openai.ChatCompletionMessage{
 			Role:       m.Role,
 			Content:    m.Content,
@@ -208,7 +223,7 @@ func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
 				},
 			})
 		}
-		out[i] = msg
+		out = append(out, msg)
 	}
 	return out
 }

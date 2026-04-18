@@ -50,11 +50,13 @@
 .shell-sidebar {
   width: 240px;
   min-width: 240px;
-  padding: 12px 10px;
+  padding: 0;
   overflow: visible;
   transition: width 0.2s ease, min-width 0.2s ease;
   position: relative;
   z-index: 2;
+  display: flex;
+  flex-direction: column;
 }
 
 .shell-sidebar:has(.ant-menu-inline-collapsed) {
@@ -73,10 +75,13 @@
 .shell-sidebar-header {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 8px;
+  padding: 12px 10px 8px;
+  margin-bottom: 0;
 }
 
 .shell-menu {
+  padding: 0 10px 12px;
+
   .ant-menu-item,
   .ant-menu-submenu-title {
     border-radius: 14px;
@@ -160,7 +165,6 @@
   .shell-sidebar {
     width: 180px;
     min-width: 180px;
-    padding-inline: 8px;
   }
 
   .shell-sidebar:has(.ant-menu-inline-collapsed) {

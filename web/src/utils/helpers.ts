@@ -17,7 +17,8 @@ export function safeUrl(url: string | undefined): string {
   try {
     const u = new URL(url, window.location.href)
     if (u.protocol === 'javascript:' || u.protocol === 'data:') return '#'
-    return url
+    if (u.pathname.startsWith('/files/')) return `${u.origin}/api${u.pathname}${u.search}`
+    return u.toString()
   } catch {
     return '#'
   }
