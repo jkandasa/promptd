@@ -2,47 +2,6 @@
 
 .app-root {
   height: 100vh;
-  flex-direction: row;
-}
-
-// ── Nav rail ──────────────────────────────────────────────────────────────────
-
-.nav-rail {
-  width: 48px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 5;
-}
-
-.nav-spacer {
-  height: 56px;
-  flex-shrink: 0;
-  width: 100%;
-}
-
-.nav-buttons {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 8px;
-  gap: 4px;
-}
-
-.nav-btn {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-// ── Main column ───────────────────────────────────────────────────────────────
-
-.main-col {
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
 }
 
@@ -60,16 +19,111 @@
   z-index: 10;
 }
 
-.header-left {
+.brand-block {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .header-right {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+// ── Shell body ────────────────────────────────────────────────────────────────
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: row;
+}
+
+.shell-sidebar {
+  width: 240px;
+  min-width: 240px;
+  padding: 12px 10px;
+  overflow: visible;
+  transition: width 0.2s ease, min-width 0.2s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.shell-sidebar:has(.ant-menu-inline-collapsed) {
+  width: 80px;
+  min-width: 80px;
+}
+
+.ant-menu-inline-collapsed-tooltip {
+  z-index: 20;
+
+  .ant-tooltip-content {
+    margin-inline-start: 8px;
+  }
+}
+
+.shell-sidebar-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.shell-menu {
+  .ant-menu-item,
+  .ant-menu-submenu-title {
+    border-radius: 14px;
+  }
+
+  &.ant-menu-inline-collapsed {
+    width: 100%;
+
+    > .ant-menu-item,
+    > .ant-menu-submenu,
+    > .ant-menu-submenu > .ant-menu-submenu-title {
+      width: 100%;
+      margin-inline: 0;
+    }
+  }
+}
+
+.app-dark {
+  .shell-sidebar-header .ant-btn {
+    color: rgba(255, 255, 255, 0.88);
+  }
+
+  .shell-menu.ant-menu {
+    color: rgba(255, 255, 255, 0.88);
+  }
+
+  .shell-menu .ant-menu-item,
+  .shell-menu .ant-menu-submenu-title,
+  .shell-menu .ant-menu-item .ant-menu-title-content,
+  .shell-menu .ant-menu-item .ant-menu-item-icon,
+  .shell-menu .ant-menu-item .anticon {
+    color: rgba(255, 255, 255, 0.88);
+  }
+
+  .shell-menu .ant-menu-item-selected,
+  .shell-menu .ant-menu-item-selected .ant-menu-title-content,
+  .shell-menu .ant-menu-item-selected .ant-menu-item-icon,
+  .shell-menu .ant-menu-item-selected .anticon {
+    color: #fff;
+  }
+}
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .app-name {
@@ -80,6 +134,8 @@
 
 .app-subtitle {
   font-size: 11px;
+  display: block;
+  line-height: 1.2;
 }
 
 // ── Scheduler page wrapper ────────────────────────────────────────────────────
@@ -90,4 +146,25 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+@media (max-width: 768px) {
+  .header {
+    padding: 0 12px;
+  }
+
+  .brand-copy {
+    max-width: 150px;
+  }
+
+  .shell-sidebar {
+    width: 180px;
+    min-width: 180px;
+    padding-inline: 8px;
+  }
+
+  .shell-sidebar:has(.ant-menu-inline-collapsed) {
+    width: 72px;
+    min-width: 72px;
+  }
 }

@@ -11,6 +11,7 @@ import {
   Space,
   Spin,
   Switch,
+  Table,
   Tag,
   Tooltip,
   Typography,
@@ -22,7 +23,6 @@ import remarkGfm from 'remark-gfm'
 import { buildMarkdownComponents } from '../../components/markdown/buildComponents'
 import { LLMTraceView } from '../../components/trace/TraceDrawer'
 import {
-  ClockCircleOutlined,
   DeleteOutlined,
   EditOutlined,
   FilterOutlined,
@@ -66,14 +66,20 @@ function fmtDuration(ms?: number) {
 /** Human-readable relative time: "3m ago", "2h ago", "5d ago". */
 function relativeTime(iso?: string): string {
   if (!iso) return ''
-  const diff = Date.now() - new Date(iso).getTime()
-  const s = Math.floor(diff / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  const diffMs = new Date(iso).getTime() - Date.now()
+  const future = diffMs > 0
+  const seconds = Math.floor(Math.abs(diffMs) / 1000)
+
+  if (seconds < 60) return future ? `in ${seconds}s` : `${seconds}s ago`
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return future ? `in ${minutes}m` : `${minutes}m ago`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return future ? `in ${hours}h` : `${hours}h ago`
+
+  const days = Math.floor(hours / 24)
+  return future ? `in ${days}d` : `${days}d ago`
 }
 
 interface TokenStats {
@@ -242,95 +248,18 @@ function ExecutionItem({
   )
 }
 
-// ── Schedule card ────────────────────────────────────────────────────────────
-
-function ScheduleCard({
-  schedule,
-  selected,
-  onSelect,
-  onToggle,
-  onEdit,
-  onDelete,
-  onTrigger,
-}: {
-  schedule: Schedule
-  selected: boolean
-  onSelect: () => void
-  onToggle: (enabled: boolean) => void
-  onEdit: () => void
-  onDelete: () => void
-  onTrigger: () => void
-}) {
-  const { token } = useToken()
-  const dimmed = !schedule.enabled
-
-  return (
-    <div
-      onClick={onSelect}
-      className="schedule-card"
-      style={{
-        border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
-        background: selected ? token.colorPrimaryBg : token.colorBgContainer,
-        opacity: dimmed ? 0.6 : 1,
-      }}
-    >
-      <div className="schedule-card-header">
-        <Space size={6}>
-          <Switch
-            size="small"
-            checked={schedule.enabled}
-            onChange={(v, e) => { e.stopPropagation(); onToggle(v) }}
-          />
-          <Text strong style={{ fontSize: 13 }}>{schedule.name}</Text>
-        </Space>
-        <Space size={2} onClick={(e) => e.stopPropagation()}>
-          <Tooltip title="Run now">
-            <Button type="text" size="small" icon={<ThunderboltOutlined />} onClick={onTrigger} />
-          </Tooltip>
-          <Tooltip title="Edit">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit} />
-          </Tooltip>
-          <Popconfirm title="Delete this schedule?" onConfirm={onDelete} okType="danger" okText="Delete">
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-          </Popconfirm>
-        </Space>
-      </div>
-
-      <Space direction="vertical" size={1} className="schedule-card-meta">
-        <Space size={6} wrap>
-          <Tag color={schedule.type === 'cron' ? 'blue' : 'purple'} style={{ fontSize: 11 }}>
-            {schedule.type === 'cron' ? schedule.cronExpr : 'once'}
-          </Tag>
-          {schedule.modelId && (
-            <Tag style={{ fontSize: 11 }}>
-              {schedule.provider ? `${schedule.provider} · ${schedule.modelId}` : schedule.modelId}
-            </Tag>
-          )}
-        </Space>
-        {schedule.nextRunAt && (
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            <ClockCircleOutlined style={{ marginRight: 4 }} />
-            Next: {fmtDate(schedule.nextRunAt)}
-          </Text>
-        )}
-        {schedule.lastRunAt ? (
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            Last: {relativeTime(schedule.lastRunAt)}
-          </Text>
-        ) : (
-          <Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>Never run</Text>
-        )}
-      </Space>
-    </div>
-  )
-}
-
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 interface Props {
   models: ModelInfo[]
   tools: ToolInfo[]
   uiConfig: UIConfig
+  selectedScheduleId?: string | null
+  schedulerEditorMode?: 'new' | 'edit' | null
+  onSelectedScheduleChange?: (id: string | null) => void
+  onCreateSchedule?: () => void
+  onEditSchedule?: (id: string) => void
+  onCloseEditor?: () => void
 }
 
 type StatusFilter = 'all' | 'enabled' | 'disabled'
@@ -343,15 +272,24 @@ const EXEC_STATUS_OPTIONS: { label: string; value: ExecStatusFilter }[] = [
   { label: 'Running', value: 'running' },
 ]
 
-export function SchedulerPage({ models, tools, uiConfig }: Props) {
+export function SchedulerPage({
+  models,
+  tools,
+  uiConfig,
+  selectedScheduleId,
+  schedulerEditorMode,
+  onSelectedScheduleChange,
+  onCreateSchedule,
+  onEditSchedule,
+  onCloseEditor,
+}: Props) {
   const { token } = useToken()
   const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(selectedScheduleId ?? null)
   const [executions, setExecutions] = useState<Execution[]>([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
   const [loadingExecs, setLoadingExecs] = useState(false)
-  const [formOpen, setFormOpen] = useState(false)
-  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null)
+  const [loadedSchedulesOnce, setLoadedSchedulesOnce] = useState(false)
   const [msgApi, contextHolder] = message.useMessage()
 
   // Schedule filters
@@ -367,6 +305,7 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
       const data = await apiListSchedules()
       setSchedules(data)
     } finally {
+      setLoadedSchedulesOnce(true)
       setLoadingSchedules(false)
     }
   }, [])
@@ -386,9 +325,22 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
   }, [loadSchedules])
 
   useEffect(() => {
+    if (selectedScheduleId === undefined || selectedScheduleId === selectedId) return
+    setSelectedId(selectedScheduleId ?? null)
+  }, [selectedId, selectedScheduleId])
+
+  useEffect(() => {
     if (selectedId) loadExecutions(selectedId)
     else setExecutions([])
   }, [selectedId, loadExecutions])
+
+  useEffect(() => {
+    if (!loadedSchedulesOnce || loadingSchedules || !selectedId) return
+    if (schedules.some((s) => s.id === selectedId)) return
+    setSelectedId(null)
+    setExecutions([])
+    onSelectedScheduleChange?.(null)
+  }, [loadedSchedulesOnce, loadingSchedules, onSelectedScheduleChange, schedules, selectedId])
 
   // Auto-refresh executions while any are still running
   useEffect(() => {
@@ -418,6 +370,14 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
   }, [executions, execStatusFilter])
 
   const selectedSchedule = schedules.find((s) => s.id === selectedId) ?? null
+  const formOpen = schedulerEditorMode === 'new' || schedulerEditorMode === 'edit'
+  const editingSchedule = schedulerEditorMode === 'edit' ? selectedSchedule : null
+  const showHistoryPage = !formOpen && Boolean(selectedSchedule)
+
+  const handleSelectSchedule = useCallback((id: string | null) => {
+    setSelectedId(id)
+    onSelectedScheduleChange?.(id)
+  }, [onSelectedScheduleChange])
 
   const handleToggle = async (sc: Schedule, enabled: boolean) => {
     try {
@@ -432,7 +392,10 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
     try {
       await apiTriggerSchedule(id)
       msgApi.success('Triggered — check execution history in a moment')
-      setTimeout(() => { if (selectedId === id) loadExecutions(id) }, 2000)
+      setTimeout(() => {
+        void loadSchedules()
+        if (selectedId === id) void loadExecutions(id)
+      }, 2000)
     } catch (e: any) {
       msgApi.error(e.message || 'Failed to trigger')
     }
@@ -442,7 +405,11 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
     try {
       await apiDeleteSchedule(id)
       setSchedules((prev) => prev.filter((s) => s.id !== id))
-      if (selectedId === id) { setSelectedId(null); setExecutions([]) }
+      if (selectedId === id) {
+        setSelectedId(null)
+        setExecutions([])
+        onSelectedScheduleChange?.(null)
+      }
       msgApi.success('Schedule deleted')
     } catch {
       msgApi.error('Failed to delete schedule')
@@ -463,339 +430,307 @@ export function SchedulerPage({ models, tools, uiConfig }: Props) {
     if (editingSchedule) {
       const updated = await apiUpdateSchedule(editingSchedule.id, { ...editingSchedule, ...values })
       setSchedules((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+      setSelectedId(updated.id)
+      onSelectedScheduleChange?.(updated.id)
       msgApi.success('Schedule updated')
     } else {
       const created = await apiCreateSchedule(values as any)
       setSchedules((prev) => [created, ...prev])
+      setSelectedId(created.id)
+      onSelectedScheduleChange?.(created.id)
       msgApi.success('Schedule created')
     }
-    setFormOpen(false)
-    setEditingSchedule(null)
   }
 
   const openEdit = (sc: Schedule) => {
-    setEditingSchedule(sc)
-    setFormOpen(true)
+    onEditSchedule?.(sc.id)
   }
 
   const openCreate = () => {
-    setEditingSchedule(null)
-    setFormOpen(true)
+    onCreateSchedule?.()
   }
 
   const hasScheduleFilters = nameFilter !== '' || statusFilter !== 'all'
   const clearScheduleFilters = () => { setNameFilter(''); setStatusFilter('all') }
 
   const runningCount = executions.filter(e => e.status === 'running').length
+  const scheduleColumns = [
+    {
+      title: 'Name',
+      key: 'name',
+      render: (_: unknown, sc: Schedule) => (
+        <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+          <Space size={8} wrap>
+            <Button type="link" size="small" style={{ padding: 0, height: 'auto', fontWeight: 600 }} onClick={() => handleSelectSchedule(sc.id)}>
+              {sc.name}
+            </Button>
+            <Tag color={sc.enabled ? 'green' : 'default'}>{sc.enabled ? 'enabled' : 'disabled'}</Tag>
+            <Tag color={sc.type === 'cron' ? 'blue' : 'purple'}>{sc.type}</Tag>
+          </Space>
+          <Text type="secondary" ellipsis style={{ maxWidth: 520, fontSize: 12 }}>
+            {sc.prompt}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Schedule',
+      key: 'schedule',
+      width: 220,
+      render: (_: unknown, sc: Schedule) => (
+        <Text style={{ fontSize: 12 }}>
+          {sc.type === 'cron' ? sc.cronExpr || '—' : fmtDate(sc.runAt)}
+        </Text>
+      ),
+    },
+    {
+      title: 'Last Run',
+      key: 'lastRunAt',
+      width: 140,
+      render: (_: unknown, sc: Schedule) => {
+        if (!sc.lastRunAt) return <Text style={{ fontSize: 12 }}>-</Text>
+        return (
+          <Tooltip title={fmtDate(sc.lastRunAt)}>
+            <Text style={{ fontSize: 12, cursor: 'default' }}>{relativeTime(sc.lastRunAt)}</Text>
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: 'Next Run',
+      key: 'nextRunAt',
+      width: 140,
+      render: (_: unknown, sc: Schedule) => {
+        if (!sc.enabled) return <Text style={{ fontSize: 12 }}>-</Text>
+        if (!sc.nextRunAt) return <Text style={{ fontSize: 12 }}>-</Text>
+        return (
+          <Tooltip title={fmtDate(sc.nextRunAt)}>
+            <Text style={{ fontSize: 12, cursor: 'default' }}>{relativeTime(sc.nextRunAt)}</Text>
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 180,
+      render: (_: unknown, sc: Schedule) => (
+        <Space size={4} onClick={(e) => e.stopPropagation()}>
+          <Tooltip title="Run now">
+            <Button size="small" icon={<ThunderboltOutlined />} onClick={() => handleTrigger(sc.id)} />
+          </Tooltip>
+          <Tooltip title="Edit">
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(sc)} />
+          </Tooltip>
+          <Switch size="small" checked={sc.enabled} onChange={(enabled) => handleToggle(sc, enabled)} />
+          <Popconfirm title="Delete this schedule?" okText="Delete" okType="danger" onConfirm={() => handleDeleteSchedule(sc.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
 
   return (
     <>
       {contextHolder}
-      <div className="page">
-        {/* Left panel — schedule list */}
-        <div
-          className="left-panel"
-          style={{ borderRight: `1px solid ${token.colorBorderSecondary}` }}
-        >
-          {/* Left header */}
-          <div
-            className="left-header"
-            style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
-          >
-            <div className="left-header-row">
-              <Text strong style={{ fontSize: 13 }}>
-                {hasScheduleFilters
-                  ? `${filteredSchedules.length} / ${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`
-                  : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`}
-              </Text>
-              <Space size={4}>
-                <Tooltip title="Refresh">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<ReloadOutlined spin={loadingSchedules} />}
-                    onClick={loadSchedules}
-                  />
-                </Tooltip>
-                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>
-                  New
-                </Button>
+      <div className="scheduler-page">
+        {formOpen ? (
+          <div className="scheduler-surface">
+            <div className="page-header" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+              <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+                <Title level={4} style={{ margin: 0 }}>{schedulerEditorMode === 'edit' ? 'Edit Schedule' : 'New Schedule'}</Title>
+                <Text type="secondary">Configure when the schedule runs and how it should call the model.</Text>
               </Space>
             </div>
-
-            {/* Search */}
-            <Input
-              size="small"
-              placeholder="Search by name…"
-              allowClear
-              value={nameFilter}
-              onChange={e => setNameFilter(e.target.value)}
-              style={{ marginBottom: 6 }}
-            />
-
-            {/* Status filter */}
-            <Segmented
-              size="small"
-              block
-              value={statusFilter}
-              onChange={v => setStatusFilter(v as StatusFilter)}
-              options={[
-                { label: 'All', value: 'all' },
-                {
-                  label: (
-                    <Space size={4}>
-                      <Badge status="success" />
-                      Active
-                    </Space>
-                  ),
-                  value: 'enabled',
-                },
-                {
-                  label: (
-                    <Space size={4}>
-                      <Badge status="default" />
-                      Disabled
-                    </Space>
-                  ),
-                  value: 'disabled',
-                },
-              ]}
-            />
-          </div>
-
-          {/* Schedule list */}
-          <div className="schedule-list">
-            {loadingSchedules && schedules.length === 0 ? (
-              <div className="spin-center">
-                <Spin />
+            {schedulerEditorMode === 'edit' && selectedScheduleId && !editingSchedule ? (
+              <div className="centered-page">
+                {loadingSchedules ? <Spin /> : <Empty description="Schedule not found" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
               </div>
-            ) : schedules.length === 0 ? (
-              <Empty
-                description="No schedules yet"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ marginTop: 40 }}
-              >
-                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>
-                  Create first schedule
-                </Button>
-              </Empty>
-            ) : filteredSchedules.length === 0 ? (
-              <Empty
-                description={`No schedules match "${nameFilter || statusFilter}"`}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ marginTop: 40 }}
-              >
-                <Button size="small" onClick={clearScheduleFilters}>Clear filters</Button>
-              </Empty>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {filteredSchedules.map((sc) => (
-                  <ScheduleCard
-                    key={sc.id}
-                    schedule={sc}
-                    selected={sc.id === selectedId}
-                    onSelect={() => setSelectedId(sc.id === selectedId ? null : sc.id)}
-                    onToggle={(enabled) => handleToggle(sc, enabled)}
-                    onEdit={() => openEdit(sc)}
-                    onDelete={() => handleDeleteSchedule(sc.id)}
-                    onTrigger={() => handleTrigger(sc.id)}
-                  />
-                ))}
-              </div>
+              <ScheduleForm
+                open={formOpen}
+                initial={editingSchedule ?? undefined}
+                models={models}
+                tools={tools}
+                uiConfig={uiConfig}
+                onSubmit={handleFormSubmit}
+                onClose={() => onCloseEditor?.()}
+              />
             )}
           </div>
-        </div>
-
-        {/* Right panel — execution history */}
-        <div className="right-panel">
-          {selectedSchedule ? (
-            <>
-              {/* Right header */}
-              <div
-                className="right-header"
-                style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
-              >
-                <div className="right-header-row">
-                  <Space direction="vertical" size={2} style={{ flex: 1, minWidth: 0 }}>
-                    <Space size={8} wrap>
-                      <Title level={5} style={{ margin: 0 }}>{selectedSchedule.name}</Title>
-                      {runningCount > 0 && (
-                        <Tag color="processing" style={{ fontSize: 11 }}>
-                          {runningCount} running
-                        </Tag>
-                      )}
-                    </Space>
-                    {selectedSchedule.prompt && (
-                      <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
-                        {selectedSchedule.prompt.length > 100
-                          ? selectedSchedule.prompt.slice(0, 100) + '…'
-                          : selectedSchedule.prompt}
-                      </Text>
-                    )}
-                  </Space>
-                  <Button
-                    size="small"
-                    icon={<ReloadOutlined spin={loadingExecs} />}
-                    onClick={() => loadExecutions(selectedSchedule.id)}
-                    style={{ marginLeft: 12, flexShrink: 0 }}
-                  >
-                    Refresh
+        ) : showHistoryPage && selectedSchedule ? (
+          <div className="scheduler-surface">
+            <div className="page-header" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+              <div className="page-header-row">
+                <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
+                  <Button type="link" size="small" style={{ padding: 0, alignSelf: 'flex-start' }} onClick={() => handleSelectSchedule(null)}>
+                    All schedules
                   </Button>
-                </div>
-              </div>
-
-              {/* Schedule metadata */}
-              <div className="meta-section" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-                <Descriptions size="small" column={3}>
-                  <Descriptions.Item label="Type">
-                    <Tag color={selectedSchedule.type === 'cron' ? 'blue' : 'purple'}>
-                      {selectedSchedule.type}
-                    </Tag>
-                  </Descriptions.Item>
-                  {selectedSchedule.cronExpr && (
-                    <Descriptions.Item label="Expression">
-                      <Text style={{ fontFamily: 'monospace', fontSize: 12 }}>{selectedSchedule.cronExpr}</Text>
-                    </Descriptions.Item>
-                  )}
-                  {selectedSchedule.nextRunAt && (
-                    <Descriptions.Item label="Next run">{fmtDate(selectedSchedule.nextRunAt)}</Descriptions.Item>
-                  )}
-                  {selectedSchedule.lastRunAt && (
-                    <Descriptions.Item label="Last run">{relativeTime(selectedSchedule.lastRunAt)}</Descriptions.Item>
-                  )}
-                  <Descriptions.Item label="Retain">
-                    {selectedSchedule.retainHistory === 0 ? 'All' : `Last ${selectedSchedule.retainHistory}`}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Trace">
-                    {selectedSchedule.traceEnabled == null
-                      ? <Text type="secondary" style={{ fontSize: 11 }}>default</Text>
-                      : selectedSchedule.traceEnabled
-                        ? <Tag color="green"  style={{ fontSize: 11 }}>on</Tag>
-                        : <Tag color="default" style={{ fontSize: 11 }}>off</Tag>
-                    }
-                  </Descriptions.Item>
-                  {selectedSchedule.allowedTools?.length ? (
-                    <Descriptions.Item label="Tools">
-                      {selectedSchedule.allowedTools.map((t) => <Tag key={t} style={{ fontSize: 11 }}>{t}</Tag>)}
-                    </Descriptions.Item>
-                  ) : null}
-                  {selectedSchedule.params && (
-                    <Descriptions.Item label="LLM params" span={3}>
-                      <Space size={6} wrap>
-                        {selectedSchedule.params.temperature != null && (
-                          <Tag style={{ fontSize: 11 }}>temp={selectedSchedule.params.temperature}</Tag>
-                        )}
-                        {selectedSchedule.params.max_tokens != null && (
-                          <Tag style={{ fontSize: 11 }}>max_tokens={selectedSchedule.params.max_tokens}</Tag>
-                        )}
-                        {selectedSchedule.params.top_p != null && (
-                          <Tag style={{ fontSize: 11 }}>top_p={selectedSchedule.params.top_p}</Tag>
-                        )}
-                        {selectedSchedule.params.top_k != null && (
-                          <Tag style={{ fontSize: 11 }}>top_k={selectedSchedule.params.top_k}</Tag>
-                        )}
-                      </Space>
-                    </Descriptions.Item>
-                  )}
-                </Descriptions>
-              </div>
-
-              {/* Execution filter toolbar */}
-              <div
-                className="exec-filter-bar"
-                style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
-              >
-                <Space size={6}>
-                  <FilterOutlined style={{ color: token.colorTextSecondary, fontSize: 12 }} />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {execStatusFilter === 'all'
-                      ? `${executions.length} execution${executions.length !== 1 ? 's' : ''}`
-                      : `${filteredExecutions.length} of ${executions.length}`}
-                  </Text>
+                  <Space size={8} wrap>
+                    <Title level={4} style={{ margin: 0 }}>{selectedSchedule.name}</Title>
+                    <Tag color={selectedSchedule.enabled ? 'green' : 'default'}>{selectedSchedule.enabled ? 'enabled' : 'disabled'}</Tag>
+                    <Tag color={selectedSchedule.type === 'cron' ? 'blue' : 'purple'}>{selectedSchedule.type}</Tag>
+                    {runningCount > 0 && <Tag color="processing">{runningCount} running</Tag>}
+                  </Space>
+                  <Text type="secondary" style={{ fontSize: 13 }}>{selectedSchedule.prompt}</Text>
                 </Space>
-                <Radio.Group
-                  size="small"
-                  value={execStatusFilter}
-                  onChange={e => setExecStatusFilter(e.target.value)}
-                >
-                  {EXEC_STATUS_OPTIONS.map(opt => (
-                    <Radio.Button key={opt.value} value={opt.value}>
-                      {opt.label}
-                      {opt.value !== 'all' && executions.filter(e => e.status === opt.value).length > 0 && (
-                        <Text
-                          style={{
-                            marginLeft: 4,
-                            fontSize: 11,
-                            color: opt.value === 'error' ? token.colorError : opt.value === 'running' ? token.colorPrimary : token.colorSuccess,
-                          }}
-                        >
-                          {executions.filter(e => e.status === opt.value).length}
-                        </Text>
-                      )}
-                    </Radio.Button>
-                  ))}
-                </Radio.Group>
+                <Space wrap>
+                  <Button icon={<ThunderboltOutlined />} onClick={() => handleTrigger(selectedSchedule.id)}>Run now</Button>
+                  <Button icon={<EditOutlined />} onClick={() => openEdit(selectedSchedule)}>Edit</Button>
+                  <Button icon={<ReloadOutlined spin={loadingExecs} />} onClick={() => loadExecutions(selectedSchedule.id)}>Refresh</Button>
+                </Space>
               </div>
-
-              {/* Execution list */}
-              <div className="exec-list">
-                {loadingExecs && executions.length === 0 ? (
-                  <div className="spin-center"><Spin /></div>
-                ) : executions.length === 0 ? (
-                  <Empty
-                    description="No executions yet — trigger the schedule to see results here"
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    style={{ marginTop: 40 }}
-                  >
-                    <Button
-                      size="small"
-                      icon={<ThunderboltOutlined />}
-                      onClick={() => handleTrigger(selectedSchedule.id)}
-                    >
-                      Run now
-                    </Button>
-                  </Empty>
-                ) : filteredExecutions.length === 0 ? (
-                  <Empty
-                    description={`No ${execStatusFilter} executions`}
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    style={{ marginTop: 40 }}
-                  >
-                    <Button size="small" onClick={() => setExecStatusFilter('all')}>Show all</Button>
-                  </Empty>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {filteredExecutions.map((exec) => (
-                      <ExecutionItem
-                        key={exec.id}
-                        exec={exec}
-                        onDelete={handleDeleteExecution}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="centered">
-              <Empty
-                description="Select a schedule to see execution history"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
             </div>
-          )}
-        </div>
-      </div>
 
-      <ScheduleForm
-        open={formOpen}
-        initial={editingSchedule ?? undefined}
-        models={models}
-        tools={tools}
-        uiConfig={uiConfig}
-        onSubmit={handleFormSubmit}
-        onClose={() => { setFormOpen(false); setEditingSchedule(null) }}
-      />
+            <div className="history-meta">
+              <Descriptions size="small" column={3}>
+                <Descriptions.Item label="Schedule">
+                  {selectedSchedule.type === 'cron' ? selectedSchedule.cronExpr || '—' : fmtDate(selectedSchedule.runAt)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Next run">{selectedSchedule.nextRunAt ? fmtDate(selectedSchedule.nextRunAt) : '—'}</Descriptions.Item>
+                <Descriptions.Item label="Last run">{selectedSchedule.lastRunAt ? relativeTime(selectedSchedule.lastRunAt) : 'Never'}</Descriptions.Item>
+                <Descriptions.Item label="Retain">
+                  {selectedSchedule.retainHistory === 0 ? 'All executions' : `Last ${selectedSchedule.retainHistory}`}
+                </Descriptions.Item>
+                <Descriptions.Item label="Trace">
+                  {selectedSchedule.traceEnabled == null
+                    ? <Text type="secondary">default</Text>
+                    : selectedSchedule.traceEnabled
+                      ? <Tag color="green">on</Tag>
+                      : <Tag>off</Tag>}
+                </Descriptions.Item>
+                <Descriptions.Item label="Model">
+                  {selectedSchedule.modelId ? (selectedSchedule.provider ? `${selectedSchedule.provider} · ${selectedSchedule.modelId}` : selectedSchedule.modelId) : 'Auto'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tools" span={3}>
+                  {selectedSchedule.allowedTools?.length ? selectedSchedule.allowedTools.map((t) => <Tag key={t}>{t}</Tag>) : <Text type="secondary">All tools</Text>}
+                </Descriptions.Item>
+                {selectedSchedule.params && (
+                  <Descriptions.Item label="LLM params" span={3}>
+                    <Space size={6} wrap>
+                      {selectedSchedule.params.temperature != null && <Tag>temp={selectedSchedule.params.temperature}</Tag>}
+                      {selectedSchedule.params.max_tokens != null && <Tag>max_tokens={selectedSchedule.params.max_tokens}</Tag>}
+                      {selectedSchedule.params.top_p != null && <Tag>top_p={selectedSchedule.params.top_p}</Tag>}
+                      {selectedSchedule.params.top_k != null && <Tag>top_k={selectedSchedule.params.top_k}</Tag>}
+                    </Space>
+                  </Descriptions.Item>
+                )}
+              </Descriptions>
+            </div>
+
+            <div className="history-toolbar" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+              <Space size={6}>
+                <FilterOutlined style={{ color: token.colorTextSecondary, fontSize: 12 }} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {execStatusFilter === 'all'
+                    ? `${executions.length} execution${executions.length !== 1 ? 's' : ''}`
+                    : `${filteredExecutions.length} of ${executions.length}`}
+                </Text>
+              </Space>
+              <Radio.Group size="small" value={execStatusFilter} onChange={e => setExecStatusFilter(e.target.value)}>
+                {EXEC_STATUS_OPTIONS.map(opt => (
+                  <Radio.Button key={opt.value} value={opt.value}>{opt.label}</Radio.Button>
+                ))}
+              </Radio.Group>
+            </div>
+
+            <div className="history-content">
+              {loadingExecs && executions.length === 0 ? (
+                <div className="spin-center"><Spin /></div>
+              ) : executions.length === 0 ? (
+                <div className="centered-page">
+                  <Empty description="No executions yet. Run this schedule to build history." image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                    <Button icon={<ThunderboltOutlined />} onClick={() => handleTrigger(selectedSchedule.id)}>Run now</Button>
+                  </Empty>
+                </div>
+              ) : filteredExecutions.length === 0 ? (
+                <div className="centered-page">
+                  <Empty description={`No ${execStatusFilter} executions`} image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                    <Button onClick={() => setExecStatusFilter('all')}>Show all</Button>
+                  </Empty>
+                </div>
+              ) : (
+                <div className="execution-stack">
+                  {filteredExecutions.map((exec) => (
+                    <ExecutionItem key={exec.id} exec={exec} onDelete={handleDeleteExecution} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="scheduler-surface">
+            <div className="page-header" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+              <div className="page-header-row">
+                <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+                  <Title level={4} style={{ margin: 0 }}>Schedules</Title>
+                  <Text type="secondary">Manage recurring prompts and open a schedule to review its execution history.</Text>
+                </Space>
+                <Space>
+                  <Button icon={<ReloadOutlined spin={loadingSchedules} />} onClick={loadSchedules}>Refresh</Button>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>New schedule</Button>
+                </Space>
+              </div>
+            </div>
+
+            <div className="list-toolbar">
+              <Input
+                placeholder="Search schedules by name..."
+                allowClear
+                value={nameFilter}
+                onChange={e => setNameFilter(e.target.value)}
+                className="schedule-search"
+              />
+              <Segmented
+                value={statusFilter}
+                onChange={v => setStatusFilter(v as StatusFilter)}
+                options={[
+                  { label: 'All', value: 'all' },
+                  { label: 'Active', value: 'enabled' },
+                  { label: 'Disabled', value: 'disabled' },
+                ]}
+              />
+              <Text type="secondary" className="schedule-count">
+                {hasScheduleFilters
+                  ? `${filteredSchedules.length} of ${schedules.length} schedules`
+                  : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''}`}
+              </Text>
+            </div>
+
+            <div className="list-content">
+              {loadingSchedules && schedules.length === 0 ? (
+                <div className="spin-center"><Spin /></div>
+              ) : schedules.length === 0 ? (
+                <div className="centered-page">
+                  <Empty description="No schedules yet" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Create first schedule</Button>
+                  </Empty>
+                </div>
+              ) : filteredSchedules.length === 0 ? (
+                <div className="centered-page">
+                  <Empty description="No schedules match the current filters" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                    <Button onClick={clearScheduleFilters}>Clear filters</Button>
+                  </Empty>
+                </div>
+              ) : (
+                <Table
+                  size="middle"
+                  rowKey="id"
+                  columns={scheduleColumns}
+                  dataSource={filteredSchedules}
+                  pagination={false}
+                  rowHoverable
+                  className="schedule-table"
+                  rowClassName={(record) => record.id === selectedId ? 'schedule-row-selected' : ''}
+                  onRow={(record) => ({ onClick: () => handleSelectSchedule(record.id) })}
+                  scroll={{ x: 980 }}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </>
   )
 }

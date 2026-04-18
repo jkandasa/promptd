@@ -15,6 +15,7 @@ const { useToken } = theme
 export interface ConvItemProps {
   conv: ConversationMeta
   isActive: boolean
+  isDark?: boolean
   editingConvId: string | null
   editingTitle: string
   token: ReturnType<typeof useToken>['token']
@@ -30,6 +31,7 @@ export interface ConvItemProps {
 export function ConvItem({
   conv,
   isActive,
+  isDark = false,
   editingConvId,
   editingTitle,
   token,
@@ -42,26 +44,31 @@ export function ConvItem({
   onDelete,
 }: ConvItemProps) {
   const isEditing = editingConvId === conv.id
-  const activeBg = token.colorPrimary
-  const activeText = '#fff'
+  const activeBg = token.colorPrimaryBg
+  const activeBorder = token.colorPrimaryBorder
+  const activeText = isDark ? '#fff' : token.colorText
+  const activeSubtext = isDark ? 'rgba(255,255,255,0.72)' : token.colorTextSecondary
+  const activeIcon = isDark ? '#fff' : token.colorPrimary
+  const pinnedIconColor = isDark ? 'rgba(255,255,255,0.88)' : token.colorPrimary
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 4,
-        padding: '5px 6px',
-        borderRadius: 8,
+        gap: 6,
+        padding: '8px 10px',
+        borderRadius: 12,
         cursor: 'pointer',
         background: isActive ? activeBg : 'transparent',
-        border: `1px solid ${isActive ? token.colorPrimary : 'transparent'}`,
-        marginBottom: 2,
+        border: `1px solid ${isActive ? activeBorder : 'transparent'}`,
+        marginBottom: 4,
+        transition: 'background-color 0.16s ease, border-color 0.16s ease',
       }}
       onClick={() => { if (!isEditing) onLoad(conv.id) }}
     >
       <MessageOutlined
         style={{
-          color: isActive ? activeText : token.colorTextSecondary,
+          color: isActive ? activeIcon : token.colorTextSecondary,
           fontSize: 13,
           flexShrink: 0,
         }}
@@ -85,7 +92,7 @@ export function ConvItem({
             style={{
               display: 'block',
               fontSize: 13,
-              fontWeight: isActive ? 600 : 400,
+              fontWeight: isActive ? 600 : 500,
               color: isActive ? activeText : token.colorText,
               lineHeight: 1.3,
             }}
@@ -95,7 +102,7 @@ export function ConvItem({
           <Text
             style={{
               fontSize: 10,
-              color: isActive ? 'rgba(255,255,255,0.65)' : token.colorTextTertiary,
+              color: isActive ? activeSubtext : token.colorTextTertiary,
               display: 'block',
               lineHeight: 1.3,
               marginTop: 1,
@@ -113,10 +120,10 @@ export function ConvItem({
           <Button
             type="text"
             size="small"
-            icon={conv.pinned ? <PushpinFilled style={{ color: token.colorPrimary }} /> : <PushpinOutlined />}
+            icon={conv.pinned ? <PushpinFilled style={{ color: isActive ? activeIcon : pinnedIconColor }} /> : <PushpinOutlined />}
             onClick={() => onTogglePin(conv.id)}
             aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
-            style={{ width: 22, height: 22, padding: 0, color: isActive ? activeText : token.colorTextSecondary }}
+            style={{ width: 22, height: 22, padding: 0, color: conv.pinned ? pinnedIconColor : isActive ? activeIcon : token.colorTextSecondary }}
           />
         </Tooltip>
         <Tooltip title="Rename">
@@ -126,7 +133,7 @@ export function ConvItem({
             icon={<EditOutlined />}
             onClick={() => onStartEdit(conv.id, conv.title || '')}
             aria-label="Rename conversation"
-            style={{ width: 22, height: 22, padding: 0, color: isActive ? activeText : token.colorTextSecondary }}
+            style={{ width: 22, height: 22, padding: 0, color: isActive ? activeIcon : token.colorTextSecondary }}
           />
         </Tooltip>
         <Popconfirm

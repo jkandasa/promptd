@@ -3,6 +3,8 @@ import type {
   LLMParamsOverride, UploadedFile, LLMRound, UsedParams,
 } from '../types/chat'
 
+const API_BASE = '/api'
+
 export type ChatResponse = {
   reply: string
   model: string
@@ -67,14 +69,14 @@ export interface ModelData {
 }
 
 export async function apiListTools(): Promise<ToolInfo[]> {
-  const res = await fetch('/tools')
+  const res = await fetch(`${API_BASE}/tools`)
   if (!res.ok) return []
   const data: { tools: { name: string; description: string; parameters?: any }[] } = await res.json()
   return data.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) ?? []
 }
 
 export async function apiGetUIConfig(): Promise<UIConfig> {
-  const res = await fetch('/ui-config')
+  const res = await fetch(`${API_BASE}/ui-config`)
   if (!res.ok) return {}
   return res.json()
 }
@@ -83,7 +85,7 @@ export async function apiGetModels(provider?: string, discover = false): Promise
   const params = new URLSearchParams()
   if (provider) params.set('provider', provider)
   if (discover) params.set('discover', 'true')
-  const url = params.size > 0 ? `/models?${params.toString()}` : '/models'
+  const url = params.size > 0 ? `${API_BASE}/models?${params.toString()}` : `${API_BASE}/models`
   const res = await fetch(url)
   if (!res.ok) return { models: [], selection_method: 'auto', count: 0 }
   return res.json()
@@ -98,7 +100,7 @@ export async function apiChat(
   params?: LLMParamsOverride,
   provider?: string,
 ): Promise<ChatResponse> {
-  const res = await fetch('/chat', {
+  const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
@@ -111,30 +113,30 @@ export async function apiChat(
 export async function apiUploadFile(file: File): Promise<UploadedFile> {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch('/upload', { method: 'POST', body: formData })
+  const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Upload failed')
   return data as UploadedFile
 }
 
 export async function apiListConversations(): Promise<ConversationMeta[]> {
-  const res = await fetch('/conversations')
+  const res = await fetch(`${API_BASE}/conversations`)
   if (!res.ok) return []
   return res.json()
 }
 
 export async function apiLoadConversation(id: string): Promise<ConversationDetail | null> {
-  const res = await fetch(`/conversations/${id}`)
+  const res = await fetch(`${API_BASE}/conversations/${id}`)
   if (!res.ok) return null
   return res.json()
 }
 
 export async function apiDeleteConversation(id: string): Promise<void> {
-  await fetch(`/conversations/${id}`, { method: 'DELETE' })
+  await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' })
 }
 
 export async function apiRenameConversation(id: string, title: string): Promise<void> {
-  await fetch(`/conversations/${id}/title`, {
+  await fetch(`${API_BASE}/conversations/${id}/title`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
@@ -142,15 +144,15 @@ export async function apiRenameConversation(id: string, title: string): Promise<
 }
 
 export async function apiTogglePin(id: string): Promise<boolean> {
-  const res = await fetch(`/conversations/${id}/pin`, { method: 'PATCH' })
+  const res = await fetch(`${API_BASE}/conversations/${id}/pin`, { method: 'PATCH' })
   const data = await res.json()
   return data.pinned as boolean
 }
 
 export async function apiDeleteMessage(convId: string, msgId: string): Promise<void> {
-  await fetch(`/conversations/${convId}/messages/${msgId}`, { method: 'DELETE' })
+  await fetch(`${API_BASE}/conversations/${convId}/messages/${msgId}`, { method: 'DELETE' })
 }
 
 export async function apiDeleteMessagesFrom(convId: string, msgId: string): Promise<void> {
-  await fetch(`/conversations/${convId}/messages/${msgId}/after`, { method: 'DELETE' })
+  await fetch(`${API_BASE}/conversations/${convId}/messages/${msgId}/after`, { method: 'DELETE' })
 }

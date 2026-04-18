@@ -1,17 +1,15 @@
 import React, { useMemo } from 'react'
 import {
-  Badge,
+  Button,
   DatePicker,
   Form,
   Input,
   InputNumber,
-  Modal,
   Radio,
   Segmented,
   Select,
   Space,
   Switch,
-  Tabs,
   Tag,
   Typography,
   theme,
@@ -112,15 +110,10 @@ interface Props {
   onClose: () => void
 }
 
-const SCHEDULE_FIELDS = ['name', 'prompt', 'type', 'cronExpr', 'runAt']
-const MODEL_FIELDS    = ['modelId', 'systemPrompt', 'allowedTools', 'params']
-
 export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit, onClose }: Props) {
   const [form] = Form.useForm()
   const { token } = useToken()
   const [submitting, setSubmitting]   = React.useState(false)
-  const [activeTab, setActiveTab]     = React.useState('schedule')
-  const [tabErrors, setTabErrors]     = React.useState<Record<string, number>>({})
   const [providerFilter, setProviderFilter] = React.useState<string>('')
   const [providerModels, setProviderModels] = React.useState<ModelInfo[]>([])
   const [loadingProviderModels, setLoadingProviderModels] = React.useState(false)
@@ -164,8 +157,6 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
 
   React.useEffect(() => {
     if (open) {
-      setActiveTab('schedule')
-      setTabErrors({})
       setProviderFilter(initial?.provider ?? '')
       form.setFieldsValue({
         name:          initial?.name ?? '',
@@ -184,21 +175,10 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
     }
   }, [open, initial, form])
 
-  const computeTabErrors = (errorFields: { name: (string | number)[] }[]) => {
-    const counts: Record<string, number> = {}
-    for (const { name } of errorFields) {
-      const field = String(name[0])
-      if (SCHEDULE_FIELDS.includes(field)) counts.schedule = (counts.schedule ?? 0) + 1
-      else if (MODEL_FIELDS.includes(field)) counts.model = (counts.model ?? 0) + 1
-    }
-    setTabErrors(counts)
-  }
-
   const handleOk = async () => {
     try {
       const values = await form.validateFields()
       setSubmitting(true)
-      setTabErrors({})
       const p = values.params ?? {}
       const hasParams = p.temperature != null || p.max_tokens != null || p.top_p != null || p.top_k != null
       const payload: Partial<Schedule> = {
@@ -221,11 +201,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
       }
       await onSubmit(payload)
       form.resetFields()
-    } catch (e: unknown) {
-      // Show which tabs have validation errors
-      if (typeof e === 'object' && e && 'errorFields' in e) {
-        computeTabErrors((e as { errorFields: { name: (string | number)[] }[] }).errorFields)
-      }
+    } catch {
     } finally {
       setSubmitting(false)
     }
@@ -233,280 +209,264 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
 
   const handleClose = () => {
     form.resetFields()
-    setTabErrors({})
     onClose()
   }
-
-  const tabLabel = (label: string, tab: string) =>
-    tabErrors[tab]
-      ? <Badge count={tabErrors[tab]} size="small" offset={[6, -2]}>{label}</Badge>
-      : label
 
   const systemPrompts = uiConfig.systemPrompts ?? []
 
   return (
-    <Modal
-      title={initial?.id ? 'Edit Schedule' : 'New Schedule'}
-      open={open}
-      onOk={handleOk}
-      onCancel={handleClose}
-      confirmLoading={submitting}
-      okText={initial?.id ? 'Save changes' : 'Create schedule'}
-      width={660}
-      destroyOnClose
-      styles={{ body: { padding: 0 } }}
-    >
+    open ? (
+      <div className="schedule-form-panel">
       <Form form={form} layout="vertical" size="middle">
-        {/* Tab bar only — no children, so content is never unmounted */}
-        <Tabs
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          size="small"
-          style={{ padding: '0 24px' }}
-          items={[
-            { key: 'schedule', label: tabLabel('Schedule', 'schedule') },
-            { key: 'model',    label: tabLabel('Model', 'model') },
-          ]}
-        />
-
-        {/* All form sections always rendered; visibility toggled via display */}
         <div className="form-scroll">
-
-          {/* ── Schedule tab ── */}
-          <div className="tab-section" style={{ display: activeTab === 'schedule' ? 'block' : 'none' }}>
-            <Form.Item
-              name="name"
-              label="Name"
-              rules={[{ required: true, message: 'Name is required' }]}
-            >
-              <Input placeholder="Daily summary" />
-            </Form.Item>
-
-            <Form.Item
-              name="prompt"
-              label="Prompt"
-              rules={[{ required: true, message: 'Prompt is required' }]}
-              extra="Sent to the model as the user message on every execution."
-            >
-              <TextArea
-                placeholder="Write a concise summary of today's key events…"
-                autoSize={{ minRows: 3, maxRows: 6 }}
-              />
-            </Form.Item>
-
-            <Form.Item name="type" label="Repeat">
-              <Radio.Group>
-                <Radio value="cron">Recurring (cron)</Radio>
-                <Radio value="once">One-time</Radio>
-              </Radio.Group>
-            </Form.Item>
-
-            {schedType === 'cron' ? (
-              <Form.Item
-                name="cronExpr"
-                label="Cron expression"
-                rules={[{ required: true, message: 'Cron expression is required' }]}
-                extra={
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    6-field: <code style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>seconds minutes hours day month weekday</code>
-                  </Text>
-                }
-              >
-                <CronInput />
-              </Form.Item>
-            ) : (
-              <Form.Item
-                name="runAt"
-                label="Run at"
-                rules={[{ required: true, message: 'Date and time is required' }]}
-              >
-                <DatePicker
-                  showTime
-                  style={{ width: '100%' }}
-                  format="YYYY-MM-DD HH:mm:ss"
-                  disabledDate={d => d && d.isBefore(dayjs(), 'day')}
-                />
-              </Form.Item>
-            )}
-
-            <div className="two-col">
-              <Form.Item
-                name="retainHistory"
-                label="Keep last N executions"
-                extra="0 = keep all"
-              >
-                <RetainInput />
-              </Form.Item>
-
-              <Space direction="vertical" size={12}>
+          <div className="form-section-card">
+            <div className="form-section">
+              <Text strong className="section-title">Schedule</Text>
+              <div className="top-controls-row">
                 <Form.Item name="enabled" label="Enabled" valuePropName="checked" style={{ marginBottom: 0 }}>
                   <Switch />
+                </Form.Item>
+              </div>
+
+              <Form.Item
+                name="name"
+                label="Name"
+                rules={[{ required: true, message: 'Name is required' }]}
+              >
+                <Input placeholder="Daily summary" />
+              </Form.Item>
+
+              <Form.Item
+                name="prompt"
+                label="Prompt"
+                rules={[{ required: true, message: 'Prompt is required' }]}
+                extra="Sent to the model as the user message on every execution."
+              >
+                <TextArea
+                  placeholder="Write a concise summary of today's key events…"
+                  autoSize={{ minRows: 4, maxRows: 8 }}
+                />
+              </Form.Item>
+
+              <Form.Item name="type" label="Repeat">
+                <Radio.Group>
+                  <Radio value="cron">Recurring (cron)</Radio>
+                  <Radio value="once">One-time</Radio>
+                </Radio.Group>
+              </Form.Item>
+
+              {schedType === 'cron' ? (
+                <Form.Item
+                  name="cronExpr"
+                  label="Cron expression"
+                  rules={[{ required: true, message: 'Cron expression is required' }]}
+                  extra={
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      6-field: <code style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>seconds minutes hours day month weekday</code>
+                    </Text>
+                  }
+                >
+                  <CronInput />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="runAt"
+                  label="Run at"
+                  rules={[{ required: true, message: 'Date and time is required' }]}
+                >
+                  <DatePicker
+                    showTime
+                    style={{ width: '100%' }}
+                    format="YYYY-MM-DD HH:mm:ss"
+                    disabledDate={d => d && d.isBefore(dayjs(), 'day')}
+                  />
+                </Form.Item>
+              )}
+
+              <div className="two-col">
+                <Form.Item
+                  name="retainHistory"
+                  label="Keep last N executions"
+                  extra="0 = keep all"
+                >
+                  <RetainInput />
                 </Form.Item>
 
                 <Form.Item
                   name="traceEnabled"
                   label="LLM trace"
                   extra={<Text type="secondary" style={{ fontSize: 11 }}>Default follows global config</Text>}
-                  style={{ marginBottom: 0 }}
                 >
                   <Segmented
                     size="small"
                     options={[
                       { label: 'Default', value: 'default' },
-                      { label: 'On',      value: 'on' },
-                      { label: 'Off',     value: 'off' },
+                      { label: 'On', value: 'on' },
+                      { label: 'Off', value: 'off' },
                     ]}
                   />
                 </Form.Item>
-              </Space>
+              </div>
             </div>
           </div>
 
-          {/* ── Model tab ── */}
-          <div className="tab-section" style={{ display: activeTab === 'model' ? 'block' : 'none' }}>
-            {isMultiProvider && (
-              <Form.Item label="Provider" extra="Auto = server picks provider based on selection method">
-                 <Select
-                   value={providerFilter}
-                   onChange={(v: string) => {
-                     setProviderFilter(v)
-                     // Reset selection and any internal search/filter state tied to the model list.
-                     form.setFieldValue('modelId', '')
-                   }}
-                  showSearch={{ filterOption: (input, opt) => {
-                    if (!input) return true
-                    const q = input.toLowerCase()
-                    return String(opt?.label ?? '').toLowerCase().includes(q) || String(opt?.value ?? '').toLowerCase().includes(q)
-                  } }}
-                  placeholder="Auto"
-                  options={[
-                    { label: 'Auto', value: '' },
-                    ...providerNames.map(p => ({ label: p, value: p })),
-                  ]}
-                />
-              </Form.Item>
-            )}
-            <div className="two-col">
-              <Form.Item name="modelId" label="Model" extra={providerFilter ? 'Choose a model for the selected provider' : 'Auto provider keeps model on Auto'}>
-                <Select
-                  key={`schedule-model-${providerFilter || 'auto'}`}
-                  showSearch={{ filterOption: (input, opt) =>
-                    !input ||
-                    String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                    String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                  }}
-                  placeholder="Auto"
-                  disabled={!providerFilter || loadingProviderModels}
-                  options={[
-                    { value: '', label: 'Auto' },
-                    ...[...providerModels]
-                      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
-                      .map(m => ({ value: m.id, label: m.name || m.id, provider: m.provider })),
-                  ]}
-                  optionRender={opt => {
-                    const { provider } = opt.data as { provider?: string }
-                    const providerName = provider
-                    const subtitle = isMultiProvider && !providerFilter && providerName
-                      ? `${providerName} · ${opt.value as string}`
-                      : String(opt.value) !== String(opt.label) ? opt.value as string : ''
-                    return (
-                      <Space direction="vertical" size={0}>
-                        <Text style={{ fontSize: 13, fontWeight: 500 }}>{opt.label as string}</Text>
-                        {subtitle && <Text type="secondary" style={{ fontSize: 11 }}>{subtitle}</Text>}
-                      </Space>
-                    )
-                  }}
-                />
-              </Form.Item>
+          <div className="form-section-card">
+            <div className="form-section">
+              <Text strong className="section-title">Model</Text>
+              <div className="two-col">
+                {isMultiProvider ? (
+                  <Form.Item label="Provider" extra="Auto = server picks provider based on selection method">
+                    <Select
+                      value={providerFilter}
+                      onChange={(v: string) => {
+                        setProviderFilter(v)
+                        form.setFieldValue('modelId', '')
+                      }}
+                      showSearch={{ filterOption: (input, opt) => {
+                        if (!input) return true
+                        const q = input.toLowerCase()
+                        return String(opt?.label ?? '').toLowerCase().includes(q) || String(opt?.value ?? '').toLowerCase().includes(q)
+                      } }}
+                      placeholder="Auto"
+                      options={[
+                        { label: 'Auto', value: '' },
+                        ...providerNames.map(p => ({ label: p, value: p })),
+                      ]}
+                    />
+                  </Form.Item>
+                ) : <div />}
 
-              {systemPrompts.length > 0 && (
-                <Form.Item name="systemPrompt" label="System prompt" extra="Blank = default">
+                <Form.Item name="modelId" label="Model" extra={providerFilter ? 'Choose a model for the selected provider' : 'Auto provider keeps model on Auto'}>
                   <Select
-                    allowClear
+                    key={`schedule-model-${providerFilter || 'auto'}`}
                     showSearch={{ filterOption: (input, opt) =>
-                      !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      !input ||
+                      String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
+                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
                     }}
-                    placeholder="Default prompt"
-                    options={[...systemPrompts]
-                      .sort((a, b) => a.name.localeCompare(b.name))
-                      .map(p => ({ value: p.name, label: p.name }))}
+                    placeholder="Auto"
+                    disabled={!providerFilter || loadingProviderModels}
+                    options={[
+                      { value: '', label: 'Auto' },
+                      ...[...providerModels]
+                        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+                        .map(m => ({ value: m.id, label: m.name || m.id, provider: m.provider })),
+                    ]}
+                    optionRender={opt => {
+                      const { provider } = opt.data as { provider?: string }
+                      const providerName = provider
+                      const subtitle = isMultiProvider && !providerFilter && providerName
+                        ? `${providerName} · ${opt.value as string}`
+                        : String(opt.value) !== String(opt.label) ? opt.value as string : ''
+                      return (
+                        <Space direction="vertical" size={0}>
+                          <Text style={{ fontSize: 13, fontWeight: 500 }}>{opt.label as string}</Text>
+                          {subtitle && <Text type="secondary" style={{ fontSize: 11 }}>{subtitle}</Text>}
+                        </Space>
+                      )
+                    }}
                   />
                 </Form.Item>
-              )}
+              </div>
+
+              <div className="two-col">
+                {systemPrompts.length > 0 ? (
+                  <Form.Item name="systemPrompt" label="System prompt" extra="Blank = default">
+                    <Select
+                      allowClear
+                      showSearch={{ filterOption: (input, opt) =>
+                        !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }}
+                      placeholder="Default prompt"
+                      options={[...systemPrompts]
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map(p => ({ value: p.name, label: p.name }))}
+                    />
+                  </Form.Item>
+                ) : <div />}
+
+                {tools.length > 0 ? (
+                  <Form.Item
+                    name="allowedTools"
+                    label="Allowed tools"
+                    extra="Leave empty to allow all tools."
+                  >
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch={{ filterOption: (input, opt) =>
+                        !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }}
+                      placeholder="All tools"
+                      options={[...tools]
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map(t => ({ value: t.name, label: t.name }))}
+                      optionRender={opt => {
+                        const tool = tools.find(t => t.name === opt.value)
+                        return (
+                          <Space direction="vertical" size={0}>
+                            <Text style={{ fontFamily: token.fontFamilyCode, fontSize: 12 }}>{opt.label as string}</Text>
+                            {tool?.description && (
+                              <Text type="secondary" style={{ fontSize: 11 }}>{tool.description}</Text>
+                            )}
+                          </Space>
+                        )
+                      }}
+                    />
+                  </Form.Item>
+                ) : <div />}
+              </div>
+
+              <Text type="secondary" className="params-hint">
+                LLM parameters — leave blank to use model or global defaults.
+              </Text>
+
+              <div className="four-col">
+                <Form.Item
+                  name={['params', 'temperature']}
+                  label="Temperature"
+                  extra={<Text type="secondary" style={{ fontSize: 11 }}>0 = deterministic · 2 = very random</Text>}
+                >
+                  <InputNumber min={0} max={2} step={0.1} precision={2} placeholder="default" style={{ width: '100%' }} />
+                </Form.Item>
+
+                <Form.Item
+                  name={['params', 'max_tokens']}
+                  label="Max tokens"
+                  extra={<Text type="secondary" style={{ fontSize: 11 }}>Maximum output tokens</Text>}
+                >
+                  <InputNumber min={1} step={256} placeholder="default" style={{ width: '100%' }} />
+                </Form.Item>
+
+                <Form.Item
+                  name={['params', 'top_p']}
+                  label="Top P"
+                  extra={<Text type="secondary" style={{ fontSize: 11 }}>Nucleus sampling (0–1)</Text>}
+                >
+                  <InputNumber min={0} max={1} step={0.05} precision={2} placeholder="default" style={{ width: '100%' }} />
+                </Form.Item>
+
+                <Form.Item
+                  name={['params', 'top_k']}
+                  label="Top K"
+                  extra={<Text type="secondary" style={{ fontSize: 11 }}>Provider-specific</Text>}
+                >
+                  <InputNumber min={1} step={10} placeholder="default" style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
             </div>
+          </div>
 
-            {tools.length > 0 && (
-              <Form.Item
-                name="allowedTools"
-                label="Allowed tools"
-                extra="Leave empty to allow all tools."
-              >
-                <Select
-                  mode="multiple"
-                  allowClear
-                  showSearch={{ filterOption: (input, opt) =>
-                    !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                  }}
-                  placeholder="All tools"
-                  options={[...tools]
-                    .sort((a, b) => a.name.localeCompare(b.name))
-                    .map(t => ({ value: t.name, label: t.name }))}
-                  optionRender={opt => {
-                    const tool = tools.find(t => t.name === opt.value)
-                    return (
-                      <Space direction="vertical" size={0}>
-                        <Text style={{ fontFamily: token.fontFamilyCode, fontSize: 12 }}>{opt.label as string}</Text>
-                        {tool?.description && (
-                          <Text type="secondary" style={{ fontSize: 11 }}>{tool.description}</Text>
-                        )}
-                      </Space>
-                    )
-                  }}
-                />
-              </Form.Item>
-            )}
-
-            <Text type="secondary" className="params-hint">
-              LLM parameters — leave blank to use model or global defaults.
-            </Text>
-
-            <div className="two-col">
-              <Form.Item
-                name={['params', 'temperature']}
-                label="Temperature"
-                extra={<Text type="secondary" style={{ fontSize: 11 }}>0 = deterministic · 2 = very random</Text>}
-              >
-                <InputNumber min={0} max={2} step={0.1} precision={2} placeholder="default" style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item
-                name={['params', 'max_tokens']}
-                label="Max tokens"
-                extra={<Text type="secondary" style={{ fontSize: 11 }}>Maximum output tokens</Text>}
-              >
-                <InputNumber min={1} step={256} placeholder="default" style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item
-                name={['params', 'top_p']}
-                label="Top P"
-                extra={<Text type="secondary" style={{ fontSize: 11 }}>Nucleus sampling (0–1)</Text>}
-              >
-                <InputNumber min={0} max={1} step={0.05} precision={2} placeholder="default" style={{ width: '100%' }} />
-              </Form.Item>
-
-              <Form.Item
-                name={['params', 'top_k']}
-                label="Top K"
-                extra={<Text type="secondary" style={{ fontSize: 11 }}>Provider-specific</Text>}
-              >
-                <InputNumber min={1} step={10} placeholder="default" style={{ width: '100%' }} />
-              </Form.Item>
-            </div>
+          <div className="schedule-form-footer">
+            <Button onClick={handleClose}>Cancel</Button>
+            <Button type="primary" onClick={() => { void handleOk() }} loading={submitting}>
+              {initial?.id ? 'Save changes' : 'Create schedule'}
+            </Button>
           </div>
 
         </div>
       </Form>
-    </Modal>
+      </div>
+    ) : null
   )
 }

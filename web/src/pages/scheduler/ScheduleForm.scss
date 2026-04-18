@@ -1,13 +1,63 @@
 // ── Form body ─────────────────────────────────────────────────────────────────
 
 .form-scroll {
-  max-height: calc(100vh - 300px);
+  max-height: calc(100vh - 180px);
   overflow-y: auto;
-  padding: 0 24px 16px;
+  padding: 20px 24px 16px;
 }
 
-.tab-section {
-  padding-top: 16px;
+.schedule-form-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.form-section-card {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 12px;
+  background: var(--ant-color-bg-container);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.top-controls-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 16px 24px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.section-title {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.schedule-form-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 8px;
+  border-top: 1px solid var(--ant-color-border-secondary);
+  position: sticky;
+  bottom: 0;
+  background: var(--ant-color-bg-container);
+  z-index: 1;
+}
+
+.model-config-note {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
 }
 
 // ── Grid helpers ──────────────────────────────────────────────────────────────
@@ -16,6 +66,12 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 24px;
+}
+
+.four-col {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0 16px;
 }
 
 // ── Cron presets ──────────────────────────────────────────────────────────────
@@ -49,4 +105,26 @@
   font-size: 11px;
   display: block;
   margin-bottom: 12px;
+}
+
+@media (max-width: 768px) {
+  .form-scroll {
+    max-height: calc(100vh - 180px);
+    padding: 16px 16px 16px;
+  }
+
+  .two-col {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .four-col,
+  .top-controls-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .schedule-form-footer {
+    padding-bottom: 4px;
+  }
 }

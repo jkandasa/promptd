@@ -29,7 +29,8 @@ import type { ConversationMeta, LLMParamsOverride, Message, UIConfig } from '../
 import {
   DownOutlined,
   FileOutlined,
-  FileTextOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -63,19 +64,15 @@ interface ChatPageProps {
   siderCollapsed: boolean
   setSiderCollapsed: (collapsed: boolean) => void
   onRefreshModels: (provider?: string) => Promise<void>
+  selectedConversationId?: string | null
+  onConversationChange?: (id: string | null) => void
 }
 
-export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, setSiderCollapsed, onRefreshModels }: ChatPageProps) {
+export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, setSiderCollapsed, onRefreshModels, selectedConversationId, onConversationChange }: ChatPageProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
 
-  const [sessionId, setSessionId] = useState(() => {
-    const stored = sessionStorage.getItem('chatSessionId')
-    if (stored) return stored
-    const id = uid()
-    sessionStorage.setItem('chatSessionId', id)
-    return id
-  })
+  const [sessionId, setSessionId] = useState<string | null>(selectedConversationId ?? null)
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
   const [input, setInput] = useState('')
@@ -95,6 +92,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [convsLoading, setConvsLoading] = useState(false)
+  const [conversationSearch, setConversationSearch] = useState('')
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
 
@@ -139,25 +137,17 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   }, [refreshConversations])
 
   const handleNewChat = useCallback(() => {
-    const id = uid()
-    sessionStorage.setItem('chatSessionId', id)
-    setSessionId(id)
-    setMessages([])
-    setInput('')
-    setUploadedFiles([])
-    const nextPrompt = getFirstSystemPromptName(uiConfig)
-    setSelectedSystemPrompt(nextPrompt)
-    selectedSystemPromptRef.current = nextPrompt
-  }, [uiConfig])
+    onConversationChange?.(null)
+  }, [onConversationChange])
 
-  const handleLoadConversation = useCallback(async (id: string, silent = false) => {
+  const handleLoadConversation = useCallback(async (id: string, silent = false, navigateToConversation = true) => {
     const detail = await apiLoadConversation(id)
     if (!detail) {
       if (!silent) antMessage.error('Failed to load conversation')
       return
     }
-    sessionStorage.setItem('chatSessionId', id)
     setSessionId(id)
+    if (navigateToConversation) onConversationChange?.(id)
     setInput('')
     setUploadedFiles([])
     const uiMsgs: Message[] = detail.messages
@@ -193,17 +183,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       : getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [antMessage, uiConfig])
-
-  useEffect(() => {
-    void handleLoadConversation(sessionId, true)
-  }, [handleLoadConversation, sessionId])
+  }, [antMessage, onConversationChange, uiConfig])
 
   const handleDeleteConversation = useCallback(async (id: string) => {
     await apiDeleteConversation(id)
-    if (id === sessionId) handleNewChat()
+    if (id === sessionIdRef.current) handleNewChat()
     refreshConversations()
-  }, [sessionId, handleNewChat, refreshConversations])
+  }, [handleNewChat, refreshConversations])
 
   const handleRenameConversation = useCallback(async (id: string, title: string) => {
     await apiRenameConversation(id, title)
@@ -273,13 +259,40 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   const sessionIdRef = useRef(sessionId)
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
+  const resetDraftConversation = useCallback(() => {
+    setSessionId(null)
+    setMessages([])
+    setInput('')
+    setUploadedFiles([])
+    setSelectedModel('')
+    selectedModelRef.current = ''
+    setSelectedProvider('')
+    selectedProviderRef.current = ''
+    pendingParamsRef.current = null
+    const nextPrompt = getFirstSystemPromptName(uiConfig)
+    setSelectedSystemPrompt(nextPrompt)
+    selectedSystemPromptRef.current = nextPrompt
+  }, [uiConfig])
+
+  useEffect(() => {
+    if (!selectedConversationId) {
+      resetDraftConversation()
+      return
+    }
+    void handleLoadConversation(selectedConversationId, true, false)
+  }, [handleLoadConversation, resetDraftConversation, selectedConversationId])
+
   const send = useCallback(async (overrideText?: string) => {
     if (loadingRef.current) return
     const text = (overrideText ?? input).trim()
     if (!text && uploadedFilesRef.current.length === 0) return
 
     const files = uploadedFilesRef.current
-    const currentSessionId = sessionIdRef.current
+    const currentSessionId = sessionIdRef.current || uid()
+    if (!sessionIdRef.current) {
+      setSessionId(currentSessionId)
+      onConversationChange?.(currentSessionId)
+    }
     setInput('')
     const userMsg: Message = { id: uid(), role: 'user', content: text, ts: new Date(), files }
     setMessages((prev) => [...prev, userMsg])
@@ -336,12 +349,12 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
         el?.focus()
       }, 0)
     }
-  }, [input, refreshConversations])
+  }, [input, onConversationChange, refreshConversations])
 
   const handleDeleteMessage = useCallback((id: string) => {
     setMessages((prev) => {
       const msg = prev.find((m) => m.id === id)
-      if (msg?.msgId) {
+      if (msg?.msgId && sessionIdRef.current) {
         apiDeleteMessage(sessionIdRef.current, msg.msgId).catch(() => {})
       }
       return prev.filter((m) => m.id !== id)
@@ -354,6 +367,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     if (idx < 0) return
     const msg = prev[idx]
     const convId = sessionIdRef.current
+    if (!convId) return
     if (msg.msgId) {
       apiDeleteMessagesFrom(convId, msg.msgId).catch(() => {})
     }
@@ -492,6 +506,18 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
   const charCount = input.length
   const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
+  const conversationQuery = conversationSearch.trim().toLowerCase()
+  const filteredConversations = useMemo(() => {
+    if (!conversationQuery) return conversations
+    return conversations.filter((conv) => {
+      const title = (conv.title || 'Untitled').toLowerCase()
+      const model = (conv.model || '').toLowerCase()
+      const provider = (conv.provider || '').toLowerCase()
+      return title.includes(conversationQuery) || model.includes(conversationQuery) || provider.includes(conversationQuery)
+    })
+  }, [conversationQuery, conversations])
+  const pinnedConversations = filteredConversations.filter((c) => c.pinned)
+  const recentConversations = filteredConversations.filter((c) => !c.pinned)
 
   return (
     <Layout className="page">
@@ -508,36 +534,61 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
           background: token.colorBgContainer,
           borderRight: `1px solid ${token.colorBorderSecondary}`,
         }}
-      >
-        <div className="sider-content">
-          <div className="sider-header">
-            <Button type="primary" icon={<PlusOutlined />} block onClick={handleNewChat}>
-              New Chat
-            </Button>
-          </div>
+        >
+          <div className="sider-content">
+            <div className="sider-header">
+              <div className="sider-actions">
+                <Button type="primary" icon={<PlusOutlined />} block onClick={handleNewChat}>
+                  New Chat
+                </Button>
+                <Tooltip title="Hide chat history">
+                  <Button
+                    type="text"
+                    icon={<MenuFoldOutlined />}
+                    onClick={() => setSiderCollapsed(true)}
+                    aria-label="Hide chat history"
+                  />
+                </Tooltip>
+              </div>
+              <Input.Search
+                value={conversationSearch}
+                onChange={(e) => setConversationSearch(e.target.value)}
+                placeholder="Search chats..."
+                allowClear
+                size="small"
+                className="conversation-search"
+              />
+            </div>
 
-          <div className="sider-list">
-            {convsLoading ? (
-              <div className="spin-center"><Spin size="small" /></div>
-            ) : conversations.length === 0 ? (
+            <div className="sider-list">
+              {convsLoading ? (
+                <div className="spin-center"><Spin size="small" /></div>
+              ) : conversations.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={<Text type="secondary" style={{ fontSize: 12 }}>No past conversations</Text>}
                 style={{ marginTop: 24 }}
-              />
-            ) : (
-              <>
-                {conversations.some((c) => c.pinned) && (
-                  <>
-                    <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Pinned</Divider>
-                    {conversations.filter((c) => c.pinned).map((conv) => (
-                      <ConvItem
-                        key={conv.id}
-                        conv={conv}
-                        isActive={conv.id === sessionId}
-                        editingConvId={editingConvId}
-                        editingTitle={editingTitle}
-                        token={token}
+                />
+              ) : filteredConversations.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={<Text type="secondary" style={{ fontSize: 12 }}>No chats match your search</Text>}
+                  style={{ marginTop: 24 }}
+                />
+              ) : (
+                <>
+                 {pinnedConversations.length > 0 && (
+                   <>
+                     <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Pinned</Divider>
+                     {pinnedConversations.map((conv) => (
+                        <ConvItem
+                          key={conv.id}
+                          conv={conv}
+                          isActive={conv.id === selectedConversationId}
+                          isDark={isDark}
+                         editingConvId={editingConvId}
+                         editingTitle={editingTitle}
+                         token={token}
                         onLoad={handleLoadConversation}
                         onStartEdit={(id, title) => { setEditingConvId(id); setEditingTitle(title) }}
                         onConfirmEdit={() => {
@@ -547,22 +598,23 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         onCancelEdit={() => setEditingConvId(null)}
                         onEditTitleChange={setEditingTitle}
                         onTogglePin={handleTogglePin}
-                        onDelete={handleDeleteConversation}
-                      />
-                    ))}
-                    {conversations.some((c) => !c.pinned) && (
-                      <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Recent</Divider>
-                    )}
-                  </>
-                )}
-                {conversations.filter((c) => !c.pinned).map((conv) => (
-                  <ConvItem
-                    key={conv.id}
-                    conv={conv}
-                    isActive={conv.id === sessionId}
-                    editingConvId={editingConvId}
-                    editingTitle={editingTitle}
-                    token={token}
+                         onDelete={handleDeleteConversation}
+                       />
+                     ))}
+                     {recentConversations.length > 0 && (
+                       <Divider plain style={{ fontSize: 11, color: token.colorTextTertiary, margin: '8px 0 4px' }}>Recent</Divider>
+                     )}
+                   </>
+                 )}
+                 {recentConversations.map((conv) => (
+                    <ConvItem
+                      key={conv.id}
+                      conv={conv}
+                      isActive={conv.id === selectedConversationId}
+                      isDark={isDark}
+                     editingConvId={editingConvId}
+                     editingTitle={editingTitle}
+                     token={token}
                     onLoad={handleLoadConversation}
                     onStartEdit={(id, title) => { setEditingConvId(id); setEditingTitle(title) }}
                     onConfirmEdit={() => {
@@ -583,6 +635,22 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
       {/* ── Chat content ── */}
       <Layout className="chat-col">
+        {siderCollapsed && (
+          <div className="history-toggle-rail">
+            <Tooltip title="Show chat history">
+              <Button
+                className="history-toggle-btn"
+                type="default"
+                icon={<MenuUnfoldOutlined />}
+                onClick={() => setSiderCollapsed(false)}
+                aria-label="Show chat history"
+                style={{ color: isDark ? '#fff' : token.colorText }}
+              >
+                History
+              </Button>
+            </Tooltip>
+          </div>
+        )}
         {/* ── Messages ── */}
         <Content ref={contentRef} className="messages">
           <div aria-live="polite" aria-label="Chat messages" role="log" className="message-log">
@@ -620,10 +688,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                     <Text type="secondary" className="hero-subtitle">
                       {appName} · AI Assistant
                     </Text>
+                    <Text type="secondary" className="hero-description">
+                      Start with a prompt below or type your own request. Ask for debugging, code changes, summaries, or planning help.
+                    </Text>
                   </div>
                 </div>
 
-                {/* Prompt suggestion cards */}
+                {/* Prompt suggestions */}
                 <div className="prompt-grid">
                   {(uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?']).map((prompt) => (
                     <button
@@ -634,14 +705,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       style={{
                         cursor: loading ? 'not-allowed' : 'pointer',
                         border: `1px solid ${token.colorBorderSecondary}`,
-                        background: token.colorBgContainer,
+                        background: token.colorBgElevated,
                         color: loading ? token.colorTextDisabled : token.colorText,
                         opacity: loading ? 0.5 : 1,
-                        boxShadow: token.boxShadowTertiary,
                       }}
                       onClick={() => { if (!loading) send(prompt) }}
                     >
-                      {prompt}
+                      <span className="prompt-chip-label">{prompt}</span>
                     </button>
                   ))}
                 </div>
@@ -705,6 +775,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                   </Tooltip>
                   {systemPromptOptions.length > 0 && (
                     <Select
+                      className="toolbar-select"
                       value={selectedSystemPrompt}
                       onChange={(v) => { setSelectedSystemPrompt(v); selectedSystemPromptRef.current = v }}
                       size="small"
@@ -714,17 +785,12 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       variant="borderless"
                       placement="topLeft"
                       showSearch={{ filterOption: filterSelectOption }}
-                      labelRender={(opt) => (
-                        <span className="model-label">
-                          <FileTextOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
-                          <span>{opt.label}</span>
-                        </span>
-                      )}
                       style={{ flex: 1, minWidth: 0 }}
                     />
                   )}
                   {isMultiProvider && (
                     <Select
+                      className="toolbar-select"
                       value={selectedProvider}
                       onChange={(v: string) => {
                         setSelectedProvider(v)
@@ -749,6 +815,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         : `Static — ${modelData.count} model${modelData.count !== 1 ? 's' : ''} from config`
                     }>
                       <Select
+                        className="toolbar-select"
                         key={`chat-model-${selectedProvider || 'auto'}`}
                         value={selectedModel}
                         onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
@@ -759,15 +826,6 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                         variant="borderless"
                         showSearch={{ filterOption: filterSelectOption }}
                         placement="topLeft"
-                        labelRender={(opt) => (
-                          <span className="model-label">
-                            <RobotOutlined style={{ color: token.colorTextSecondary, fontSize: 13, flexShrink: 0 }} />
-                             {opt.value !== '' && modelData.source === 'discovered' && (
-                               <span className="pill" style={{ background: token.colorSuccessBg, color: token.colorSuccess }}>DISC</span>
-                             )}
-                             <span>{opt.label}</span>
-                          </span>
-                        )}
                         optionRender={(opt) => {
                           const p = opt.data.params as ModelInfo['params']
                           const paramHints = p ? [
