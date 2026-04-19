@@ -30,12 +30,12 @@ ui:
 
 .PHONY: run
 run: ui
-	go run $(CMD) -config $(CONFIG)
+	go run $(CMD) serve --config $(CONFIG)
 
 # Run without rebuilding the UI (faster for backend-only changes).
 .PHONY: run-go
 run-go:
-	go run $(CMD) -config $(CONFIG)
+	go run $(CMD) serve --config $(CONFIG)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 

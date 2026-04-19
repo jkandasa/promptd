@@ -24,11 +24,6 @@ export function safeUrl(url: string | undefined): string {
   }
 }
 
-export function isImageIcon(icon?: string): boolean {
-  if (!icon) return false
-  return /^(https?:\/\/|\/|data:image\/)/.test(icon)
-}
-
 export function relativeTime(dateStr: string): string {
   const then = new Date(dateStr).getTime()
   if (isNaN(then)) return ''

@@ -162,21 +162,44 @@ func runServe(configPath string) error {
 	mux := http.NewServeMux()
 	appcore.RegisterRoutes(mux, authService, h, mcpHandler, schedHandler)
 
+	tlsConfig, certFile, keyFile, err := appcore.PrepareTLSConfig(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("prepare TLS: %w", err)
+	}
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  120 * time.Second,
+		TLSConfig:    tlsConfig,
 	}
 
 	go func() {
-		logger.Info("server started",
+		fields := []zap.Field{
 			zap.String("address", cfg.Server.Address),
 			zap.Int("providers", len(cfg.LLM.Providers)),
-			zap.Int("models", len(providerRegistry.AllModels())))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("server error", zap.Error(err))
+			zap.Int("models", len(providerRegistry.AllModels())),
+			zap.Bool("tls_enabled", tlsConfig != nil),
+		}
+		if tlsConfig != nil {
+			fields = append(fields,
+				zap.String("scheme", "https"),
+				zap.String("tls_cert_file", certFile),
+				zap.String("tls_key_file", keyFile),
+			)
+		} else {
+			fields = append(fields, zap.String("scheme", "http"))
+		}
+		logger.Info("server started", fields...)
+		var serveErr error
+		if tlsConfig != nil {
+			serveErr = srv.ListenAndServeTLS("", "")
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			logger.Fatal("server error", zap.Error(serveErr))
 		}
 	}()
 

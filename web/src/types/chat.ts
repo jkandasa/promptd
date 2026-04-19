@@ -97,8 +97,6 @@ export interface SystemPrompt {
 }
 
 export interface UIConfig {
-  appName?: string
-  appIcon?: string
   welcomeTitle?: string
   aiDisclaimer?: string
   promptSuggestions?: string[]

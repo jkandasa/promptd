@@ -353,8 +353,6 @@ type Handler struct {
 }
 
 type UIConfig struct {
-	AppName             string                      `json:"appName,omitempty"`
-	AppIcon             string                      `json:"appIcon,omitempty"`
 	WelcomeTitle        string                      `json:"welcomeTitle"`
 	AIDisclaimer        string                      `json:"aiDisclaimer"`
 	PromptSuggestions   []string                    `json:"promptSuggestions"`

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -115,11 +116,19 @@ type Config struct {
 	} `yaml:"data"`
 	Server struct {
 		Address string `yaml:"address"`
+		TLS     struct {
+			Enabled      bool     `yaml:"enabled"`
+			CertFile     string   `yaml:"cert_file"`
+			KeyFile      string   `yaml:"key_file"`
+			AutoGenerate bool     `yaml:"auto_generate"`
+			Hosts        []string `yaml:"hosts"`
+		} `yaml:"tls"`
 	} `yaml:"server"`
 	LLM struct {
-		SelectionMethod     string              `yaml:"selection_method"`
-		AutoDiscover        AutoDiscoverConfig  `yaml:"auto_discover"`
-		Providers           []LLMProviderConfig `yaml:"providers"`
+		SelectionMethod     string               `yaml:"selection_method"`
+		AutoDiscover        AutoDiscoverConfig   `yaml:"auto_discover"`
+		Providers           []LLMProviderConfig  `yaml:"providers"`
+		SystemPrompts       []SystemPromptConfig `yaml:"system_prompts"`
 		CompactConversation struct {
 			Enabled       bool   `yaml:"enabled"`
 			Provider      string `yaml:"provider"`
@@ -144,17 +153,12 @@ type Config struct {
 		ToolRediscoveryInterval Duration          `yaml:"tool_rediscovery_interval"`
 		Servers                 []MCPServerConfig `yaml:"servers"`
 	} `yaml:"mcp"`
-	Tools struct {
-		SystemPrompts []SystemPromptConfig `yaml:"system_prompts"`
-	} `yaml:"tools"`
 	Auth struct {
 		JWT   auth.JWTConfig `yaml:"jwt"`
 		Users []auth.User    `yaml:"users"`
 	} `yaml:"auth"`
 	Roles map[string]auth.Role `yaml:"roles"`
 	UI    struct {
-		AppName           string   `yaml:"app_name"`
-		AppIcon           string   `yaml:"app_icon"`
 		WelcomeTitle      string   `yaml:"welcome_title"`
 		AIDisclaimer      string   `yaml:"ai_disclaimer"`
 		PromptSuggestions []string `yaml:"prompt_suggestions"`
@@ -163,11 +167,11 @@ type Config struct {
 
 func LoadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []handler.SystemPromptInfo, string) {
 	prompts := make(map[string]string)
-	infos := make([]handler.SystemPromptInfo, 0, len(cfg.Tools.SystemPrompts))
+	infos := make([]handler.SystemPromptInfo, 0, len(cfg.LLM.SystemPrompts))
 	firstPrompt := ""
 
-	if len(cfg.Tools.SystemPrompts) == 0 {
-		logger.Fatal("at least one system prompt is required under tools.system_prompts")
+	if len(cfg.LLM.SystemPrompts) == 0 {
+		logger.Fatal("at least one system prompt is required under llm.system_prompts")
 	}
 
 	loadPrompt := func(name, file string) {
@@ -194,7 +198,7 @@ func LoadSystemPrompts(cfg *Config, logger *zap.Logger) (map[string]string, []ha
 		logger.Info("system prompt loaded", zap.String("name", name), zap.String("path", file))
 	}
 
-	for _, prompt := range cfg.Tools.SystemPrompts {
+	for _, prompt := range cfg.LLM.SystemPrompts {
 		loadPrompt(prompt.Name, prompt.File)
 	}
 
@@ -249,6 +253,14 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Data.Dir == "" {
 		cfg.Data.Dir = "./data"
+	}
+	if cfg.Server.TLS.AutoGenerate {
+		if cfg.Server.TLS.CertFile == "" {
+			cfg.Server.TLS.CertFile = filepath.Join(cfg.Data.Dir, "tls", "server.crt")
+		}
+		if cfg.Server.TLS.KeyFile == "" {
+			cfg.Server.TLS.KeyFile = filepath.Join(cfg.Data.Dir, "tls", "server.key")
+		}
 	}
 
 	if cfg.MCP.ReconnectInterval == 0 {

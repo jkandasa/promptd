@@ -66,8 +66,6 @@ func RegisterMCPServers(ctx context.Context, manager *mcp.Manager, cfg *appconfi
 
 func BuildUIConfig(cfg *appconfig.Config, systemPromptInfos []handler.SystemPromptInfo) handler.UIConfig {
 	uiConfig := handler.UIConfig{
-		AppName:           cfg.UI.AppName,
-		AppIcon:           cfg.UI.AppIcon,
 		WelcomeTitle:      cfg.UI.WelcomeTitle,
 		AIDisclaimer:      cfg.UI.AIDisclaimer,
 		PromptSuggestions: cfg.UI.PromptSuggestions,
@@ -78,9 +76,6 @@ func BuildUIConfig(cfg *appconfig.Config, systemPromptInfos []handler.SystemProm
 			AfterMessages: cfg.LLM.CompactConversation.AfterMessages,
 			AfterTokens:   cfg.LLM.CompactConversation.AfterTokens,
 		},
-	}
-	if uiConfig.AppName == "" {
-		uiConfig.AppName = "Promptd"
 	}
 	if uiConfig.WelcomeTitle == "" {
 		uiConfig.WelcomeTitle = "How can I help you today?"

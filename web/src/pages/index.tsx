@@ -2,7 +2,6 @@ import './index.scss'
 
 import {
   App as AntApp,
-  Avatar,
   Button,
   Layout,
   Menu,
@@ -22,7 +21,7 @@ import Icon, {
   SunOutlined,
   ToolOutlined,
 } from '@ant-design/icons'
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ToolInfo, UIConfig } from '../types/chat'
 import { apiGetModels, apiGetUIConfig, apiListTools } from '../api/client'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -30,44 +29,6 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ChatPage } from './chat/ChatPage'
 import { SchedulerPage } from './scheduler/SchedulerPage'
 import { ToolsPage } from './tools/ToolsPage'
-import { isImageIcon } from '../utils/helpers'
-
-const PromptdSVG: React.FC = () => (
-<svg width="36" height="36" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#7C3AED"/>
-      <stop offset="100%" stop-color="#0F172A"/>
-    </linearGradient>
-  </defs>
-
-  <path d="M90 40
-           L90 190
-           Q90 210 110 210
-           L120 210
-           L120 130
-           Q120 110 140 110
-           Q180 110 180 75
-           Q180 40 140 40
-           Z"
-        fill="url(#grad)"/>
-
-  <path d="M140 40
-           Q210 40 210 105
-           Q210 170 140 170
-           Q120 170 120 150
-           Q120 130 140 130
-           Q180 130 180 105
-           Q180 75 140 75
-           Q120 75 120 55
-           Q120 40 140 40
-           Z"
-        fill="url(#grad)"/>
-
-  <rect x="40" y="95" width="40" height="14" rx="7" fill="#7C3AED"/>
-  <rect x="50" y="120" width="30" height="14" rx="7" fill="#7C3AED"/>
-</svg>
-);
 
 const { Text } = Typography
 const { useToken } = theme
@@ -147,8 +108,6 @@ export function PromptdApp({ isDark, onToggleDark, me, onLogout }: PromptdAppPro
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [toolsLoading, setToolsLoading] = useState(false)
 
-  const appName = uiConfig.appName || 'Promptd'
-  const appIcon = uiConfig.appIcon
   const legacyConversationId = searchParams.get('conversation')
   const legacyScheduleId = searchParams.get('schedule')
   const pathState = getPathState(location.pathname)
@@ -222,13 +181,8 @@ export function PromptdApp({ isDark, onToggleDark, me, onLogout }: PromptdAppPro
   }, [navigate, scheduleId])
 
   useEffect(() => {
-    document.title = appName
-    if (!isImageIcon(appIcon)) return
-    const link = document.querySelector("link[rel='icon']") || document.createElement('link')
-    link.setAttribute('rel', 'icon')
-    link.setAttribute('href', appIcon || '')
-    if (!link.parentNode) document.head.appendChild(link)
-  }, [appIcon, appName])
+    document.title = 'Promptd'
+  }, [])
 
   const fetchTools = useCallback(async () => {
     setToolsLoading(true)
@@ -262,21 +216,20 @@ export function PromptdApp({ isDark, onToggleDark, me, onLogout }: PromptdAppPro
         }}
       >
         <div className="brand-block">
-          <Avatar
-            aria-hidden="true"
-            src={isImageIcon(appIcon) ? appIcon : undefined}
-            icon={!appIcon ? <Icon component={PromptdSVG} /> : undefined}
-            style={{
-              background: token.colorBgContainer,
-              color: !appIcon ? '#fff' : token.colorText,
-              fontSize: appIcon && !isImageIcon(appIcon) ? 18 : undefined,
-              border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : undefined,
-              flexShrink: 0,
-            }}
-            size={36}
-          >
-            {appIcon && !isImageIcon(appIcon) ? appIcon : null}
-          </Avatar>
+          <Icon component={() => (
+            <svg width="36" height="36" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#7C3AED"/>
+                  <stop offset="100%" stopColor="#0F172A"/>
+                </linearGradient>
+              </defs>
+              <path d="M90 40 L90 190 Q90 210 110 210 L120 210 L120 130 Q120 110 140 110 Q180 110 180 75 Q180 40 140 40 Z" fill="url(#grad)"/>
+              <path d="M140 40 Q210 40 210 105 Q210 170 140 170 Q120 170 120 150 Q120 130 140 130 Q180 130 180 105 Q180 75 140 75 Q120 75 120 55 Q120 40 140 40 Z" fill="url(#grad)"/>
+              <rect x="40" y="95" width="40" height="14" rx="7" fill="#7C3AED"/>
+              <rect x="50" y="120" width="30" height="14" rx="7" fill="#7C3AED"/>
+            </svg>
+          )} style={{ flexShrink: 0, fontSize: 36 }} />
           <div className="brand-copy">
             <Text strong className="app-name">Promptd</Text>
             <Text type="secondary" className="app-subtitle">AI Assistant</Text>

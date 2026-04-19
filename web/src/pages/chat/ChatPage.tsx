@@ -40,10 +40,9 @@ import {
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
-  RobotOutlined,
   SendOutlined,
 } from '@ant-design/icons'
-import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, isImageIcon, uid } from '../../utils/helpers'
+import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, uid } from '../../utils/helpers'
 import type { ModelData, ModelInfo, ProviderInfo } from '../../api/client'
 import type { Role, UploadedFile } from '../../types/chat'
 import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from '../../types/chat'
@@ -113,9 +112,6 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   const [conversationSearch, setConversationSearch] = useState('')
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
-
-  const appName = uiConfig.appName || 'Promptd'
-  const appIcon = uiConfig.appIcon
 
   useEffect(() => {
     setCompactPrompt(uiConfig.compactConversation?.defaultPrompt ?? '')
@@ -828,25 +824,21 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                   <Avatar
                     aria-hidden="true"
                     className="hero-avatar"
-                    src={isImageIcon(appIcon) ? appIcon : undefined}
-                    icon={!appIcon ? <RobotOutlined /> : undefined}
                     size={80}
                     style={{
-                      background: !appIcon ? token.colorPrimary : isImageIcon(appIcon) ? token.colorFillSecondary : token.colorBgContainer,
-                      color: !appIcon ? '#fff' : token.colorText,
-                      fontSize: appIcon && !isImageIcon(appIcon) ? 32 : undefined,
-                      border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : 'none',
+                      background: token.colorPrimary,
+                      color: '#fff',
                       flexShrink: 0,
                     }}
                   >
-                    {appIcon && !isImageIcon(appIcon) ? appIcon : null}
+                    P
                   </Avatar>
                   <div className="hero-text">
                     <Text className="hero-title" style={{ color: token.colorText }}>
                       {uiConfig.welcomeTitle || 'How can I help you today?'}
                     </Text>
                     <Text type="secondary" className="hero-subtitle">
-                      {appName} · AI Assistant
+                      Promptd · AI Assistant
                     </Text>
                     <Text type="secondary" className="hero-description">
                       Start with a prompt below or type your own request. Ask for debugging, code changes, summaries, or planning help.
