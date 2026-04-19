@@ -147,8 +147,13 @@
   max-width: 680px;
 }
 
-.hero-avatar {
-  box-shadow: 0 18px 50px rgba(91, 33, 182, 0.16);
+.hero-logo {
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: transparent;
+  filter: drop-shadow(0 10px 24px rgba(91, 33, 182, 0.18));
 }
 
 .hero-text {

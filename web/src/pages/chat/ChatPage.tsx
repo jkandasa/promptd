@@ -2,7 +2,6 @@ import './ChatPage.scss'
 
 import {
   App as AntApp,
-  Avatar,
   Button,
   Divider,
   Empty,
@@ -47,6 +46,7 @@ import type { ModelData, ModelInfo, ProviderInfo } from '../../api/client'
 import type { Role, UploadedFile } from '../../types/chat'
 import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from '../../types/chat'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import promptdLogo from '../../promptd-logo.svg'
 
 import { Bubble } from '../../components/Bubble'
 import { ConvItem } from '../../components/ConvItem'
@@ -821,18 +821,12 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
               >
                 {/* Hero */}
                 <div className="hero">
-                  <Avatar
+                  <img
                     aria-hidden="true"
-                    className="hero-avatar"
-                    size={80}
-                    style={{
-                      background: token.colorPrimary,
-                      color: '#fff',
-                      flexShrink: 0,
-                    }}
-                  >
-                    P
-                  </Avatar>
+                    className="hero-logo"
+                    src={promptdLogo}
+                    alt=""
+                  />
                   <div className="hero-text">
                     <Text className="hero-title" style={{ color: token.colorText }}>
                       {uiConfig.welcomeTitle || 'How can I help you today?'}

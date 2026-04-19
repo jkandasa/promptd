@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Open+Sans:wght@400;500;600;700&display=swap');
+
 /* ── Reset ───────────────────────────────────────────────────────────────── */
 *,
 *::before,
@@ -11,6 +13,19 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+html,
+body {
+  font-family: 'Montserrat', 'Open Sans', system-ui, sans-serif;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 /* ── Visually hidden (screen-reader only) ───────────────────────────────── */
@@ -182,11 +197,11 @@ kbd {
   0%, 100% { box-shadow: 0 4px 24px rgba(91, 33, 182, 0.3); }
   50%       { box-shadow: 0 4px 40px rgba(91, 33, 182, 0.5); }
 }
-.hero-avatar {
+.hero-logo {
   animation: hero-glow 3s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .hero-avatar { animation: none; }
+  .hero-logo { animation: none; }
 }
 
 /* ── Conversation sidebar items ───────────────────────────────────────────── */

@@ -73,7 +73,7 @@ export default function App() {
 				token: {
 					colorPrimary: '#5b21b6',
 					borderRadius: 8,
-					fontFamily: "'Open Sans', system-ui, sans-serif",
+					fontFamily: "'Montserrat', 'Open Sans', system-ui, sans-serif",
 					fontFamilyCode: "ui-monospace, Menlo, 'Courier New', monospace",
 				},
 			}}
