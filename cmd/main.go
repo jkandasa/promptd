@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -169,6 +170,7 @@ func runServe(configPath string) error {
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,
 		Handler:      mux,
+		ErrorLog:     log.New(&filteredHTTPErrorLogWriter{logger: logger.Named("http")}, "", 0),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -252,6 +254,24 @@ func emptyVersionValue(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+type filteredHTTPErrorLogWriter struct {
+	logger *zap.Logger
+}
+
+func (w *filteredHTTPErrorLogWriter) Write(p []byte) (int, error) {
+	message := strings.TrimSpace(string(p))
+	if shouldSuppressHTTPErrorLog(message) {
+		return len(p), nil
+	}
+	w.logger.Error(message)
+	return len(p), nil
+}
+
+func shouldSuppressHTTPErrorLog(message string) bool {
+	return strings.Contains(message, "http: TLS handshake error") &&
+		strings.Contains(message, "remote error: tls: unknown certificate")
 }
 
 func readSecretFromPrompt(label string) (string, error) {
