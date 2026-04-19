@@ -164,6 +164,7 @@ Start from `config_template.yaml`.
 - `mcp.*`: MCP connection management
 - `llm.system_prompts`: required selectable prompts
 - `ui.*`: welcome copy and prompt suggestions
+- RBAC details: `docs/rbac.md`
 
 ### HTTPS
 
@@ -219,21 +220,7 @@ Behavior:
 
 ### RBAC
 
-Permissions are boolean flags merged across user roles.
-
-Current permissions:
-
-- `chat`
-- `upload`
-- `conversations_read`
-- `conversations_write`
-- `compact_conversation_write`
-- `schedules_read`
-- `schedules_write`
-- `traces_read`
-- `admin`
-
-Models, tools, and system prompts also use allow-list pattern matching. `super_admin: true` bypasses these restrictions inside the tenant.
+RBAC configuration and permission details are documented in `docs/rbac.md`.
 
 ## API Surface
 
