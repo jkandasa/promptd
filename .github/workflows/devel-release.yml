@@ -1,0 +1,275 @@
+name: devel-release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+  BINARY_NAME: promptd
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.changelog.outputs.file }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build rolling changelog
+        id: changelog
+        run: |
+          git fetch --tags --force
+          notes_file="$RUNNER_TEMP/devel-notes.md"
+          previous_ref=""
+          if git rev-parse -q --verify "refs/tags/devel" >/dev/null; then
+            previous_ref="devel"
+          fi
+          {
+            echo "## Changelog"
+            echo
+            if [ -n "$previous_ref" ]; then
+              git log --pretty=format:'- %s (%h)' "${previous_ref}..HEAD"
+            else
+              git log -20 --pretty=format:'- %s (%h)'
+            fi
+          } > "$notes_file"
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Move rolling tag
+        run: |
+          git tag -f devel "$GITHUB_SHA"
+          git push origin refs/tags/devel --force
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@v4
+        with:
+          name: devel-notes
+          path: ${{ steps.changelog.outputs.file }}
+          if-no-files-found: error
+
+  build-ui:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Build embedded UI
+        run: make ui
+
+      - name: Upload UI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: internal/ui/dist
+          if-no-files-found: error
+
+  build-binaries:
+    needs: build-ui
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            goarm: ""
+            artifact_name: linux-amd64
+            binary_name: promptd
+            archive_name: promptd_devel_linux_amd64.tar.gz
+          - goos: windows
+            goarch: amd64
+            goarm: ""
+            artifact_name: windows-amd64
+            binary_name: promptd.exe
+            archive_name: promptd_devel_windows_amd64.zip
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            artifact_name: linux-armv7
+            binary_name: promptd
+            archive_name: promptd_devel_linux_armv7.tar.gz
+          - goos: linux
+            goarch: arm64
+            goarm: ""
+            artifact_name: linux-arm64
+            binary_name: promptd
+            archive_name: promptd_devel_linux_arm64.tar.gz
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download UI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: internal/ui/dist
+
+      - name: Build binary
+        env:
+          VERSION: devel
+          GIT_COMMIT: ${{ github.sha }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p dist/${{ matrix.artifact_name }}
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X promptd/internal/version.version=${VERSION} -X promptd/internal/version.gitCommit=${GIT_COMMIT} -X promptd/internal/version.buildDate=${build_date}"
+          CGO_ENABLED=0 go build -trimpath -ldflags="$ldflags" -o "dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }}" ./cmd
+
+      - name: Package archive
+        run: |
+          mkdir -p dist/release
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cd dist/${{ matrix.artifact_name }} && zip -9 "../release/${{ matrix.archive_name }}" "${{ matrix.binary_name }}"
+          else
+            tar -C "dist/${{ matrix.artifact_name }}" -czf "dist/release/${{ matrix.archive_name }}" "${{ matrix.binary_name }}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.artifact_name }}
+          path: |
+            dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }}
+            dist/release/${{ matrix.archive_name }}
+          if-no-files-found: error
+
+  release:
+    needs:
+      - prepare
+      - build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+          path: dist
+
+      - name: Download changelog
+        uses: actions/download-artifact@v4
+        with:
+          name: devel-notes
+          path: dist
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: devel
+          name: Development Build
+          body_path: dist/devel-notes.md
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/release/*.tar.gz
+            dist/release/*.zip
+
+  docker:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            artifact_name: linux-amd64
+            binary_path: dist/linux-amd64/promptd
+          - platform: linux/arm64
+            artifact_name: linux-arm64
+            binary_path: dist/linux-arm64/promptd
+          - platform: linux/arm/v7
+            artifact_name: linux-armv7
+            binary_path: dist/linux-armv7/promptd
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+          path: dist
+
+      - name: Set image name
+        id: image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "name=ghcr.io/${repo}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image by platform
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/docker/release.Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BINARY_PATH=${{ matrix.binary_path }}
+          tags: ${{ steps.image.outputs.name }}:devel-${{ matrix.artifact_name }}
+
+  docker-manifest:
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set image name
+        id: image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "name=ghcr.io/${repo}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ steps.image.outputs.name }}:devel" \
+            "${{ steps.image.outputs.name }}:devel-linux-amd64" \
+            "${{ steps.image.outputs.name }}:devel-linux-arm64" \
+            "${{ steps.image.outputs.name }}:devel-linux-armv7"

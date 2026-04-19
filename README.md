@@ -121,6 +121,11 @@ go run ./cmd serve --config ./config.yaml
 make build
 ```
 
+## Releases
+
+- Git tags matching `v1.*` publish GitHub release assets and multi-arch Docker images.
+- Pushes to `main` update the rolling `devel` release and matching Docker image tags.
+
 ### Verification
 
 ```bash
