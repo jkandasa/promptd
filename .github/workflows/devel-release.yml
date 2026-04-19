@@ -245,7 +245,7 @@ jobs:
           push: true
           build-args: |
             BINARY_PATH=${{ matrix.binary_path }}
-          tags: ${{ steps.image.outputs.name }}:devel-${{ matrix.artifact_name }}
+          tags: ${{ steps.image.outputs.name }}:${{ github.ref_name }}-${{ matrix.artifact_name }}
 
   docker-manifest:
     needs: docker
@@ -267,7 +267,7 @@ jobs:
       - name: Create multi-arch manifest
         run: |
           docker buildx imagetools create \
-            --tag "${{ steps.image.outputs.name }}:devel" \
-            "${{ steps.image.outputs.name }}:devel-linux-amd64" \
-            "${{ steps.image.outputs.name }}:devel-linux-arm64" \
-            "${{ steps.image.outputs.name }}:devel-linux-armv7"
+            --tag "${{ steps.image.outputs.name }}:${{ github.ref_name }}" \
+            "${{ steps.image.outputs.name }}:${{ github.ref_name }}-linux-amd64" \
+            "${{ steps.image.outputs.name }}:${{ github.ref_name }}-linux-arm64" \
+            "${{ steps.image.outputs.name }}:${{ github.ref_name }}-linux-armv7"
