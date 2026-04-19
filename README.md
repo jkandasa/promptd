@@ -135,8 +135,9 @@ make build
 
 ## Releases
 
-- Git tags matching `v1.*` publish GitHub release assets and multi-arch Docker images.
-- Pushes to `main` update the rolling `devel` release and matching Docker image tags.
+- Pushes to `main` update the rolling GitHub release under the [`devel` tag](https://github.com/jkandasa/promptd/releases/tag/devel).
+- Version tags matching `v1.*` publish normal GitHub releases under the [Releases page](https://github.com/jkandasa/promptd/releases).
+- Both flows publish release assets and multi-arch container images in [GHCR](https://github.com/jkandasa/promptd/pkgs/container/promptd).
 
 ### Verification
 
