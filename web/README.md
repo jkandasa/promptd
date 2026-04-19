@@ -14,13 +14,13 @@ React + Ant Design frontend for the Chatbot server.
 
 ```bash
 cd web
-pnpm install
+yarn install
 ```
 
 ## Development
 
 ```bash
-pnpm dev
+yarn dev
 ```
 
 Starts the Vite dev server. API requests are proxied to the Go backend (default `http://localhost:8080`).
@@ -28,7 +28,7 @@ Starts the Vite dev server. API requests are proxied to the Go backend (default 
 ## Build
 
 ```bash
-pnpm build
+yarn build
 ```
 
 Output goes to `dist/`. The parent `Makefile` copies this to `internal/ui/dist/` so the Go binary can embed it.
@@ -36,5 +36,5 @@ Output goes to `dist/`. The parent `Makefile` copies this to `internal/ui/dist/`
 ## Type check
 
 ```bash
-pnpm tsc --noEmit
+yarn tsc --noEmit
 ```

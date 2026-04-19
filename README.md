@@ -95,7 +95,7 @@ Notes:
 
 - Go 1.26
 - Node.js
-- pnpm
+- Yarn
 
 ### Build UI
 
@@ -130,7 +130,7 @@ make build
 
 ```bash
 go test ./...
-cd web && pnpm build
+cd web && yarn build
 ```
 
 ## Configuration

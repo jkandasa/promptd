@@ -6,3 +6,5 @@ config.yaml
 internal/ui/dist/
 promptd_data/
 data/
+web/node_modules/
+web/.yarn/install-state.gz

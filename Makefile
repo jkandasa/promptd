@@ -22,7 +22,7 @@ LDFLAGS    := -s -w \
 
 .PHONY: ui
 ui:
-	cd web && pnpm install --frozen-lockfile && pnpm build
+	cd web && yarn install --immutable && yarn build
 	rm -rf internal/ui/dist
 	cp -r web/dist internal/ui/dist
 
