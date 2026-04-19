@@ -270,8 +270,12 @@ func (w *filteredHTTPErrorLogWriter) Write(p []byte) (int, error) {
 }
 
 func shouldSuppressHTTPErrorLog(message string) bool {
-	return strings.Contains(message, "http: TLS handshake error") &&
-		strings.Contains(message, "remote error: tls: unknown certificate")
+	if !strings.Contains(message, "http: TLS handshake error") {
+		return false
+	}
+
+	return strings.Contains(message, "remote error: tls: unknown certificate") ||
+		strings.Contains(message, "client sent an HTTP request to an HTTPS server")
 }
 
 func readSecretFromPrompt(label string) (string, error) {
