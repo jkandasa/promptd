@@ -94,6 +94,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   const [selectedProvider, setSelectedProvider] = useState<string>(initialStoredProvider)
   const [providerModels, setProviderModels] = useState<ModelInfo[]>([])
   const [loadingProviderModels, setLoadingProviderModels] = useState(false)
+  const [providerModelsReadyFor, setProviderModelsReadyFor] = useState<string | null>(null)
   const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>(initialStoredSystemPrompt)
   const [llmParams, setLlmParams] = useState<LLMParamsOverride>({})
   const llmParamsRef = useRef<LLMParamsOverride>({})
@@ -541,18 +542,22 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     if (!effectiveProvider) {
       setProviderModels([])
       setLoadingProviderModels(false)
+      setProviderModelsReadyFor(null)
       return
     }
 
     let cancelled = false
     setLoadingProviderModels(true)
+    setProviderModelsReadyFor(null)
     void apiGetModels(effectiveProvider).then((data) => {
       if (cancelled) return
       const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
       setProviderModels(tagged)
+      setProviderModelsReadyFor(effectiveProvider)
     }).catch(() => {
       if (cancelled) return
       setProviderModels([])
+      setProviderModelsReadyFor(effectiveProvider)
     }).finally(() => {
       if (!cancelled) setLoadingProviderModels(false)
     })
@@ -604,10 +609,11 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
       return
     }
     if (!selectedModel) return
+    if (providerModelsReadyFor !== effectiveProvider) return
     if (availableModels.some((m) => m.id === selectedModel)) return
     setSelectedModel('')
     selectedModelRef.current = ''
-  }, [availableModels, effectiveProvider, selectedModel])
+  }, [availableModels, effectiveProvider, providerModelsReadyFor, selectedModel])
 
   const configDefaults = useMemo<LLMParamsOverride>(() => {
     const gp = modelData.global_params
