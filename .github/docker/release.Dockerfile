@@ -8,5 +8,11 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=certs /usr/share/zoneinfo /usr/share/zoneinfo
 COPY ${BINARY_PATH} /usr/local/bin/promptd
+COPY config.sample.yaml /promptd/config.sample.yaml
+COPY config.sample.yaml /promptd/config.yaml
+RUN mkdir -p /promptd/system-prompts
+COPY resources/assistant.txt /promptd/system-prompts/assistant.txt
+WORKDIR /promptd
 EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/promptd"]
+CMD ["serve", "--config", "/promptd/config.yaml"]

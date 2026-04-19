@@ -1,0 +1,82 @@
+# ============================================================================
+# WARNING: LOCAL DEVELOPMENT SAMPLE ONLY
+#
+# DO NOT USE THIS FILE AS-IS IN PRODUCTION.
+#
+# This sample includes a local-development demo login:
+#   username: admin
+#   password: Promptd
+#
+# Replace the JWT secret, LLM API key, and credentials before any real use.
+# ============================================================================
+
+data:
+  dir: "/promptd/data"
+
+server:
+  address: "0.0.0.0:8090"
+  tls:
+    enabled: false
+    auto_generate: false
+
+auth:
+  jwt:
+    secret: "replace-this-dev-secret-before-real-use"
+    ttl: 24h
+    cookie_name: "promptd_session"
+
+  users:
+    - id: "admin"
+      tenant_id: "default"
+      password_hash: "$2y$10$TK6qxjPc.Q1H1TUEcNA8iOqHAHjw2mMYRg3EVvka/GzpSmZmIS.mG"
+      roles: ["super_admin"]
+
+roles:
+  super_admin:
+    super_admin: true
+
+llm:
+  selection_method: "round_robin"
+
+  compact_conversation:
+    enabled: false
+    default_prompt: |
+      Summarize the conversation into a minimal context.
+      Keep key facts, intent, and constraints.
+      Remove fluff, repetition, and filler.
+      Write in compact bullet-style or short phrases.
+    after_messages: 20
+    after_tokens: 12000
+
+  system_prompts:
+    - name: "Assistant"
+      file: "/promptd/system-prompts/assistant.txt"
+
+  trace:
+    enabled: true
+    ttl: 7d
+
+  providers:
+    - name: "openrouter"
+      api_key: "replace-with-api-key"
+      base_url: "https://openrouter.ai/api/v1"
+      models:
+        - "openai/gpt-4o-mini"
+      auto_discover:
+        enabled: false
+        refresh_interval: 60m
+
+log:
+  level: "info"
+
+mcp:
+  servers: []
+
+ui:
+  welcome_title: "promptd"
+  ai_disclaimer: "AI can make mistakes. Verify important info."
+  prompt_suggestions:
+    - "Explain how this works"
+    - "Help me write code"
+    - "Summarize the key points"
+    - "What are best practices?"

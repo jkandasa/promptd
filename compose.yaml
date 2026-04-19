@@ -1,0 +1,11 @@
+services:
+  promptd:
+    image: ghcr.io/jkandasa/promptd:main
+    container_name: promptd
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./config.yaml:/promptd/config.yaml:ro
+      - ./data:/promptd/data
+      - ./system-prompts:/promptd/system-prompts:ro
