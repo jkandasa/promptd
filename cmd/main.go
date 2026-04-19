@@ -275,7 +275,8 @@ func shouldSuppressHTTPErrorLog(message string) bool {
 	}
 
 	return strings.Contains(message, "remote error: tls: unknown certificate") ||
-		strings.Contains(message, "client sent an HTTP request to an HTTPS server")
+		strings.Contains(message, "client sent an HTTP request to an HTTPS server") ||
+		strings.HasSuffix(message, ": EOF")
 }
 
 func readSecretFromPrompt(label string) (string, error) {
