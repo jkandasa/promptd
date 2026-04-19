@@ -73,6 +73,18 @@ jobs:
             artifact_name: linux-arm64
             binary_name: promptd
             archive_name: promptd_linux_arm64.tar.gz
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+            artifact_name: darwin-amd64
+            binary_name: promptd
+            archive_name: promptd_darwin_amd64.tar.gz
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+            artifact_name: darwin-arm64
+            binary_name: promptd
+            archive_name: promptd_darwin_arm64.tar.gz
     steps:
       - name: Check out source
         uses: actions/checkout@v4

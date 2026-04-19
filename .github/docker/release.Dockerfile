@@ -12,6 +12,7 @@ COPY config.sample.yaml /promptd/config.sample.yaml
 COPY config.sample.yaml /promptd/config.yaml
 RUN mkdir -p /promptd/system-prompts
 COPY resources/assistant.txt /promptd/system-prompts/assistant.txt
+RUN chmod +x /usr/local/bin/promptd
 WORKDIR /promptd
 EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/promptd"]
