@@ -15,6 +15,7 @@ import (
 // It is backed by a storage.Store so every mutation is persisted.
 type Session struct {
 	mu    sync.Mutex
+	scope storage.Scope
 	conv  storage.Conversation // authoritative record (id, title, model, messages…)
 	store storage.Store        // may be nil (no persistence)
 }
@@ -193,6 +194,8 @@ func (s *Session) Reset() {
 	s.conv.Title = ""
 	s.conv.Model = ""
 	s.conv.SystemPrompt = ""
+	s.conv.CompactSummaryMessageID = ""
+	s.conv.CompactedThroughMessageID = ""
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 }
@@ -206,6 +209,73 @@ func (s *Session) Snapshot() storage.Conversation {
 	copy(msgs, s.conv.Messages)
 	c.Messages = msgs
 	return c
+}
+
+func (s *Session) CompactSummaryMessageID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conv.CompactSummaryMessageID
+}
+
+func (s *Session) CompactedThroughMessageID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conv.CompactedThroughMessageID
+}
+
+func (s *Session) SetCompactionSummary(content, compactPrompt, model, provider string, compactedThroughMessageID string, timeTakenMs int64, llmCalls int, trace []storage.LLMRound) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msgID := s.conv.CompactSummaryMessageID
+	if msgID == "" {
+		msgID = uuid.New().String()
+	}
+	msg := storage.Message{
+		ID:             msgID,
+		Role:           openai.ChatMessageRoleAssistant,
+		Content:        content,
+		SentAt:         time.Now(),
+		Model:          model,
+		Provider:       provider,
+		TimeTakenMs:    timeTakenMs,
+		LLMCalls:       llmCalls,
+		Trace:          trace,
+		CompactSummary: true,
+	}
+	filtered := s.conv.Messages[:0]
+	for _, existing := range s.conv.Messages {
+		if existing.ID == s.conv.CompactSummaryMessageID || existing.CompactSummary {
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	s.conv.Messages = append(filtered, msg)
+	s.conv.CompactSummaryMessageID = msgID
+	s.conv.CompactedThroughMessageID = compactedThroughMessageID
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+	return msgID
+}
+
+func (s *Session) ClearCompaction() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conv.CompactSummaryMessageID == "" && s.conv.CompactedThroughMessageID == "" {
+		return false
+	}
+	filtered := s.conv.Messages[:0]
+	for _, m := range s.conv.Messages {
+		if m.ID == s.conv.CompactSummaryMessageID || m.CompactSummary {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	s.conv.Messages = filtered
+	s.conv.CompactSummaryMessageID = ""
+	s.conv.CompactedThroughMessageID = ""
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+	return true
 }
 
 // persist saves to the store while already holding s.mu — callers must hold the lock.
@@ -223,7 +293,7 @@ func (s *Session) persist() {
 		}
 	}
 	c.Messages = msgs
-	_ = s.store.Save(&c) // best-effort; errors are silent to avoid blocking callers
+	_ = s.store.Save(s.scope, &c) // best-effort; errors are silent to avoid blocking callers
 }
 
 // truncate shortens s to at most n runes, appending "…" if cut.
@@ -258,18 +328,23 @@ func NewSessionStore(st storage.Store) *SessionStore {
 
 // Get returns the in-memory session for id, loading from storage if necessary.
 // A brand-new session is created if neither cache nor storage has it.
-func (ss *SessionStore) Get(id string) *Session {
+func sessionKey(scope storage.Scope, id string) string {
+	return scope.Key() + ":" + id
+}
+
+func (ss *SessionStore) Get(scope storage.Scope, id string) *Session {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	key := sessionKey(scope, id)
 
-	if s, ok := ss.sessions[id]; ok {
+	if s, ok := ss.sessions[key]; ok {
 		return s
 	}
 
 	// Try to restore from storage.
 	var conv storage.Conversation
 	if ss.store != nil {
-		if c, err := ss.store.Load(id); err == nil {
+		if c, err := ss.store.Load(scope, id); err == nil {
 			conv = *c
 		}
 	}
@@ -277,25 +352,27 @@ func (ss *SessionStore) Get(id string) *Session {
 	// If storage had nothing, initialise a fresh record.
 	if conv.ID == "" {
 		conv = storage.Conversation{
+			TenantID:  scope.TenantID,
+			UserID:    scope.UserID,
 			ID:        id,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
 	}
 
-	s := &Session{conv: conv, store: ss.store}
-	ss.sessions[id] = s
+	s := &Session{scope: scope, conv: conv, store: ss.store}
+	ss.sessions[key] = s
 	return s
 }
 
 // Delete removes the session from cache and from storage.
-func (ss *SessionStore) Delete(id string) error {
+func (ss *SessionStore) Delete(scope storage.Scope, id string) error {
 	ss.mu.Lock()
-	delete(ss.sessions, id)
+	delete(ss.sessions, sessionKey(scope, id))
 	ss.mu.Unlock()
 
 	if ss.store != nil {
-		if err := ss.store.Delete(id); err != nil && err != storage.ErrNotFound {
+		if err := ss.store.Delete(scope, id); err != nil && err != storage.ErrNotFound {
 			return err
 		}
 	}
@@ -305,16 +382,34 @@ func (ss *SessionStore) Delete(id string) error {
 // DeleteMessage removes a single message (by msgID) from the in-memory session
 // and persists the updated conversation. If the session is not in the cache it
 // is loaded from storage, mutated, and saved back.
-func (ss *SessionStore) DeleteMessage(convID, msgID string) error {
+func (ss *SessionStore) DeleteMessage(scope storage.Scope, convID, msgID string) error {
 	// Obtain the in-memory session (loads from storage if not cached).
-	s := ss.Get(convID)
+	s := ss.Get(scope, convID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.conv.CompactSummaryMessageID == msgID {
+		filtered := s.conv.Messages[:0]
+		for _, m := range s.conv.Messages {
+			if m.ID == s.conv.CompactSummaryMessageID || m.CompactSummary {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		s.conv.Messages = filtered
+		s.conv.CompactSummaryMessageID = ""
+		s.conv.CompactedThroughMessageID = ""
+		s.conv.UpdatedAt = time.Now()
+		s.persist()
+		return nil
+	}
 
 	found := false
 	filtered := s.conv.Messages[:0]
 	for _, m := range s.conv.Messages {
+		if (s.conv.CompactSummaryMessageID != "" || s.conv.CompactedThroughMessageID != "") && (m.ID == s.conv.CompactSummaryMessageID || m.CompactSummary) {
+			continue
+		}
 		if m.ID == msgID {
 			found = true
 			continue
@@ -323,6 +418,10 @@ func (ss *SessionStore) DeleteMessage(convID, msgID string) error {
 	}
 	if !found {
 		return storage.ErrNotFound
+	}
+	if s.conv.CompactSummaryMessageID != "" || s.conv.CompactedThroughMessageID != "" {
+		s.conv.CompactSummaryMessageID = ""
+		s.conv.CompactedThroughMessageID = ""
 	}
 	s.conv.Messages = filtered
 	s.conv.UpdatedAt = time.Now()
@@ -334,8 +433,8 @@ func (ss *SessionStore) DeleteMessage(convID, msgID string) error {
 // it (i.e. the edited message plus any subsequent turns) from both the in-memory
 // session and storage. Used when a user edits a message — the old content and
 // everything that came after it are discarded so the LLM can be re-prompted.
-func (ss *SessionStore) DeleteMessagesFrom(convID, msgID string) error {
-	s := ss.Get(convID)
+func (ss *SessionStore) DeleteMessagesFrom(scope storage.Scope, convID, msgID string) error {
+	s := ss.Get(scope, convID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -343,6 +442,9 @@ func (ss *SessionStore) DeleteMessagesFrom(convID, msgID string) error {
 	found := false
 	var trimmed []storage.Message
 	for _, m := range s.conv.Messages {
+		if m.ID == s.conv.CompactSummaryMessageID || m.CompactSummary {
+			continue
+		}
 		if m.ID == msgID {
 			found = true
 			break // drop this message and everything after it
@@ -353,14 +455,16 @@ func (ss *SessionStore) DeleteMessagesFrom(convID, msgID string) error {
 		return storage.ErrNotFound
 	}
 	s.conv.Messages = trimmed
+	s.conv.CompactSummaryMessageID = ""
+	s.conv.CompactedThroughMessageID = ""
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 	return nil
 }
 
 // RenameTitle sets a new title for the conversation and persists it.
-func (ss *SessionStore) RenameTitle(id, title string) error {
-	s := ss.Get(id)
+func (ss *SessionStore) RenameTitle(scope storage.Scope, id, title string) error {
+	s := ss.Get(scope, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conv.Title = title
@@ -371,8 +475,8 @@ func (ss *SessionStore) RenameTitle(id, title string) error {
 
 // TogglePin flips the pinned state of the conversation and persists it.
 // Returns the new pinned value.
-func (ss *SessionStore) TogglePin(id string) (bool, error) {
-	s := ss.Get(id)
+func (ss *SessionStore) TogglePin(scope storage.Scope, id string) (bool, error) {
+	s := ss.Get(scope, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conv.Pinned = !s.conv.Pinned

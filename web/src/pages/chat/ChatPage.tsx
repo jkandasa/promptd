@@ -1,3 +1,5 @@
+import './ChatPage.scss'
+
 import {
   App as AntApp,
   Avatar,
@@ -5,6 +7,7 @@ import {
   Divider,
   Empty,
   Layout,
+  Modal,
   Select,
   Spin,
   Tag,
@@ -15,6 +18,7 @@ import {
 import {
   ChatError,
   apiChat,
+  apiCompactConversation,
   apiDeleteConversation,
   apiDeleteFile,
   apiDeleteMessage,
@@ -28,6 +32,7 @@ import {
 } from '../../api/client'
 import type { ConversationMeta, LLMParamsOverride, Message, UIConfig } from '../../types/chat'
 import {
+  CompressOutlined,
   DownOutlined,
   FileOutlined,
   MenuFoldOutlined,
@@ -50,18 +55,22 @@ import { Input } from 'antd'
 import { LLMParamsPopover } from '../../components/LLMParamsPopover'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import { TypingIndicator } from '../../components/TypingIndicator'
-import './ChatPage.scss'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
 const { TextArea } = Input
 const { useToken } = theme
 
+const CHAT_PROVIDER_STORAGE_KEY = 'promptd.chat.selectedProvider'
+const CHAT_MODEL_STORAGE_KEY = 'promptd.chat.selectedModel'
+const CHAT_SYSTEM_PROMPT_STORAGE_KEY = 'promptd.chat.selectedSystemPrompt'
+
 interface ChatPageProps {
   models: ModelInfo[]
   modelData: { source?: string; count: number; updated_at?: string; refresh_interval?: string; global_params?: ModelData['global_params']; providers?: ProviderInfo[] }
   uiConfig: UIConfig
   isDark: boolean
+  canCompactConversation: boolean
   siderCollapsed: boolean
   setSiderCollapsed: (collapsed: boolean) => void
   onRefreshModels: (provider?: string) => Promise<void>
@@ -69,9 +78,12 @@ interface ChatPageProps {
   onConversationChange?: (id: string | null) => void
 }
 
-export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, setSiderCollapsed, onRefreshModels, selectedConversationId, onConversationChange }: ChatPageProps) {
+export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConversation, siderCollapsed, setSiderCollapsed, onRefreshModels, selectedConversationId, onConversationChange }: ChatPageProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
+  const initialStoredProvider = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_PROVIDER_STORAGE_KEY) ?? '' : ''
+  const initialStoredModel = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY) ?? '' : ''
+  const initialStoredSystemPrompt = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_SYSTEM_PROMPT_STORAGE_KEY) ?? '' : ''
 
   const [sessionId, setSessionId] = useState<string | null>(selectedConversationId ?? null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -79,17 +91,21 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
-  const [selectedModel, setSelectedModel] = useState<string>('')
-  const [selectedProvider, setSelectedProvider] = useState<string>('')
+  const [selectedModel, setSelectedModel] = useState<string>(initialStoredModel)
+  const [selectedProvider, setSelectedProvider] = useState<string>(initialStoredProvider)
   const [providerModels, setProviderModels] = useState<ModelInfo[]>([])
   const [loadingProviderModels, setLoadingProviderModels] = useState(false)
-  const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>('')
+  const [selectedSystemPrompt, setSelectedSystemPrompt] = useState<string>(initialStoredSystemPrompt)
   const [llmParams, setLlmParams] = useState<LLMParamsOverride>({})
   const llmParamsRef = useRef<LLMParamsOverride>({})
   const pendingParamsRef = useRef<LLMParamsOverride | null>(null)
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [uploading, setUploading] = useState(false)
+  const [compactModalOpen, setCompactModalOpen] = useState(false)
+  const [compactPrompt, setCompactPrompt] = useState(uiConfig.compactConversation?.defaultPrompt ?? '')
+  const [compactModel, setCompactModel] = useState('')
+  const [compacting, setCompacting] = useState(false)
 
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [convsLoading, setConvsLoading] = useState(false)
@@ -98,8 +114,12 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   const [editingConvId, setEditingConvId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
 
-  const appName = uiConfig.appName || 'Chatbot'
+  const appName = uiConfig.appName || 'Promptd'
   const appIcon = uiConfig.appIcon
+
+  useEffect(() => {
+    setCompactPrompt(uiConfig.compactConversation?.defaultPrompt ?? '')
+  }, [uiConfig.compactConversation?.defaultPrompt])
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<TextAreaRef>(null)
@@ -191,6 +211,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
           msgId: m.id,
           trace: m.trace,
           usedParams: m.used_params,
+          compactSummary: m.compact_summary,
         }))
       setMessages(uiMsgs)
       const nextProvider = detail.provider || ''
@@ -204,9 +225,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       selectedModelRef.current = nextModel
       setSelectedProvider(nextProvider)
       selectedProviderRef.current = nextProvider
-      const nextPrompt = isKnownSystemPrompt(uiConfig, detail.system_prompt)
-        ? detail.system_prompt || ''
-        : getFirstSystemPromptName(uiConfig)
+      const nextPrompt = detail.system_prompt || getFirstSystemPromptName(uiConfig)
       setSelectedSystemPrompt(nextPrompt)
       selectedSystemPromptRef.current = nextPrompt
       loadedConversationIdRef.current = id
@@ -240,13 +259,74 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     })
   }, [])
 
+  const upsertCompactSummaryMessage = useCallback((summary: {
+    id: string
+    content: string
+    sent_at: string
+    compact_summary?: boolean
+    model?: string
+    provider?: string
+    time_taken_ms?: number
+    llm_calls?: number
+    tool_calls?: number
+    trace?: Message['trace']
+  }) => {
+    const nextMessage: Message = {
+      id: uid(),
+      role: 'assistant',
+      compactSummary: true,
+      content: summary.content,
+      ts: summary.sent_at ? new Date(summary.sent_at) : new Date(),
+      provider: summary.provider,
+      model: summary.model,
+      timeTaken: summary.time_taken_ms,
+      llmCalls: summary.llm_calls,
+      toolCalls: summary.tool_calls,
+      msgId: summary.id,
+      trace: summary.trace,
+    }
+    setMessages((prev) => {
+      const withoutExisting = prev.filter((msg) => !msg.compactSummary)
+      return [...withoutExisting, nextMessage]
+    })
+  }, [])
+
+  const handleCompactConversation = useCallback(async () => {
+    if (!sessionIdRef.current) return
+    setCompacting(true)
+    try {
+      const summary = await apiCompactConversation(sessionIdRef.current, compactPrompt, compactModel)
+      upsertCompactSummaryMessage(summary)
+      setCompactModalOpen(false)
+      refreshConversations()
+    } catch (err) {
+      antMessage.error(err instanceof Error ? err.message : 'Failed to compact conversation')
+    } finally {
+      setCompacting(false)
+    }
+  }, [antMessage, compactModel, compactPrompt, refreshConversations, upsertCompactSummaryMessage])
+
   useEffect(() => { messagesRef.current = messages }, [messages])
 
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (selectedModel) window.localStorage.setItem(CHAT_MODEL_STORAGE_KEY, selectedModel)
+    else window.localStorage.removeItem(CHAT_MODEL_STORAGE_KEY)
+  }, [selectedModel])
 
   const selectedProviderRef = useRef(selectedProvider)
   useEffect(() => { selectedProviderRef.current = selectedProvider }, [selectedProvider])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (selectedProvider) window.localStorage.setItem(CHAT_PROVIDER_STORAGE_KEY, selectedProvider)
+    else window.localStorage.removeItem(CHAT_PROVIDER_STORAGE_KEY)
+  }, [selectedProvider])
+
+  const isMultiProvider = (modelData.providers?.length ?? 0) > 1
+  const singleProvider = !isMultiProvider && (modelData.providers?.length ?? 0) === 1 ? modelData.providers?.[0]?.name ?? '' : ''
+  const effectiveProvider = selectedProvider || singleProvider
 
   useEffect(() => {
     if (pendingParamsRef.current !== null) {
@@ -269,7 +349,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       llmParamsRef.current = globalDefaults
       return
     }
-    const candidateModels = selectedProvider ? providerModels : []
+    const candidateModels = effectiveProvider ? providerModels : []
     const m = candidateModels.find((m) => m.id === selectedModel)
     const p: LLMParamsOverride = { ...globalDefaults }
     if (m?.params) {
@@ -280,10 +360,15 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     }
     setLlmParams(p)
     llmParamsRef.current = p
-  }, [selectedModel, selectedProvider, providerModels, modelData.global_params])
+  }, [selectedModel, effectiveProvider, providerModels, modelData.global_params])
 
   const selectedSystemPromptRef = useRef(selectedSystemPrompt)
   useEffect(() => { selectedSystemPromptRef.current = selectedSystemPrompt }, [selectedSystemPrompt])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (selectedSystemPrompt) window.localStorage.setItem(CHAT_SYSTEM_PROMPT_STORAGE_KEY, selectedSystemPrompt)
+    else window.localStorage.removeItem(CHAT_SYSTEM_PROMPT_STORAGE_KEY)
+  }, [selectedSystemPrompt])
   useEffect(() => { llmParamsRef.current = llmParams }, [llmParams])
 
   useEffect(() => { uploadedFilesRef.current = uploadedFiles }, [uploadedFiles])
@@ -297,14 +382,10 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     setMessages([])
     setInput('')
     setUploadedFiles([])
-    setSelectedModel('')
-    selectedModelRef.current = ''
-    setSelectedProvider('')
-    selectedProviderRef.current = ''
     pendingParamsRef.current = null
     loadingConversationIdRef.current = null
     loadedConversationIdRef.current = null
-    const nextPrompt = getFirstSystemPromptName(uiConfig)
+    const nextPrompt = selectedSystemPromptRef.current || getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
   }, [discardUploadedFiles, uiConfig])
@@ -337,6 +418,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
   const send = useCallback(async (overrideText?: string) => {
     if (loadingRef.current) return
+    if (!selectedSystemPromptRef.current) return
     const text = (overrideText ?? input).trim()
     if (!text && uploadedFilesRef.current.length === 0) return
 
@@ -357,9 +439,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       const modelId = selectedModelRef.current
       const modelToSend = modelId || undefined
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
-      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, selectedProviderRef.current || undefined)
+      const providerToSend = selectedProviderRef.current || singleProvider || undefined
+      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, providerToSend)
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
+      }
+      if (response.compact_summary) {
+        upsertCompactSummaryMessage(response.compact_summary)
       }
       const assistantMsg: Message = {
         id: uid(),
@@ -382,7 +468,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       const serverModel = err instanceof ChatError ? err.model : undefined
       const serverProvider = err instanceof ChatError ? err.provider : undefined
       const requestedModel = selectedModelRef.current
-      const requestedProvider = selectedProviderRef.current
+      const requestedProvider = selectedProviderRef.current || singleProvider
       const errorModel = serverModel || requestedModel || 'unknown'
       const errMsg: Message = {
         id: uid(),
@@ -402,7 +488,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
         el?.focus()
       }, 0)
     }
-  }, [input, onConversationChange, refreshConversations])
+  }, [input, onConversationChange, refreshConversations, singleProvider, upsertCompactSummaryMessage])
 
   const handleDeleteMessage = useCallback((id: string) => {
     setMessages((prev) => {
@@ -448,17 +534,15 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   }
 
   const refreshCurrentProviderModels = useCallback(async () => {
-    await onRefreshModels(selectedProvider || undefined)
-    if (!selectedProvider) return
-    const data = await apiGetModels(selectedProvider)
+    await onRefreshModels(effectiveProvider || undefined)
+    if (!effectiveProvider) return
+    const data = await apiGetModels(effectiveProvider)
     const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
     setProviderModels(tagged)
-  }, [onRefreshModels, selectedProvider])
-
-  const isMultiProvider = (modelData.providers?.length ?? 0) > 1
+  }, [effectiveProvider, onRefreshModels])
 
   useEffect(() => {
-    if (!selectedProvider) {
+    if (!effectiveProvider) {
       setProviderModels([])
       setLoadingProviderModels(false)
       return
@@ -466,7 +550,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
 
     let cancelled = false
     setLoadingProviderModels(true)
-    void apiGetModels(selectedProvider).then((data) => {
+    void apiGetModels(effectiveProvider).then((data) => {
       if (cancelled) return
       const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
       setProviderModels(tagged)
@@ -478,9 +562,9 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     })
 
     return () => { cancelled = true }
-  }, [selectedProvider])
+  }, [effectiveProvider])
 
-  const availableModels = useMemo(() => selectedProvider ? providerModels : [], [providerModels, selectedProvider])
+  const availableModels = useMemo(() => effectiveProvider ? providerModels : [], [effectiveProvider, providerModels])
 
   const filterSelectOption = (input: string, option?: { label?: unknown; value?: unknown; data?: { searchText?: string } }) => {
     if (!input) return true
@@ -517,7 +601,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
   ], [availableModels])
 
   useEffect(() => {
-    if (!selectedProvider) {
+    if (!effectiveProvider) {
       if (!selectedModel) return
       setSelectedModel('')
       selectedModelRef.current = ''
@@ -527,7 +611,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
     if (availableModels.some((m) => m.id === selectedModel)) return
     setSelectedModel('')
     selectedModelRef.current = ''
-  }, [availableModels, selectedModel, selectedProvider])
+  }, [availableModels, effectiveProvider, selectedModel])
 
   const configDefaults = useMemo<LLMParamsOverride>(() => {
     const gp = modelData.global_params
@@ -556,6 +640,22 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
       value: prompt.name,
     })),
   ], [uiConfig])
+  useEffect(() => {
+    if (selectedConversationId) return
+    if (selectedSystemPrompt && isKnownSystemPrompt(uiConfig, selectedSystemPrompt)) return
+    const nextPrompt = getFirstSystemPromptName(uiConfig)
+    if (!nextPrompt) return
+    setSelectedSystemPrompt(nextPrompt)
+    selectedSystemPromptRef.current = nextPrompt
+  }, [selectedConversationId, selectedSystemPrompt, uiConfig])
+  const hasSelectedSystemPrompt = selectedSystemPrompt !== ''
+  const compactModelOptions = useMemo(() => ([
+    { label: 'Auto', value: '' },
+    ...models.map((model) => ({
+      label: model.provider ? `${model.provider} · ${model.name || model.id}` : (model.name || model.id),
+      value: model.id,
+    })),
+  ]), [models])
 
   const charCount = input.length
   const showCharCount = charCount > MAX_MESSAGE_LENGTH * 0.8
@@ -760,16 +860,16 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                     <button
                       key={prompt}
                       className="prompt-chip"
-                      tabIndex={loading ? -1 : 0}
-                      disabled={loading}
+                      tabIndex={loading || !hasSelectedSystemPrompt ? -1 : 0}
+                      disabled={loading || !hasSelectedSystemPrompt}
                       style={{
-                        cursor: loading ? 'not-allowed' : 'pointer',
+                        cursor: loading || !hasSelectedSystemPrompt ? 'not-allowed' : 'pointer',
                         border: `1px solid ${token.colorBorderSecondary}`,
                         background: token.colorBgElevated,
-                        color: loading ? token.colorTextDisabled : token.colorText,
-                        opacity: loading ? 0.5 : 1,
+                        color: loading || !hasSelectedSystemPrompt ? token.colorTextDisabled : token.colorText,
+                        opacity: loading || !hasSelectedSystemPrompt ? 0.5 : 1,
                       }}
-                      onClick={() => { if (!loading) send(prompt) }}
+                      onClick={() => { if (!loading && hasSelectedSystemPrompt) send(prompt) }}
                     >
                       <span className="prompt-chip-label">{prompt}</span>
                     </button>
@@ -820,7 +920,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                 />
                 <div
                   className="input-toolbar"
-                  style={{ pointerEvents: loading || uploading || loadingConversation ? 'none' : 'auto', opacity: loading || uploading || loadingConversation ? 0.5 : 1 }}
+                  style={{ right: uiConfig.compactConversation?.enabled && canCompactConversation && (sessionId || messages.length > 0) ? 96 : 54, pointerEvents: loading || uploading || loadingConversation ? 'none' : 'auto', opacity: loading || uploading || loadingConversation ? 0.5 : 1 }}
                 >
                   <Tooltip title={uploading ? 'Uploading...' : 'Attach file'}>
                     <Button
@@ -842,32 +942,32 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                       aria-label="Select system prompt"
                       options={systemPromptOptions}
                       disabled={loading || loadingConversation}
+                      status={hasSelectedSystemPrompt ? undefined : 'error'}
                       variant="borderless"
                       placement="topLeft"
                       showSearch={{ filterOption: filterSelectOption }}
+                      placeholder="System prompt is required"
                       style={{ flex: 1, minWidth: 0 }}
                     />
                   )}
-                  {isMultiProvider && (
-                    <Select
-                      className="toolbar-select"
-                      value={selectedProvider}
-                      onChange={(v: string) => {
-                        setSelectedProvider(v)
-                        selectedProviderRef.current = v
-                        setSelectedModel('')
-                        selectedModelRef.current = ''
-                      }}
-                      size="small"
-                      aria-label="Select provider"
-                      variant="borderless"
-                      showSearch={{ filterOption: filterSelectOption }}
-                      placement="topLeft"
-                      options={providerOptions}
-                      disabled={loading || loadingConversation}
-                      style={{ flex: '0 0 168px', width: 168 }}
-                    />
-                  )}
+                  <Select
+                    className="toolbar-select"
+                    value={selectedProvider}
+                    onChange={(v: string) => {
+                      setSelectedProvider(v)
+                      selectedProviderRef.current = v
+                      setSelectedModel('')
+                      selectedModelRef.current = ''
+                    }}
+                    size="small"
+                    aria-label="Select provider"
+                    variant="borderless"
+                    showSearch={{ filterOption: filterSelectOption }}
+                    placement="topLeft"
+                    options={providerOptions}
+                    disabled={loading || loadingConversation}
+                    style={{ flex: '0 0 168px', width: 168 }}
+                  />
                   {models.length > 0 && (
                     <Tooltip title={
                       modelData.source === 'discovered'
@@ -876,13 +976,13 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                     }>
                       <Select
                         className="toolbar-select"
-                        key={`chat-model-${selectedProvider || 'auto'}`}
+                        key={`chat-model-${effectiveProvider || 'auto'}`}
                         value={selectedModel}
                         onChange={(v) => { setSelectedModel(v); selectedModelRef.current = v }}
                         size="small"
                         aria-label="Select AI model"
                         options={modelOptions}
-                        disabled={loading || loadingConversation || !selectedProvider || loadingProviderModels}
+                        disabled={loading || loadingConversation || !effectiveProvider || loadingProviderModels}
                         variant="borderless"
                         showSearch={{ filterOption: filterSelectOption }}
                         placement="topLeft"
@@ -956,12 +1056,23 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
                   />
                 </div>
                 <div className="input-send">
+                  {uiConfig.compactConversation?.enabled && canCompactConversation && (sessionId || messages.length > 0) && (
+                    <Tooltip title="Compact conversation">
+                      <Button
+                        icon={<CompressOutlined />}
+                        onClick={() => setCompactModalOpen(true)}
+                        disabled={loading || loadingConversation || compacting}
+                        aria-label="Compact conversation"
+                        style={{ height: 34, width: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      />
+                    </Tooltip>
+                  )}
                   <Tooltip title="Send">
                     <Button
                       type="primary"
                       icon={<SendOutlined />}
                       onClick={() => send()}
-                      disabled={(!input.trim() && uploadedFiles.length === 0) || loading}
+                      disabled={(!input.trim() && uploadedFiles.length === 0) || loading || !hasSelectedSystemPrompt}
                       aria-label="Send message"
                       style={{ height: 34, width: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     />
@@ -1041,6 +1152,32 @@ export function ChatPage({ models, modelData, uiConfig, isDark, siderCollapsed, 
           </div>
         </div>
       </Layout>
+      <Modal
+        open={compactModalOpen}
+        title="Compact Conversation"
+        onCancel={() => setCompactModalOpen(false)}
+        onOk={() => { void handleCompactConversation() }}
+        okText="Compact"
+        confirmLoading={compacting}
+        okButtonProps={{ disabled: !compactPrompt.trim() }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Text>Prompt</Text>
+          <TextArea
+            value={compactPrompt}
+            onChange={(e) => setCompactPrompt(e.target.value)}
+            autoSize={{ minRows: 4, maxRows: 10 }}
+            placeholder="Compaction prompt"
+          />
+          <Text>Model</Text>
+          <Select
+            value={compactModel}
+            onChange={setCompactModel}
+            options={compactModelOptions}
+            showSearch={{ filterOption: filterSelectOption }}
+          />
+        </div>
+      </Modal>
     </Layout>
   )
 }

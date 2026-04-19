@@ -123,7 +123,7 @@ function ExecutionItem({
   onDelete: (id: string) => void
 }) {
   const { token } = useToken()
-  const mdComponents = buildMarkdownComponents(token)
+  const mdComponents = buildMarkdownComponents()
   const tokenStats = useMemo(() => computeTokenStats(exec.trace), [exec.trace])
   const borderColor = exec.status === 'error'
     ? token.colorErrorBorder
@@ -207,6 +207,7 @@ function ExecutionItem({
               label: <Text style={{ fontSize: 12 }}>Response</Text>,
               children: (
                 <div
+                  className="bubble-markdown"
                   style={{
                     borderLeft: `3px solid ${token.colorPrimary}`,
                     background: token.colorFillAlter,
@@ -215,6 +216,13 @@ function ExecutionItem({
                     fontSize: 13,
                     lineHeight: 1.7,
                     wordBreak: 'break-word',
+                    ['--md-inline-code-bg' as string]: token.colorFillSecondary,
+                    ['--md-code-font-family' as string]: token.fontFamilyCode,
+                    ['--md-blockquote-border' as string]: token.colorPrimary,
+                    ['--md-blockquote-color' as string]: token.colorTextSecondary,
+                    ['--md-table-border' as string]: token.colorBorder,
+                    ['--md-table-header-bg' as string]: token.colorFillSecondary,
+                    ['--md-link-color' as string]: token.colorPrimary,
                   }}
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
@@ -476,18 +484,16 @@ export function SchedulerPage({
       key: 'name',
       width: '48%',
       sorter: (a: Schedule, b: Schedule) => a.name.localeCompare(b.name),
+      onCell: (sc: Schedule) => ({
+        className: 'schedule-name-cell',
+        onClick: () => handleSelectSchedule(sc.id),
+      }),
       render: (_: unknown, sc: Schedule) => (
         <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
           <Space size={8} wrap>
-            <Button
-              type="link"
-              size="small"
-              className="schedule-name-link"
-              style={{ padding: 0, height: 'auto', fontWeight: 600 }}
-              onClick={() => handleSelectSchedule(sc.id)}
-            >
+            <span className="schedule-name-link">
               {sc.name}
-            </Button>
+            </span>
             <Tag color={sc.enabled ? 'green' : 'default'}>{sc.enabled ? 'enabled' : 'disabled'}</Tag>
             <Tag color={sc.type === 'cron' ? 'blue' : 'purple'}>{sc.type}</Tag>
           </Space>

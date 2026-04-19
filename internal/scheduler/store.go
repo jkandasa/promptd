@@ -9,65 +9,66 @@ import (
 	"strings"
 	"sync"
 
+	"promptd/internal/storage"
+
 	"gopkg.in/yaml.v3"
 )
 
-// ErrNotFound is returned when a schedule or execution does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Store manages on-disk persistence for schedules and their executions.
-//
-// Layout:
-//
-//	<dir>/schedules/<id>.yaml
-//	<dir>/schedules/executions/<schedule_id>/<timestamp>-<exec_id>.yaml
 type Store struct {
-	schedulesDir  string
-	executionsDir string
-	mu            sync.RWMutex
+	root string
+	mu   sync.RWMutex
 }
 
-// NewStore creates (and if necessary, initialises) the storage directories.
-func NewStore(dir string) (*Store, error) {
-	schedulesDir := filepath.Join(dir, "schedules")
-	executionsDir := filepath.Join(dir, "schedules", "executions")
-	for _, d := range []string{schedulesDir, executionsDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			return nil, fmt.Errorf("create dir %s: %w", d, err)
+func NewStore(root string) (*Store, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, err
+	}
+	return &Store{root: root}, nil
+}
+
+func (s *Store) scopeSchedulesDir(scope storage.Scope) string {
+	return filepath.Join(s.root, "tenants", scope.TenantID, "users", scope.UserID, "schedules")
+}
+
+func (s *Store) scopeExecutionsDir(scope storage.Scope) string {
+	return filepath.Join(s.scopeSchedulesDir(scope), "executions")
+}
+
+func (s *Store) ensureScope(scope storage.Scope) error {
+	for _, dir := range []string{s.scopeSchedulesDir(scope), s.scopeExecutionsDir(scope)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
 		}
 	}
-	return &Store{schedulesDir: schedulesDir, executionsDir: executionsDir}, nil
+	return nil
 }
 
-// SaveSchedule writes (or overwrites) a schedule to disk.
-func (s *Store) SaveSchedule(sc *Schedule) error {
+func (s *Store) SaveSchedule(scope storage.Scope, sc *Schedule) error {
+	if err := s.ensureScope(scope); err != nil {
+		return err
+	}
+	sc.TenantID = scope.TenantID
+	sc.UserID = scope.UserID
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.saveSchedule(sc)
-}
-
-func (s *Store) saveSchedule(sc *Schedule) error {
-	path := filepath.Join(s.schedulesDir, sc.ID+".yaml")
+	path := filepath.Join(s.scopeSchedulesDir(scope), sc.ID+".yaml")
 	data, err := yaml.Marshal(sc)
 	if err != nil {
 		return fmt.Errorf("marshal schedule: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write schedule: %w", err)
 	}
 	return os.Rename(tmp, path)
 }
 
-// LoadSchedule reads a schedule by ID.
-func (s *Store) LoadSchedule(id string) (*Schedule, error) {
+func (s *Store) LoadSchedule(scope storage.Scope, id string) (*Schedule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.loadSchedule(id)
-}
-
-func (s *Store) loadSchedule(id string) (*Schedule, error) {
-	path := filepath.Join(s.schedulesDir, id+".yaml")
+	path := filepath.Join(s.scopeSchedulesDir(scope), id+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -82,12 +83,13 @@ func (s *Store) loadSchedule(id string) (*Schedule, error) {
 	return &sc, nil
 }
 
-// ListSchedules returns all schedules sorted newest-first.
-func (s *Store) ListSchedules() ([]*Schedule, error) {
+func (s *Store) ListSchedules(scope storage.Scope) ([]*Schedule, error) {
+	if err := s.ensureScope(scope); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	entries, err := os.ReadDir(s.schedulesDir)
+	entries, err := os.ReadDir(s.scopeSchedulesDir(scope))
 	if err != nil {
 		return nil, fmt.Errorf("read schedules dir: %w", err)
 	}
@@ -97,7 +99,7 @@ func (s *Store) ListSchedules() ([]*Schedule, error) {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), ".yaml")
-		sc, err := s.loadSchedule(id)
+		sc, err := s.LoadSchedule(scope, id)
 		if err != nil {
 			continue
 		}
@@ -109,48 +111,72 @@ func (s *Store) ListSchedules() ([]*Schedule, error) {
 	return list, nil
 }
 
-// DeleteSchedule removes a schedule and all its executions.
-func (s *Store) DeleteSchedule(id string) error {
+func (s *Store) ListAllSchedules() ([]*Schedule, error) {
+	var list []*Schedule
+	root := filepath.Join(s.root, "tenants")
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() || filepath.Ext(path) != ".yaml" || strings.Contains(path, string(filepath.Separator)+"executions"+string(filepath.Separator)) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var sc Schedule
+		if err := yaml.Unmarshal(data, &sc); err != nil {
+			return nil
+		}
+		list = append(list, &sc)
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (s *Store) DeleteSchedule(scope storage.Scope, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	path := filepath.Join(s.schedulesDir, id+".yaml")
+	path := filepath.Join(s.scopeSchedulesDir(scope), id+".yaml")
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("delete schedule: %w", err)
 	}
-	// Best-effort removal of execution files.
-	_ = os.RemoveAll(filepath.Join(s.executionsDir, id))
+	_ = os.RemoveAll(filepath.Join(s.scopeExecutionsDir(scope), id))
 	return nil
 }
 
-// SaveExecution writes an execution and prunes old ones when retain > 0.
-func (s *Store) SaveExecution(exec *Execution, retainHistory int) error {
+func (s *Store) SaveExecution(scope storage.Scope, exec *Execution, retainHistory int) error {
+	if err := s.ensureScope(scope); err != nil {
+		return err
+	}
+	exec.TenantID = scope.TenantID
+	exec.UserID = scope.UserID
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	dir := filepath.Join(s.executionsDir, exec.ScheduleID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	dir := filepath.Join(s.scopeExecutionsDir(scope), exec.ScheduleID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create execution dir: %w", err)
 	}
-
 	ts := exec.TriggeredAt.UTC().Format("20060102-150405")
 	path := filepath.Join(dir, ts+"-"+exec.ID+".yaml")
-
 	data, err := yaml.Marshal(exec)
 	if err != nil {
 		return fmt.Errorf("marshal execution: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write execution: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename execution: %w", err)
 	}
-
 	if retainHistory > 0 {
 		s.pruneExecutions(dir, retainHistory)
 	}
@@ -165,19 +191,17 @@ func (s *Store) pruneExecutions(dir string, keep int) {
 			files = append(files, e.Name())
 		}
 	}
-	sort.Strings(files) // timestamp prefix gives chronological order
+	sort.Strings(files)
 	for len(files) > keep {
 		_ = os.Remove(filepath.Join(dir, files[0]))
 		files = files[1:]
 	}
 }
 
-// ListExecutions returns executions for a schedule, newest first.
-func (s *Store) ListExecutions(scheduleID string) ([]*Execution, error) {
+func (s *Store) ListExecutions(scope storage.Scope, scheduleID string) ([]*Execution, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	dir := filepath.Join(s.executionsDir, scheduleID)
+	dir := filepath.Join(s.scopeExecutionsDir(scope), scheduleID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -185,7 +209,6 @@ func (s *Store) ListExecutions(scheduleID string) ([]*Execution, error) {
 		}
 		return nil, fmt.Errorf("read execution dir: %w", err)
 	}
-
 	var list []*Execution
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
@@ -207,12 +230,10 @@ func (s *Store) ListExecutions(scheduleID string) ([]*Execution, error) {
 	return list, nil
 }
 
-// DeleteExecution removes one execution file.
-func (s *Store) DeleteExecution(scheduleID, execID string) error {
+func (s *Store) DeleteExecution(scope storage.Scope, scheduleID, execID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	dir := filepath.Join(s.executionsDir, scheduleID)
+	dir := filepath.Join(s.scopeExecutionsDir(scope), scheduleID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

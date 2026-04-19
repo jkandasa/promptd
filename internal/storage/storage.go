@@ -12,6 +12,15 @@ import (
 
 const MessageRoleError = "error"
 
+type Scope struct {
+	TenantID string
+	UserID   string
+}
+
+func (s Scope) Key() string {
+	return s.TenantID + ":" + s.UserID
+}
+
 // TraceToolCall captures a single function call request inside an assistant message.
 type TraceToolCall struct {
 	ID   string `yaml:"id"   json:"id"`
@@ -133,23 +142,26 @@ type UploadedFile struct {
 	Size      int64  `yaml:"size"       json:"size"`
 	URL       string `yaml:"url"        json:"url"`
 	CreatedAt int64  `yaml:"created_at" json:"created_at"`
+	TenantID  string `yaml:"tenant_id,omitempty" json:"-"`
+	UserID    string `yaml:"user_id,omitempty" json:"-"`
 }
 
 // Message is a single turn in a conversation.
 // Only user and assistant messages are persisted for display; intermediate
 // tool/function messages are stored for LLM context but carry no display metadata.
 type Message struct {
-	ID      string    `yaml:"id"      json:"id"`
-	Role    string    `yaml:"role"    json:"role"`
-	Content string    `yaml:"content" json:"content"`
-	SentAt  time.Time `yaml:"sent_at" json:"sent_at"`
+	ID             string    `yaml:"id"      json:"id"`
+	Role           string    `yaml:"role"    json:"role"`
+	Content        string    `yaml:"content" json:"content"`
+	SentAt         time.Time `yaml:"sent_at" json:"sent_at"`
+	CompactSummary bool      `yaml:"compact_summary,omitempty" json:"compact_summary,omitempty"`
 	// Metadata — non-zero only for final assistant replies.
-	Model       string `yaml:"model,omitempty"         json:"model,omitempty"`
-	Provider    string `yaml:"provider,omitempty"      json:"provider,omitempty"`
+	Model       string         `yaml:"model,omitempty"         json:"model,omitempty"`
+	Provider    string         `yaml:"provider,omitempty"      json:"provider,omitempty"`
 	Files       []UploadedFile `yaml:"files,omitempty" json:"files,omitempty"`
-	TimeTakenMs int64  `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
-	LLMCalls    int    `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
-	ToolCalls   int    `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
+	TimeTakenMs int64          `yaml:"time_taken_ms,omitempty" json:"time_taken_ms,omitempty"`
+	LLMCalls    int            `yaml:"llm_calls,omitempty"     json:"llm_calls,omitempty"`
+	ToolCalls   int            `yaml:"tool_calls,omitempty"    json:"tool_calls,omitempty"`
 	// UsedParams records the effective generation parameters sent to the LLM.
 	// Nil/zero fields were not set (provider default was used).
 	UsedParams *UsedParams `yaml:"used_params,omitempty"  json:"used_params,omitempty"`
@@ -167,33 +179,37 @@ type Message struct {
 
 // Conversation is the top-level unit that the storage layer persists.
 type Conversation struct {
-	ID           string      `yaml:"id"         json:"id"`
-	Title        string      `yaml:"title"      json:"title"`
-	Model        string      `yaml:"model"      json:"model"`
-	Provider     string      `yaml:"provider,omitempty"      json:"provider,omitempty"`
-	SystemPrompt string      `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	Params       *UsedParams `yaml:"params,omitempty"        json:"params,omitempty"`
-	Pinned       bool        `yaml:"pinned,omitempty" json:"pinned,omitempty"`
-	CreatedAt    time.Time   `yaml:"created_at" json:"created_at"`
-	UpdatedAt    time.Time   `yaml:"updated_at" json:"updated_at"`
-	Messages     []Message   `yaml:"messages"   json:"messages"`
+	TenantID                  string      `yaml:"tenant_id"  json:"tenant_id,omitempty"`
+	UserID                    string      `yaml:"user_id"    json:"user_id,omitempty"`
+	ID                        string      `yaml:"id"         json:"id"`
+	Title                     string      `yaml:"title"      json:"title"`
+	Model                     string      `yaml:"model"      json:"model"`
+	Provider                  string      `yaml:"provider,omitempty"      json:"provider,omitempty"`
+	SystemPrompt              string      `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	Params                    *UsedParams `yaml:"params,omitempty"        json:"params,omitempty"`
+	Pinned                    bool        `yaml:"pinned,omitempty" json:"pinned,omitempty"`
+	CompactedThroughMessageID string      `yaml:"compacted_through_message_id,omitempty" json:"compacted_through_message_id,omitempty"`
+	CompactSummaryMessageID   string      `yaml:"compact_summary_message_id,omitempty" json:"compact_summary_message_id,omitempty"`
+	CreatedAt                 time.Time   `yaml:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time   `yaml:"updated_at" json:"updated_at"`
+	Messages                  []Message   `yaml:"messages"   json:"messages"`
 }
 
 // Store is the persistence interface. Every method is synchronous and
 // thread-safe. Implementations may block on I/O.
 type Store interface {
 	// Save creates or fully replaces the conversation record.
-	Save(c *Conversation) error
+	Save(scope Scope, c *Conversation) error
 
 	// Load returns the conversation with the given ID, or ErrNotFound.
-	Load(id string) (*Conversation, error)
+	Load(scope Scope, id string) (*Conversation, error)
 
 	// List returns lightweight metadata for all conversations
 	// (Messages field is empty) ordered newest-first.
-	List() ([]*Conversation, error)
+	List(scope Scope) ([]*Conversation, error)
 
 	// Delete permanently removes the conversation.
-	Delete(id string) error
+	Delete(scope Scope, id string) error
 
 	// PurgeTraces removes the Trace field from all assistant messages whose
 	// SentAt is before cutoff. Only files that are actually modified are rewritten.
@@ -212,6 +228,9 @@ func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
 			Name:       m.Name,
+		}
+		if m.CompactSummary {
+			continue
 		}
 		for _, tc := range m.InlineToolCalls {
 			msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{

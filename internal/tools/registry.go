@@ -128,12 +128,61 @@ func (r *Registry) List() []ToolInfo {
 	return out
 }
 
+func (r *Registry) ListByNames(names []string) []ToolInfo {
+	allowed := make(map[string]bool, len(names))
+	for _, name := range names {
+		allowed[name] = true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ToolInfo, 0, len(allowed))
+	for _, t := range r.tools {
+		if !allowed[t.Name()] {
+			continue
+		}
+		var params json.RawMessage
+		if p := t.Parameters(); p != nil {
+			b, err := json.Marshal(p)
+			if err == nil && string(b) != "null" {
+				params = json.RawMessage(b)
+			}
+		}
+		out = append(out, ToolInfo{Name: t.Name(), Description: t.Description(), Parameters: params})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // OpenAITools converts all registered tools to the format expected by go-openai.
 func (r *Registry) OpenAITools() []openai.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]openai.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
+		out = append(out, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Parameters:  t.Parameters(),
+			},
+		})
+	}
+	return out
+}
+
+func (r *Registry) OpenAIToolsByNames(names []string) []openai.Tool {
+	allowed := make(map[string]bool, len(names))
+	for _, name := range names {
+		allowed[name] = true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]openai.Tool, 0, len(allowed))
+	for _, t := range r.tools {
+		if !allowed[t.Name()] {
+			continue
+		}
 		out = append(out, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{

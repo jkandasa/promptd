@@ -1,3 +1,5 @@
+import './index.scss'
+
 import {
   App as AntApp,
   Avatar,
@@ -8,28 +10,64 @@ import {
   Typography,
   theme,
 } from 'antd'
-import {
+import type { AuthMe, ModelData, ModelInfo, ProviderInfo } from '../api/client'
+import Icon, {
   CalendarOutlined,
   GithubOutlined,
+  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
   MoonOutlined,
-  RobotOutlined,
   SunOutlined,
   ToolOutlined,
 } from '@ant-design/icons'
-import { apiGetModels, apiGetUIConfig, apiListTools } from '../api/client'
-import type { ModelData, ModelInfo, ProviderInfo } from '../api/client'
+import React, { useCallback, useEffect, useState } from 'react'
 import type { ToolInfo, UIConfig } from '../types/chat'
-import { isImageIcon } from '../utils/helpers'
-import { useCallback, useEffect, useState } from 'react'
+import { apiGetModels, apiGetUIConfig, apiListTools } from '../api/client'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { ChatPage } from './chat/ChatPage'
 import { SchedulerPage } from './scheduler/SchedulerPage'
 import { ToolsPage } from './tools/ToolsPage'
-import './index.scss'
+import { isImageIcon } from '../utils/helpers'
+
+const PromptdSVG: React.FC = () => (
+<svg width="36" height="36" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M90 40
+           L90 190
+           Q90 210 110 210
+           L120 210
+           L120 130
+           Q120 110 140 110
+           Q180 110 180 75
+           Q180 40 140 40
+           Z"
+        fill="url(#grad)"/>
+
+  <path d="M140 40
+           Q210 40 210 105
+           Q210 170 140 170
+           Q120 170 120 150
+           Q120 130 140 130
+           Q180 130 180 105
+           Q180 75 140 75
+           Q120 75 120 55
+           Q120 40 140 40
+           Z"
+        fill="url(#grad)"/>
+
+  <rect x="40" y="95" width="40" height="14" rx="7" fill="#7C3AED"/>
+  <rect x="50" y="120" width="30" height="14" rx="7" fill="#7C3AED"/>
+</svg>
+);
 
 const { Text } = Typography
 const { useToken } = theme
@@ -37,6 +75,8 @@ const { useToken } = theme
 interface PromptdAppProps {
   isDark: boolean
   onToggleDark: () => void
+  me: AuthMe
+  onLogout: () => Promise<void>
 }
 
 type AppView = 'chat' | 'scheduler' | 'tools'
@@ -84,7 +124,7 @@ function getPathState(pathname: string): {
   return null
 }
 
-export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
+export function PromptdApp({ isDark, onToggleDark, me, onLogout }: PromptdAppProps) {
   const { token } = useToken()
   const { message: antMessage } = AntApp.useApp()
 
@@ -225,9 +265,9 @@ export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
           <Avatar
             aria-hidden="true"
             src={isImageIcon(appIcon) ? appIcon : undefined}
-            icon={!appIcon ? <RobotOutlined /> : undefined}
+            icon={!appIcon ? <Icon component={PromptdSVG} /> : undefined}
             style={{
-              background: !appIcon ? token.colorPrimary : isImageIcon(appIcon) ? token.colorFillSecondary : token.colorBgContainer,
+              background: token.colorBgContainer,
               color: !appIcon ? '#fff' : token.colorText,
               fontSize: appIcon && !isImageIcon(appIcon) ? 18 : undefined,
               border: isImageIcon(appIcon) ? `1px solid ${token.colorBorderSecondary}` : undefined,
@@ -239,7 +279,7 @@ export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
           </Avatar>
           <div className="brand-copy">
             <Text strong className="app-name">Promptd</Text>
-            <Text type="secondary" className="app-subtitle">{appName}</Text>
+            <Text type="secondary" className="app-subtitle">AI Assistant</Text>
           </div>
         </div>
         <div className="header-right">
@@ -260,6 +300,15 @@ export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
               rel="noopener noreferrer"
               type="text"
               aria-label="View source on GitHub (opens in new tab)"
+              style={{ color: token.colorTextSecondary }}
+            />
+          </Tooltip>
+          <Tooltip title={`Sign out ${me.user_id}`}>
+            <Button
+              icon={<LogoutOutlined />}
+              onClick={() => { void onLogout() }}
+              type="text"
+              aria-label="Sign out"
               style={{ color: token.colorTextSecondary }}
             />
           </Tooltip>
@@ -300,15 +349,16 @@ export function PromptdApp({ isDark, onToggleDark }: PromptdAppProps) {
 
         <Layout className="main-col">
           {view === 'chat' ? (
-            <ChatPage
-              models={models}
-              modelData={modelData}
-              uiConfig={uiConfig}
-              isDark={isDark}
-              siderCollapsed={siderCollapsed}
-              setSiderCollapsed={setSiderCollapsed}
-              onRefreshModels={handleRefreshModels}
-              selectedConversationId={conversationId}
+        <ChatPage
+          models={models}
+          modelData={modelData}
+          uiConfig={uiConfig}
+          isDark={isDark}
+          canCompactConversation={!!me.permissions.compact_conversation_write}
+          siderCollapsed={siderCollapsed}
+          setSiderCollapsed={setSiderCollapsed}
+          onRefreshModels={handleRefreshModels}
+          selectedConversationId={conversationId}
               onConversationChange={handleConversationChange}
             />
           ) : view === 'scheduler' ? (

@@ -35,6 +35,7 @@ export const Bubble = memo(function Bubble({
   const { message: antMessage } = AntApp.useApp()
   const isUser = msg.role === 'user'
   const isError = msg.role === 'error'
+  const isCompactSummary = !!msg.compactSummary
   const [copied, setCopied] = useState(false)
   const [traceOpen, setTraceOpen] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -43,7 +44,7 @@ export const Bubble = memo(function Bubble({
   const [previewVisible, setPreviewVisible] = useState(false)
   const [previewImage, setPreviewImage] = useState('')
 
-  const mdComponents = useMemo(() => buildMarkdownComponents(token), [token])
+  const mdComponents = useMemo(() => buildMarkdownComponents(), [])
 
   const handleCopy = async () => {
     try {
@@ -67,7 +68,19 @@ export const Bubble = memo(function Bubble({
     setPreviewVisible(true)
   }
 
-  const bubbleStyle: React.CSSProperties = isUser
+  const bubbleStyle: React.CSSProperties = isCompactSummary
+    ? {
+        width: '100%',
+        background: token.colorInfoBg,
+        color: token.colorText,
+        border: `1px solid ${token.colorInfoBorder}`,
+        borderRadius: 12,
+        padding: '12px 14px',
+        whiteSpace: 'pre-wrap',
+        fontSize: 14,
+        lineHeight: 1.6,
+      }
+    : isUser
     ? {
         background: `linear-gradient(135deg, ${token.colorPrimaryHover} 0%, ${token.colorPrimary} 100%)`,
         color: '#fff',
@@ -125,7 +138,7 @@ export const Bubble = memo(function Bubble({
         onClick={handleCopy}
         style={{ fontSize: 12, padding: '2px 6px', height: 'auto', color: token.colorTextSecondary }}
       />
-      {isUser && (
+      {isUser && !isCompactSummary && (
         <Button
           type="text"
           size="small"
@@ -231,8 +244,23 @@ export const Bubble = memo(function Bubble({
               className="bubble-content"
               style={{ ...bubbleStyle, position: isUser || isError ? 'relative' : undefined }}
             >
+              {isCompactSummary && (
+                <Tag color="blue" style={{ marginBottom: 8 }}>Compacted Summary</Tag>
+              )}
               {!isUser && !isError ? (
-                <div style={{ wordBreak: 'break-word' }}>
+                <div
+                  className="bubble-markdown"
+                  style={{
+                    wordBreak: 'break-word',
+                    ['--md-inline-code-bg' as string]: token.colorFillSecondary,
+                    ['--md-code-font-family' as string]: token.fontFamilyCode,
+                    ['--md-blockquote-border' as string]: token.colorPrimary,
+                    ['--md-blockquote-color' as string]: token.colorTextSecondary,
+                    ['--md-table-border' as string]: token.colorBorder,
+                    ['--md-table-header-bg' as string]: token.colorFillSecondary,
+                    ['--md-link-color' as string]: token.colorPrimary,
+                  }}
+                >
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={mdComponents}

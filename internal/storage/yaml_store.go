@@ -1,12 +1,4 @@
-// Package storage — YAML file-based implementation of Store.
-//
-// Each conversation is stored as a single YAML file named:
-//
-//	<dir>/<YYYYMMDD-HHMMSS>-<uuid>.yaml
-//
-// The timestamp prefix is derived from the conversation's CreatedAt field,
-// which makes the files sort chronologically in any file browser.
-// Writes are atomic (write to a .tmp file then os.Rename).
+// Package storage provides YAML-backed conversation persistence.
 package storage
 
 import (
@@ -21,146 +13,148 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const tsLayout = "20060102-150405" // matches the desired 20260414-131545 format
+const tsLayout = "20060102-150405"
 
-// YAMLStore implements Store using one YAML file per conversation.
 type YAMLStore struct {
-	dir string
-	mu  sync.RWMutex // coarse lock — fine for the expected load
+	root string
+	mu   sync.RWMutex
 }
 
-// NewYAMLStore returns a YAMLStore that persists conversations under dir.
-// The directory is created if it does not exist.
-func NewYAMLStore(dir string) (*YAMLStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+func NewYAMLStore(root string) (*YAMLStore, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	return &YAMLStore{dir: dir}, nil
+	return &YAMLStore{root: root}, nil
 }
 
-// filename builds the canonical filename stem for a conversation:
-// <YYYYMMDD-HHMMSS>-<uuid>
+func (s *YAMLStore) scopeDir(scope Scope) string {
+	return filepath.Join(s.root, "tenants", scope.TenantID, "users", scope.UserID, "conversations")
+}
+
+func (s *YAMLStore) ensureScopeDir(scope Scope) error {
+	return os.MkdirAll(s.scopeDir(scope), 0o755)
+}
+
 func filename(c *Conversation) string {
 	return c.CreatedAt.UTC().Format(tsLayout) + "-" + c.ID
 }
 
-// findFile scans the directory for the file whose name ends with "-<id>.yaml".
-// Returns the full path, or "" if not found. Caller must hold at least s.mu.RLock.
-func (s *YAMLStore) findFile(id string) string {
+func (s *YAMLStore) findFile(dir, id string) string {
 	suffix := "-" + id + ".yaml"
-	entries, err := os.ReadDir(s.dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
 	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
-			return filepath.Join(s.dir, e.Name())
+			return filepath.Join(dir, e.Name())
 		}
 	}
 	return ""
 }
 
-// Save serialises the conversation atomically (tmp file → rename).
-func (s *YAMLStore) Save(c *Conversation) error {
+func (s *YAMLStore) Save(scope Scope, c *Conversation) error {
+	if err := s.ensureScopeDir(scope); err != nil {
+		return err
+	}
+	c.TenantID = scope.TenantID
+	c.UserID = scope.UserID
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-
-	target := filepath.Join(s.dir, filename(c)+".yaml")
+	dir := s.scopeDir(scope)
+	target := filepath.Join(dir, filename(c)+".yaml")
 	tmp := target + ".tmp"
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, target)
 }
 
-// Load reads and deserialises the conversation file for the given UUID.
-func (s *YAMLStore) Load(id string) (*Conversation, error) {
+func (s *YAMLStore) Load(scope Scope, id string) (*Conversation, error) {
+	dir := s.scopeDir(scope)
 	s.mu.RLock()
-	path := s.findFile(id)
+	path := s.findFile(dir, id)
+	s.mu.RUnlock()
 	if path == "" {
-		s.mu.RUnlock()
 		return nil, ErrNotFound
 	}
 	data, err := os.ReadFile(path)
-	s.mu.RUnlock()
-
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-
 	var c Conversation
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
+	if c.TenantID != "" && c.TenantID != scope.TenantID {
+		return nil, ErrNotFound
+	}
+	if c.UserID != "" && c.UserID != scope.UserID {
+		return nil, ErrNotFound
+	}
 	return &c, nil
 }
 
-// List returns metadata for all conversations (Messages omitted), newest first.
-func (s *YAMLStore) List() ([]*Conversation, error) {
+func (s *YAMLStore) List(scope Scope) ([]*Conversation, error) {
+	dir := s.scopeDir(scope)
+	if err := s.ensureScopeDir(scope); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
-	entries, err := os.ReadDir(s.dir)
+	entries, err := os.ReadDir(dir)
 	s.mu.RUnlock()
-
 	if err != nil {
 		return nil, err
 	}
-
 	var convs []*Conversation
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		// Extract the UUID: everything after the timestamp prefix "YYYYMMDD-HHMMSS-".
-		// The prefix is exactly len("20060102-150405-") = 16 characters.
 		stem := strings.TrimSuffix(e.Name(), ".yaml")
 		if len(stem) <= 16 {
-			continue // malformed name — skip
+			continue
 		}
-		ts, err := time.Parse(tsLayout, stem[:15])
-		if err != nil {
-			continue // not a recognised prefix — skip
-		}
-		_ = ts
 		id := stem[16:]
-		c, err := s.Load(id)
+		c, err := s.Load(scope, id)
 		if err != nil {
-			continue // skip corrupt files
+			continue
 		}
-		// Return a lightweight copy without messages.
 		convs = append(convs, &Conversation{
-			ID:           c.ID,
-			Title:        c.Title,
-			Model:        c.Model,
-			SystemPrompt: c.SystemPrompt,
-			Pinned:       c.Pinned,
-			CreatedAt:    c.CreatedAt,
-			UpdatedAt:    c.UpdatedAt,
+			TenantID:                  c.TenantID,
+			UserID:                    c.UserID,
+			ID:                        c.ID,
+			Title:                     c.Title,
+			Model:                     c.Model,
+			Provider:                  c.Provider,
+			SystemPrompt:              c.SystemPrompt,
+			Params:                    c.Params,
+			Pinned:                    c.Pinned,
+			CompactedThroughMessageID: c.CompactedThroughMessageID,
+			CompactSummaryMessageID:   c.CompactSummaryMessageID,
+			CreatedAt:                 c.CreatedAt,
+			UpdatedAt:                 c.UpdatedAt,
 		})
 	}
-
-	// Sort newest-first by UpdatedAt.
 	sort.Slice(convs, func(i, j int) bool {
 		return convs[i].UpdatedAt.After(convs[j].UpdatedAt)
 	})
-
 	return convs, nil
 }
 
-// Delete removes the conversation file.
-func (s *YAMLStore) Delete(id string) error {
+func (s *YAMLStore) Delete(scope Scope, id string) error {
+	dir := s.scopeDir(scope)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	path := s.findFile(id)
+	path := s.findFile(dir, id)
 	if path == "" {
 		return ErrNotFound
 	}
@@ -173,32 +167,23 @@ func (s *YAMLStore) Delete(id string) error {
 	return nil
 }
 
-// PurgeTraces removes the Trace field from all assistant messages whose SentAt
-// is before cutoff. Only conversation files that actually contain stale traces
-// are rewritten, so the common case (nothing to purge) is cheap.
 func (s *YAMLStore) PurgeTraces(cutoff time.Time) error {
-	s.mu.RLock()
-	entries, err := os.ReadDir(s.dir)
-	s.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		stem := strings.TrimSuffix(e.Name(), ".yaml")
-		if len(stem) <= 16 {
-			continue
-		}
-		id := stem[16:]
-
-		c, err := s.Load(id)
+	root := filepath.Join(s.root, "tenants")
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			continue // skip unreadable files
+			return nil
 		}
-
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var c Conversation
+		if err := yaml.Unmarshal(data, &c); err != nil {
+			return nil
+		}
 		changed := false
 		for i := range c.Messages {
 			if len(c.Messages[i].Trace) > 0 && c.Messages[i].SentAt.Before(cutoff) {
@@ -206,11 +191,17 @@ func (s *YAMLStore) PurgeTraces(cutoff time.Time) error {
 				changed = true
 			}
 		}
-		if changed {
-			if err := s.Save(c); err != nil {
-				return err
-			}
+		if !changed {
+			return nil
 		}
-	}
-	return nil
+		updated, err := yaml.Marshal(&c)
+		if err != nil {
+			return nil
+		}
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, updated, 0o644); err != nil {
+			return nil
+		}
+		return os.Rename(tmp, path)
+	})
 }

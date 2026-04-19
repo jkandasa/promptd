@@ -11,10 +11,101 @@ server:
   # HTTP address the server listens on, default: localhost:8080
   address: "localhost:8080"
 
+auth:
+  jwt:
+    # Secret used to sign login session JWT cookies.
+    # Replace this with a long random secret in production.
+    secret: "replace-me"
+    ttl: 24h
+    cookie_name: "promptd_session"
+
+  users:
+    # Each user belongs to a tenant. Use "default" if you only have one tenant.
+    # Passwords and service tokens are stored as bcrypt hashes.
+    # Generate hashes with hidden prompt input:
+    #   ./promptd hash-password
+    #   ./promptd hash-service-token
+    # - id: "alice"
+    #   tenant_id: "default"
+    #   password_hash: "$2a$10$replace-with-bcrypt-hash"
+    #   roles: ["user"]
+    #   service_tokens:
+    #     - id: "ci"
+    #       token_hash: "$2a$10$replace-with-bcrypt-hash"
+    #       not_before: "2026-01-01T00:00:00Z"
+    #       expires_at: "2026-12-31T23:59:59Z"
+    #       disabled: false
+
+roles:
+  # Roles are merged by union when a user has multiple roles.
+  # `super_admin: true` bypasses all model/tool/prompt restrictions within the same tenant.
+  # Wildcards use glob syntax:
+  #   *  matches any sequence
+  #   ?  matches a single character
+  #
+  # Model rules support:
+  #   - "*"
+  #   - "provider:*"
+  #   - "provider:model-pattern"
+  #   - "*:model-pattern"
+  #
+  # Tool/system prompt rules support:
+  #   - "*"
+  #   - exact name
+  #   - glob patterns like "get_current_*" or "Code*"
+  # user:
+  #   permissions:
+  #     chat: true
+  #     upload: true
+  #     conversations_read: true
+  #     conversations_write: true
+  #     compact_conversation_write: true
+  #     schedules_read: true
+  #     schedules_write: true
+  #     traces_read: false
+  #   models:
+  #     allow:
+  #       - "openrouter:*"
+  #       - "groq:model_oss*-20b*"
+  #   tools:
+  #     allow:
+  #       - "get_current_*"
+  #   system_prompts:
+  #     allow:
+  #       - "Code*"
+  #
+  # super_admin:
+  #   super_admin: true
+
 llm:
   # Global model selection method: random or round_robin (default: round_robin).
   # Can be overridden per-provider below.
   selection_method: "round_robin"
+
+  compact_conversation:
+    # Enable automatic rolling conversation compaction.
+    enabled: false
+
+    # Optional default provider and model used to generate compact summaries.
+    # The configured model must still be allowed by the user's model policy.
+    # If only provider is set, promptd selects an allowed model from that provider.
+    # provider: "openrouter"
+    # model: "openai/gpt-4o-mini"
+
+    # Prompt used to generate or refresh the rolling conversation summary.
+    default_prompt: |
+      Summarize the conversation into a minimal context.
+      Keep key facts, intent, and constraints.
+      Remove fluff, repetition, and filler.
+      Write in compact bullet-style or short phrases.
+
+    # Auto-compact after this many user messages since the last compaction.
+    after_messages: 20
+
+    # Auto-compact after this many estimated tokens of new, un-compacted
+    # conversation content since the last compaction. 0 disables token-based
+    # triggering.
+    after_tokens: 12000
 
   # Global auto-discover defaults applied to every provider that does not
   # explicitly set its own auto_discover block.
@@ -50,6 +141,8 @@ llm:
       #   top_k: 40
 
       # Models to expose. Simple string or object with id/name/params.
+      # These are still filtered by the authenticated user's role policy.
+      # Only allowed models/providers will be selectable in conversations and schedules.
       models:
         # - "openai/gpt-4o"
         # - id: "anthropic/claude-sonnet-4-6"

@@ -124,17 +124,20 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
     [...new Set(models.map(m => m.provider).filter((p): p is string => Boolean(p)))],
     [models]
   )
+  const systemPrompts = uiConfig.systemPrompts ?? []
   const isMultiProvider = providerNames.length > 1
+  const singleProvider = !isMultiProvider && providerNames.length === 1 ? providerNames[0] : ''
+  const effectiveProviderFilter = providerFilter || singleProvider
 
   React.useEffect(() => {
     const selectedModel = form.getFieldValue('modelId') as string | undefined
     if (!selectedModel) return
-    if (providerFilter && providerModels.some((m) => m.id === selectedModel)) return
+    if (effectiveProviderFilter && providerModels.some((m) => m.id === selectedModel)) return
     form.setFieldValue('modelId', '')
-  }, [providerFilter, providerModels, form])
+  }, [effectiveProviderFilter, providerModels, form])
 
   React.useEffect(() => {
-    if (!open || !providerFilter) {
+    if (!open || !effectiveProviderFilter) {
       setProviderModels([])
       setLoadingProviderModels(false)
       return
@@ -142,7 +145,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
 
     let cancelled = false
     setLoadingProviderModels(true)
-    void apiGetModels(providerFilter).then((data) => {
+    void apiGetModels(effectiveProviderFilter).then((data) => {
       if (cancelled) return
       const tagged = data.models.map((m) => ({ ...m, source: (m.source ?? data.source ?? 'static') as 'static' | 'discovered' }))
       setProviderModels(tagged)
@@ -154,7 +157,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
     })
 
     return () => { cancelled = true }
-  }, [open, providerFilter])
+  }, [effectiveProviderFilter, open])
 
   React.useEffect(() => {
     if (open) {
@@ -165,8 +168,8 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
         type:          initial?.type ?? 'cron',
         cronExpr:      initial?.cronExpr ?? '0 0 * * * *',
         runAt:         initial?.runAt ? dayjs(initial.runAt) : null,
-         modelId:       initial?.provider ? initial?.modelId ?? '' : '',
-        systemPrompt:  initial?.systemPrompt ?? undefined,
+        modelId:       (initial?.provider || singleProvider) ? initial?.modelId ?? '' : '',
+        systemPrompt:  initial?.systemPrompt ?? systemPrompts[0]?.name ?? undefined,
         allowedTools:  initial?.allowedTools ?? undefined,
         params:        initial?.params ?? {},
         traceEnabled:  initial?.traceEnabled == null ? 'default' : initial.traceEnabled ? 'on' : 'off',
@@ -174,7 +177,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
         enabled:       initial?.enabled ?? true,
       })
     }
-  }, [open, initial, form])
+  }, [open, initial, form, singleProvider, systemPrompts])
 
   const handleOk = async () => {
     try {
@@ -189,7 +192,7 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
         enabled:       values.enabled,
         retainHistory: values.retainHistory ?? 0,
         modelId:       values.modelId || undefined,
-        provider:      providerFilter || undefined,
+        provider:      effectiveProviderFilter || undefined,
         systemPrompt:  values.systemPrompt || undefined,
         allowedTools:  values.allowedTools?.length ? values.allowedTools : null,
         params:        hasParams ? p : null,
@@ -212,8 +215,6 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
     form.resetFields()
     onClose()
   }
-
-  const systemPrompts = uiConfig.systemPrompts ?? []
 
   return (
     open ? (
@@ -312,38 +313,36 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
             <div className="form-section">
               <Text strong className="section-title">Model</Text>
               <div className="two-col">
-                {isMultiProvider ? (
-                  <Form.Item label="Provider" extra="Auto = server picks provider based on selection method">
-                    <Select
-                      value={providerFilter}
-                      onChange={(v: string) => {
-                        setProviderFilter(v)
-                        form.setFieldValue('modelId', '')
-                      }}
-                      showSearch={{ filterOption: (input, opt) => {
-                        if (!input) return true
-                        const q = input.toLowerCase()
-                        return String(opt?.label ?? '').toLowerCase().includes(q) || String(opt?.value ?? '').toLowerCase().includes(q)
-                      } }}
-                      placeholder="Auto"
-                      options={[
-                        { label: 'Auto', value: '' },
-                        ...providerNames.map(p => ({ label: p, value: p })),
-                      ]}
-                    />
-                  </Form.Item>
-                ) : <div />}
-
-                <Form.Item name="modelId" label="Model" extra={providerFilter ? 'Choose a model for the selected provider' : 'Auto provider keeps model on Auto'}>
+                <Form.Item label="Provider" extra="Auto = server picks provider based on selection method">
                   <Select
-                    key={`schedule-model-${providerFilter || 'auto'}`}
+                    value={providerFilter}
+                    onChange={(v: string) => {
+                      setProviderFilter(v)
+                      form.setFieldValue('modelId', '')
+                    }}
+                    showSearch={{ filterOption: (input, opt) => {
+                      if (!input) return true
+                      const q = input.toLowerCase()
+                      return String(opt?.label ?? '').toLowerCase().includes(q) || String(opt?.value ?? '').toLowerCase().includes(q)
+                    } }}
+                    placeholder="Auto"
+                    options={[
+                      { label: 'Auto', value: '' },
+                      ...providerNames.map(p => ({ label: p, value: p })),
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item name="modelId" label="Model" extra={effectiveProviderFilter ? 'Choose a model for the selected provider' : 'Auto provider keeps model on Auto'}>
+                  <Select
+                    key={`schedule-model-${effectiveProviderFilter || 'auto'}`}
                     showSearch={{ filterOption: (input, opt) =>
                       !input ||
                       String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
                       String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
                     }}
                     placeholder="Auto"
-                    disabled={!providerFilter || loadingProviderModels}
+                    disabled={!effectiveProviderFilter || loadingProviderModels}
                     options={[
                       { value: '', label: 'Auto' },
                       ...[...providerModels]
@@ -369,13 +368,12 @@ export function ScheduleForm({ open, initial, models, tools, uiConfig, onSubmit,
 
               <div className="two-col">
                 {systemPrompts.length > 0 ? (
-                  <Form.Item name="systemPrompt" label="System prompt" extra="Blank = default">
+                  <Form.Item name="systemPrompt" label="System prompt" rules={[{ required: true, message: 'System prompt is required' }]}>
                     <Select
-                      allowClear
                       showSearch={{ filterOption: (input, opt) =>
                         !input || String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                       }}
-                      placeholder="Default prompt"
+                      placeholder="Select a system prompt"
                       options={[...systemPrompts]
                         .sort((a, b) => a.name.localeCompare(b.name))
                         .map(p => ({ value: p.name, label: p.name }))}

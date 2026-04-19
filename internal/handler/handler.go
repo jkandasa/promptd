@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"promptd/internal/auth"
 	"promptd/internal/chat"
 	"promptd/internal/storage"
 	"promptd/internal/tools"
@@ -53,6 +54,29 @@ type ModelSelector struct {
 	mu              sync.Mutex
 }
 
+func (m *ModelSelector) selectModel(models []ModelInfo, preferredModel string) (string, string) {
+	if len(models) == 0 {
+		return "", ""
+	}
+	if preferredModel != "" {
+		for _, model := range models {
+			if model.ID == preferredModel {
+				return model.ID, model.Name
+			}
+		}
+	}
+	switch m.selectionMethod {
+	case "random":
+		idx := rand.Intn(len(models))
+		return models[idx].ID, models[idx].Name
+	default:
+		idx := m.currentIndex % len(models)
+		model := models[idx]
+		m.currentIndex = (m.currentIndex + 1) % len(models)
+		return model.ID, model.Name
+	}
+}
+
 func NewModelSelector(models []ModelInfo, selectionMethod string) *ModelSelector {
 	if len(models) == 0 {
 		models = []ModelInfo{{ID: "anthropic/claude-sonnet-4-6"}}
@@ -79,26 +103,13 @@ func (m *ModelSelector) SetRefreshInterval(d time.Duration) {
 func (m *ModelSelector) GetModel(preferredModel string) (string, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.selectModel(m.models, preferredModel)
+}
 
-	// If user specified a model, use that
-	if preferredModel != "" {
-		for _, model := range m.models {
-			if model.ID == preferredModel {
-				return model.ID, model.Name
-			}
-		}
-	}
-
-	// Use selection method (random or round_robin)
-	switch m.selectionMethod {
-	case "random":
-		idx := rand.Intn(len(m.models))
-		return m.models[idx].ID, m.models[idx].Name
-	default: // round_robin
-		model := m.models[m.currentIndex]
-		m.currentIndex = (m.currentIndex + 1) % len(m.models)
-		return model.ID, model.Name
-	}
+func (m *ModelSelector) GetModelFromCandidates(candidates []ModelInfo, preferredModel string) (string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectModel(candidates, preferredModel)
 }
 
 func (m *ModelSelector) GetAvailableModels() []ModelInfo {
@@ -329,23 +340,47 @@ type Handler struct {
 	providers           *ProviderRegistry
 	systemPrompts       map[string]string
 	defaultSystemPrompt string
+	compactConfig       CompactConversationConfig
 	registry            *tools.Registry
 	store               *chat.SessionStore
 	storageStore        storage.Store
+	authService         *auth.Service
 	log                 *zap.Logger
 	staticFS            fs.FS
 	uiConfig            UIConfig
-	uploadDir           string
+	uploadRoot          string
 	TraceEnabled        bool
 }
 
 type UIConfig struct {
-	AppName           string             `json:"appName,omitempty"`
-	AppIcon           string             `json:"appIcon,omitempty"`
-	WelcomeTitle      string             `json:"welcomeTitle"`
-	AIDisclaimer      string             `json:"aiDisclaimer"`
-	PromptSuggestions []string           `json:"promptSuggestions"`
-	SystemPrompts     []SystemPromptInfo `json:"systemPrompts,omitempty"`
+	AppName             string                      `json:"appName,omitempty"`
+	AppIcon             string                      `json:"appIcon,omitempty"`
+	WelcomeTitle        string                      `json:"welcomeTitle"`
+	AIDisclaimer        string                      `json:"aiDisclaimer"`
+	PromptSuggestions   []string                    `json:"promptSuggestions"`
+	SystemPrompts       []SystemPromptInfo          `json:"systemPrompts,omitempty"`
+	CompactConversation CompactConversationUIConfig `json:"compactConversation,omitempty"`
+}
+
+type CompactConversationConfig struct {
+	Enabled       bool
+	Provider      string
+	Model         string
+	DefaultPrompt string
+	AfterMessages int
+	AfterTokens   int
+}
+
+type CompactConversationUIConfig struct {
+	Enabled       bool   `json:"enabled,omitempty"`
+	DefaultPrompt string `json:"defaultPrompt,omitempty"`
+	AfterMessages int    `json:"afterMessages,omitempty"`
+	AfterTokens   int    `json:"afterTokens,omitempty"`
+}
+
+type compactConversationRequest struct {
+	Prompt string `json:"prompt,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 type SystemPromptInfo struct {
@@ -353,33 +388,35 @@ type SystemPromptInfo struct {
 }
 
 // New creates a Handler.
-func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadDir string, traceEnabled bool) *Handler {
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		log.Fatal("failed to create upload directory", zap.String("dir", uploadDir), zap.Error(err))
+func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, compactConfig CompactConversationConfig, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, authService *auth.Service, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadRoot string, traceEnabled bool) *Handler {
+	if err := os.MkdirAll(uploadRoot, 0755); err != nil {
+		log.Fatal("failed to create upload directory", zap.String("dir", uploadRoot), zap.Error(err))
 	}
 	return &Handler{
 		providers:           providers,
 		systemPrompts:       systemPrompts,
 		defaultSystemPrompt: defaultSystemPrompt,
+		compactConfig:       compactConfig,
 		registry:            registry,
 		store:               store,
 		storageStore:        storageStore,
+		authService:         authService,
 		log:                 log,
 		staticFS:            staticFS,
 		uiConfig:            uiConfig,
-		uploadDir:           uploadDir,
+		uploadRoot:          uploadRoot,
 		TraceEnabled:        traceEnabled,
 	}
 }
 
 type chatRequest struct {
-	SessionID    string    `json:"session_id"`
-	Message      string    `json:"message"`
+	SessionID    string                 `json:"session_id"`
+	Message      string                 `json:"message"`
 	Files        []storage.UploadedFile `json:"files,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	Provider     string    `json:"provider,omitempty"`
-	SystemPrompt string    `json:"system_prompt,omitempty"`
-	Params       LLMParams `json:"params,omitempty"` // UI overrides; zero values ignored
+	Model        string                 `json:"model,omitempty"`
+	Provider     string                 `json:"provider,omitempty"`
+	SystemPrompt string                 `json:"system_prompt,omitempty"`
+	Params       LLMParams              `json:"params,omitempty"` // UI overrides; zero values ignored
 }
 
 type chatResponse struct {
@@ -393,6 +430,7 @@ type chatResponse struct {
 	AssistantMsgID string              `json:"assistant_msg_id"`
 	Trace          []storage.LLMRound  `json:"trace,omitempty"`
 	UsedParams     *storage.UsedParams `json:"used_params,omitempty"`
+	CompactSummary *storage.Message    `json:"compact_summary,omitempty"`
 }
 
 type errorResponse struct {
@@ -402,26 +440,149 @@ type errorResponse struct {
 	ErrorMsgID string `json:"error_msg_id,omitempty"`
 }
 
-func (h *Handler) buildMessages(session *chat.Session, currentFiles []storage.UploadedFile) []openai.ChatCompletionMessage {
-	var messages []openai.ChatCompletionMessage
-	promptName := session.SystemPrompt()
-	if promptName == "" {
-		promptName = h.defaultSystemPrompt
+func requestPrincipal(r *http.Request) *auth.Principal {
+	return auth.PrincipalFromContext(r.Context())
+}
+
+func requestScope(r *http.Request) storage.Scope {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		return storage.Scope{}
 	}
+	return storage.Scope{TenantID: principal.Scope.TenantID, UserID: principal.Scope.UserID}
+}
+
+func (h *Handler) uploadDir(scope storage.Scope) string {
+	return filepath.Join(h.uploadRoot, "tenants", scope.TenantID, "users", scope.UserID, "uploads")
+}
+
+func (h *Handler) uploadPath(scope storage.Scope, fileID string) string {
+	return filepath.Join(h.uploadDir(scope), fileID)
+}
+
+func (h *Handler) promptNamesForPolicy(policy auth.EffectivePolicy) []SystemPromptInfo {
+	filtered := make([]SystemPromptInfo, 0, len(h.uiConfig.SystemPrompts))
+	for _, info := range h.uiConfig.SystemPrompts {
+		if policy.AllowPrompt(info.Name) {
+			filtered = append(filtered, info)
+		}
+	}
+	return filtered
+}
+
+func stripConversationTrace(conv *storage.Conversation) *storage.Conversation {
+	copyConv := *conv
+	copyConv.Messages = make([]storage.Message, len(conv.Messages))
+	copy(copyConv.Messages, conv.Messages)
+	for i := range copyConv.Messages {
+		copyConv.Messages[i].Trace = nil
+	}
+	return &copyConv
+}
+
+func (h *Handler) buildMessages(scope storage.Scope, session *chat.Session, currentFiles []storage.UploadedFile) []openai.ChatCompletionMessage {
+	var messages []openai.ChatCompletionMessage
+	conv := session.Snapshot()
+	promptName := session.SystemPrompt()
 	if prompt := h.systemPrompts[promptName]; prompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: prompt,
 		})
 	}
-	history := filterHistory(session.History())
+	if summary := h.compactionSummaryMessage(conv); summary != nil {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: "Conversation summary so far:\n" + summary.Content,
+		})
+	}
+	history := filterHistory(storage.ToOpenAI(h.messagesAfterCompaction(conv)))
 	if len(currentFiles) > 0 && len(history) > 0 {
 		last := len(history) - 1
 		if history[last].Role == openai.ChatMessageRoleUser {
-			history[last] = h.buildUserLLMMessage(history[last].Content, currentFiles)
+			history[last] = h.buildUserLLMMessage(scope, history[last].Content, currentFiles)
 		}
 	}
 	return append(messages, history...)
+}
+
+func (h *Handler) messagesAfterCompaction(conv storage.Conversation) []storage.Message {
+	if conv.CompactedThroughMessageID == "" {
+		return filterCompactionMessages(conv.Messages)
+	}
+	msgs := make([]storage.Message, 0, len(conv.Messages))
+	seenCutoff := false
+	for _, msg := range conv.Messages {
+		if msg.CompactSummary || msg.ID == conv.CompactSummaryMessageID {
+			continue
+		}
+		if seenCutoff {
+			msgs = append(msgs, msg)
+		}
+		if msg.ID == conv.CompactedThroughMessageID {
+			seenCutoff = true
+		}
+	}
+	if !seenCutoff {
+		return filterCompactionMessages(conv.Messages)
+	}
+	return msgs
+}
+
+func filterCompactionMessages(msgs []storage.Message) []storage.Message {
+	filtered := make([]storage.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg.CompactSummary {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
+}
+
+func (h *Handler) compactionSummaryMessage(conv storage.Conversation) *storage.Message {
+	if conv.CompactSummaryMessageID == "" {
+		return nil
+	}
+	for i := range conv.Messages {
+		if conv.Messages[i].ID == conv.CompactSummaryMessageID || conv.Messages[i].CompactSummary {
+			return &conv.Messages[i]
+		}
+	}
+	return nil
+}
+
+func countUserMessages(msgs []storage.Message) int {
+	count := 0
+	for _, msg := range msgs {
+		if msg.CompactSummary {
+			continue
+		}
+		if msg.Role == openai.ChatMessageRoleUser {
+			count++
+		}
+	}
+	return count
+}
+
+func estimateMessageTokens(msgs []storage.Message) int {
+	total := 0
+	for _, msg := range msgs {
+		if msg.CompactSummary {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content != "" {
+			total += 4 + (len([]rune(content)) / 4)
+		}
+		total += 6
+		if msg.Role == openai.ChatMessageRoleUser && len(msg.Files) > 0 {
+			for _, file := range msg.Files {
+				total += 8 + (len([]rune(file.Filename)) / 4)
+			}
+		}
+	}
+	return total
 }
 
 const maxInlinedTextFileBytes = 128 * 1024
@@ -442,13 +603,13 @@ func (h *Handler) buildUserMessageContent(message string, files []storage.Upload
 	return b.String()
 }
 
-func (h *Handler) buildUserLLMMessage(content string, files []storage.UploadedFile) openai.ChatCompletionMessage {
+func (h *Handler) buildUserLLMMessage(scope storage.Scope, content string, files []storage.UploadedFile) openai.ChatCompletionMessage {
 	parts := []openai.ChatMessagePart{{
 		Type: openai.ChatMessagePartTypeText,
-		Text: h.buildAttachmentText(content, files),
+		Text: h.buildAttachmentText(scope, content, files),
 	}}
 	for _, f := range files {
-		imageURL, ok := h.inlineImageDataURL(f)
+		imageURL, ok := h.inlineImageDataURL(scope, f)
 		if !ok {
 			continue
 		}
@@ -463,7 +624,7 @@ func (h *Handler) buildUserLLMMessage(content string, files []storage.UploadedFi
 	return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
 }
 
-func (h *Handler) buildAttachmentText(content string, files []storage.UploadedFile) string {
+func (h *Handler) buildAttachmentText(scope storage.Scope, content string, files []storage.UploadedFile) string {
 	if len(files) == 0 {
 		return content
 	}
@@ -475,7 +636,7 @@ func (h *Handler) buildAttachmentText(content string, files []storage.UploadedFi
 	b.WriteString("Attachment details:\n")
 	for _, f := range files {
 		fmt.Fprintf(&b, "- %s", f.Filename)
-		text, note := h.readAttachmentForPrompt(f)
+		text, note := h.readAttachmentForPrompt(scope, f)
 		switch {
 		case text != "":
 			fmt.Fprintf(&b, "\n  Inlined contents:\n%s\n", indentText(text, "  "))
@@ -488,8 +649,8 @@ func (h *Handler) buildAttachmentText(content string, files []storage.UploadedFi
 	return strings.TrimSpace(b.String())
 }
 
-func (h *Handler) readAttachmentForPrompt(file storage.UploadedFile) (string, string) {
-	data, err := h.readUploadedFile(file)
+func (h *Handler) readAttachmentForPrompt(scope storage.Scope, file storage.UploadedFile) (string, string) {
+	data, err := h.readUploadedFile(scope, file)
 	if err != nil {
 		return "", "attachment could not be read by the server"
 	}
@@ -506,8 +667,8 @@ func (h *Handler) readAttachmentForPrompt(file storage.UploadedFile) (string, st
 	return string(data), ""
 }
 
-func (h *Handler) inlineImageDataURL(file storage.UploadedFile) (string, bool) {
-	data, err := h.readUploadedFile(file)
+func (h *Handler) inlineImageDataURL(scope storage.Scope, file storage.UploadedFile) (string, bool) {
+	data, err := h.readUploadedFile(scope, file)
 	if err != nil || !isImageFile(file.Filename, data) {
 		return "", false
 	}
@@ -521,9 +682,10 @@ func (h *Handler) inlineImageDataURL(file storage.UploadedFile) (string, bool) {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), true
 }
 
-func (h *Handler) readUploadedFile(file storage.UploadedFile) ([]byte, error) {
-	filePath := filepath.Join(h.uploadDir, file.ID)
-	if !isUnderDir(filePath, h.uploadDir) {
+func (h *Handler) readUploadedFile(scope storage.Scope, file storage.UploadedFile) ([]byte, error) {
+	filePath := h.uploadPath(scope, file.ID)
+	uploadDir := h.uploadDir(scope)
+	if !isUnderDir(filePath, uploadDir) {
 		return nil, fmt.Errorf("forbidden path")
 	}
 	return os.ReadFile(filePath)
@@ -589,8 +751,9 @@ func (h *Handler) removeUploadedFiles(files []storage.UploadedFile) {
 		if file.ID == "" {
 			continue
 		}
-		filePath := filepath.Join(h.uploadDir, file.ID)
-		if !isUnderDir(filePath, h.uploadDir) {
+		filePath := h.uploadPath(storage.Scope{TenantID: file.TenantID, UserID: file.UserID}, file.ID)
+		uploadDir := h.uploadDir(storage.Scope{TenantID: file.TenantID, UserID: file.UserID})
+		if !isUnderDir(filePath, uploadDir) {
 			h.log.Warn("refused to delete attachment outside upload dir", zap.String("file_id", file.ID), zap.String("path", filePath))
 			continue
 		}
@@ -693,10 +856,23 @@ func filterHistory(history []openai.ChatCompletionMessage) []openai.ChatCompleti
 
 func (h *Handler) hasSystemPrompt(promptName string) bool {
 	if promptName == "" {
-		return true
+		return false
 	}
 	_, ok := h.systemPrompts[promptName]
 	return ok
+}
+
+func (h *Handler) requireAllowedSystemPrompt(principal *auth.Principal, promptName string) error {
+	if promptName == "" {
+		return fmt.Errorf("system prompt is required")
+	}
+	if !h.hasSystemPrompt(promptName) {
+		return fmt.Errorf("invalid system prompt")
+	}
+	if !principal.Policy.AllowPrompt(promptName) {
+		return fmt.Errorf("system prompt not allowed")
+	}
+	return nil
 }
 
 // traceUsage converts an openai.Usage to our storage.TokenUsage, including
@@ -726,11 +902,21 @@ const maxToolIterations = 20
 // Returns the reply text, the final assistant message, model used, LLM call count,
 // tool call count, the full trace of all LLM round-trips, the effective params used,
 // and any error.
-func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams, currentFiles []storage.UploadedFile) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
+func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams, currentFiles []storage.UploadedFile) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
-	model, _, providerUsed, llmClient := h.providers.ResolveModelWithProvider(preferredModel, provider)
+	scope := storage.Scope{TenantID: principal.Scope.TenantID, UserID: principal.Scope.UserID}
+	if preferredModel != "" && provider != "" && !principal.Policy.AllowModel(provider, preferredModel) {
+		return "", openai.ChatCompletionMessage{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q is not allowed", preferredModel)
+	}
+	model, _, providerUsed, llmClient := h.resolveAllowedModel(principal, preferredModel, provider)
+	if model == "" || providerUsed == "" || llmClient == nil {
+		return "", openai.ChatCompletionMessage{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("no allowed model available")
+	}
+	if !principal.Policy.AllowModel(providerUsed, model) {
+		return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
+	}
 
 	// Resolve effective params: model-config defaults, overridden by UI request.
 	modelParams := h.providers.GetModelParamsForProvider(model, provider)
@@ -766,7 +952,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
-		requestMsgs := h.buildMessages(session, currentFiles)
+		requestMsgs := h.buildMessages(scope, session, currentFiles)
 		req := openai.ChatCompletionRequest{
 			Model:    model,
 			Messages: requestMsgs,
@@ -781,7 +967,10 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 			req.TopP = *modelParams.TopP
 		}
 		if h.registry != nil && !h.registry.Empty() {
-			req.Tools = h.registry.OpenAITools()
+			allowedTools := principal.Policy.FilterAllowedToolNames(h.registry.Names())
+			if len(allowedTools) > 0 {
+				req.Tools = h.registry.OpenAIToolsByNames(allowedTools)
+			}
 		}
 
 		// Snapshot available tools for the trace before the API call.
@@ -849,7 +1038,7 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 		for _, tc := range choice.Message.ToolCalls {
 			toolCalls++
 			toolStart := time.Now()
-			result, toolErr := h.executeTool(ctx, tc)
+			result, toolErr := h.executeTool(ctx, principal, tc)
 			toolDurationMs := time.Since(toolStart).Milliseconds()
 			h.log.Debug("tool executed",
 				zap.String("tool", tc.Function.Name),
@@ -881,7 +1070,195 @@ func (h *Handler) runLLM(ctx context.Context, sessionID string, session *chat.Se
 	}
 }
 
-func (h *Handler) executeTool(ctx context.Context, tc openai.ToolCall) (string, error) {
+func (h *Handler) resolveAllowedModel(principal *auth.Principal, preferredModel, provider string) (string, string, string, *openai.Client) {
+	if preferredModel != "" {
+		return h.providers.ResolveModelWithProvider(preferredModel, provider)
+	}
+
+	h.providers.mu.RLock()
+	defer h.providers.mu.RUnlock()
+
+	if provider != "" {
+		entry, ok := h.providers.byName[provider]
+		if !ok {
+			return "", "", "", nil
+		}
+		allowed := make([]ModelInfo, 0)
+		for _, candidate := range entry.ModelSelector.GetAvailableModels() {
+			if principal.Policy.AllowModel(entry.Name, candidate.ID) {
+				allowed = append(allowed, candidate)
+			}
+		}
+		model, name := entry.ModelSelector.GetModelFromCandidates(allowed, "")
+		return model, name, entry.Name, entry.Client
+	}
+
+	for _, entry := range h.providers.providers {
+		allowed := make([]ModelInfo, 0)
+		for _, candidate := range entry.ModelSelector.GetAvailableModels() {
+			if principal.Policy.AllowModel(entry.Name, candidate.ID) {
+				allowed = append(allowed, candidate)
+			}
+		}
+		if len(allowed) == 0 {
+			continue
+		}
+		model, name := entry.ModelSelector.GetModelFromCandidates(allowed, "")
+		return model, name, entry.Name, entry.Client
+	}
+
+	return "", "", "", nil
+}
+
+func (h *Handler) compactionPrompt(override string) string {
+	prompt := strings.TrimSpace(override)
+	if prompt != "" {
+		return prompt
+	}
+	prompt = strings.TrimSpace(h.compactConfig.DefaultPrompt)
+	if prompt != "" {
+		return prompt
+	}
+	return "Summarize the conversation so far. Preserve user goals, decisions, constraints, file references, and unresolved issues. Omit repetition and casual filler."
+}
+
+func compactableMessages(conv storage.Conversation, excludeTrailingUser bool) ([]storage.Message, string) {
+	msgs := filterCompactionMessages(conv.Messages)
+	if conv.CompactedThroughMessageID != "" {
+		seenCutoff := false
+		filtered := make([]storage.Message, 0, len(msgs))
+		for _, msg := range msgs {
+			if seenCutoff {
+				filtered = append(filtered, msg)
+			}
+			if msg.ID == conv.CompactedThroughMessageID {
+				seenCutoff = true
+			}
+		}
+		if seenCutoff {
+			msgs = filtered
+		}
+	}
+	if excludeTrailingUser && len(msgs) > 0 && msgs[len(msgs)-1].Role == openai.ChatMessageRoleUser {
+		msgs = msgs[:len(msgs)-1]
+	}
+	if len(msgs) == 0 {
+		return nil, ""
+	}
+	return msgs, msgs[len(msgs)-1].ID
+}
+
+func formatCompactionTranscript(msgs []storage.Message) string {
+	var b strings.Builder
+	for _, msg := range msgs {
+		role := strings.ToUpper(msg.Role)
+		if role == strings.ToUpper(storage.MessageRoleError) {
+			role = "ERROR"
+		}
+		b.WriteString(role)
+		b.WriteString(":\n")
+		b.WriteString(strings.TrimSpace(msg.Content))
+		if len(msg.Files) > 0 {
+			b.WriteString("\nAttachments:")
+			for _, file := range msg.Files {
+				b.WriteString("\n- ")
+				b.WriteString(file.Filename)
+			}
+		}
+		b.WriteString("\n\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (h *Handler) maybeAutoCompact(ctx context.Context, principal *auth.Principal, session *chat.Session) *storage.Message {
+	if !h.compactConfig.Enabled || (h.compactConfig.AfterMessages <= 0 && h.compactConfig.AfterTokens <= 0) {
+		return nil
+	}
+	conv := session.Snapshot()
+	msgs, _ := compactableMessages(conv, true)
+	userMessageCount := countUserMessages(msgs)
+	estimatedTokens := estimateMessageTokens(msgs)
+	hitMessageThreshold := h.compactConfig.AfterMessages > 0 && userMessageCount >= h.compactConfig.AfterMessages
+	hitTokenThreshold := h.compactConfig.AfterTokens > 0 && estimatedTokens >= h.compactConfig.AfterTokens
+	if !hitMessageThreshold && !hitTokenThreshold {
+		return nil
+	}
+	msg, err := h.compactConversation(ctx, principal, session, "", "", true)
+	if err != nil {
+		h.log.Warn("auto compaction skipped", zap.String("session_id", session.ID()), zap.Error(err))
+		return nil
+	}
+	return msg
+}
+
+func (h *Handler) compactConversation(ctx context.Context, principal *auth.Principal, session *chat.Session, promptOverride, modelOverride string, excludeTrailingUser bool) (*storage.Message, error) {
+	conv := session.Snapshot()
+	msgs, compactedThroughID := compactableMessages(conv, excludeTrailingUser)
+	if len(msgs) == 0 || compactedThroughID == "" {
+		return nil, fmt.Errorf("no messages available to compact")
+	}
+	prompt := h.compactionPrompt(promptOverride)
+	providerPreference := strings.TrimSpace(h.compactConfig.Provider)
+	modelPreference := strings.TrimSpace(modelOverride)
+	if modelPreference == "" {
+		modelPreference = strings.TrimSpace(h.compactConfig.Model)
+	}
+	modelID, _, providerUsed, client := h.resolveAllowedModel(principal, modelPreference, providerPreference)
+	if modelID != "" && providerUsed != "" && !principal.Policy.AllowModel(providerUsed, modelID) {
+		modelID, _, providerUsed, client = h.resolveAllowedModel(principal, "", providerPreference)
+	}
+	if modelID == "" || providerUsed == "" || client == nil {
+		modelID, _, providerUsed, client = h.resolveAllowedModel(principal, "", "")
+	}
+	if modelID == "" || providerUsed == "" || client == nil {
+		return nil, fmt.Errorf("no allowed model available for compaction")
+	}
+	requestMessages := []openai.ChatCompletionMessage{{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: prompt,
+	}}
+	if summary := h.compactionSummaryMessage(conv); summary != nil && strings.TrimSpace(summary.Content) != "" {
+		requestMessages = append(requestMessages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "Existing summary:\n" + strings.TrimSpace(summary.Content),
+		})
+	}
+	requestMessages = append(requestMessages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: "New conversation content to merge into the rolling summary:\n\n" + formatCompactionTranscript(msgs),
+	})
+	started := time.Now()
+	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{Model: modelID, Messages: requestMessages})
+	if err != nil {
+		return nil, fmt.Errorf("compact conversation: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("compact conversation returned no choices")
+	}
+	content := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if content == "" {
+		return nil, fmt.Errorf("compact conversation returned empty summary")
+	}
+	trace := []storage.LLMRound{{
+		Request:       storage.ToTraceMessages(requestMessages),
+		Response:      storage.ToTraceMessage(resp.Choices[0].Message),
+		LLMDurationMs: time.Since(started).Milliseconds(),
+		Usage:         traceUsage(resp.Usage),
+	}}
+	msgID := session.SetCompactionSummary(content, prompt, modelID, providerUsed, compactedThroughID, time.Since(started).Milliseconds(), 1, trace)
+	updated := session.Snapshot()
+	for i := range updated.Messages {
+		if updated.Messages[i].ID == msgID {
+			return &updated.Messages[i], nil
+		}
+	}
+	return nil, fmt.Errorf("failed to persist compact summary")
+}
+
+func (h *Handler) executeTool(ctx context.Context, principal *auth.Principal, tc openai.ToolCall) (string, error) {
+	if principal != nil && !principal.Policy.AllowTool(tc.Function.Name) {
+		return fmt.Sprintf("tool %q is not allowed", tc.Function.Name), nil
+	}
 	tool, ok := h.registry.Get(tc.Function.Name)
 	if !ok {
 		return fmt.Sprintf("tool %q not found", tc.Function.Name), nil
@@ -898,6 +1275,11 @@ func (h *Handler) executeTool(ctx context.Context, tc openai.ToolCall) (string, 
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.Chat {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "chat not allowed"})
+		return
+	}
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
@@ -912,16 +1294,25 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	scope := requestScope(r)
 
-	session := h.store.Get(req.SessionID)
+	session := h.store.Get(scope, req.SessionID)
 
 	userContent := h.buildUserMessageContent(req.Message, req.Files)
 
 	// Record the user's explicit model choice before the first persist so it's
 	// included in the very first save (triggered by Add below).
-	if !h.hasSystemPrompt(req.SystemPrompt) {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid system prompt"})
+	if err := h.requireAllowedSystemPrompt(principal, req.SystemPrompt); err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "system prompt not allowed" {
+			status = http.StatusForbidden
+		}
+		writeJSON(w, status, errorResponse{Error: err.Error()})
 		return
+	}
+	for i := range req.Files {
+		req.Files[i].TenantID = scope.TenantID
+		req.Files[i].UserID = scope.UserID
 	}
 	session.SetModel(req.Model)
 	session.SetProvider(req.Provider)
@@ -939,8 +1330,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	session.SetParams(convParams)
 	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent, req.Files)
+	compactSummary := h.maybeAutoCompact(r.Context(), principal, session)
 
-	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
+	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), principal, req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		errorMsgID := session.AddErrorMessage(err.Error(), model, providerUsed)
@@ -951,17 +1343,28 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	timeTaken := time.Since(start).Milliseconds()
 	assistantMsgID := session.AddFinalMessage(finalMsg, model, providerUsed, timeTaken, llmCalls, toolCalls, trace, usedParams)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model), zap.String("provider", providerUsed))
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, Provider: providerUsed, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams})
+	if !principal.Policy.Permissions.TracesRead {
+		trace = nil
+		if compactSummary != nil {
+			compactSummary.Trace = nil
+		}
+	}
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, Provider: providerUsed, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams, CompactSummary: compactSummary})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.Chat {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "chat not allowed"})
+		return
+	}
 	var req struct {
 		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SessionID == "" {
 		req.SessionID = "default"
 	}
-	h.store.Get(req.SessionID).Reset()
+	h.store.Get(requestScope(r), req.SessionID).Reset()
 	h.log.Info("session reset", zap.String("session_id", req.SessionID))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1007,11 +1410,58 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID   string `json:"user_id"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	principal, err := h.authService.AuthenticatePassword(req.UserID, req.Password)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid credentials"})
+		return
+	}
+	if err := h.authService.IssueSessionCookie(w, principal); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to issue session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.authService.ToMeResponse(principal))
+}
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	h.authService.ClearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
+	principal, err := h.authService.AuthenticateRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.authService.ToMeResponse(principal))
+}
+
 func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.uiConfig)
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	cfg := h.uiConfig
+	cfg.SystemPrompts = h.promptNamesForPolicy(principal.Policy)
+	writeJSON(w, http.StatusOK, cfg)
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
 	providerFilter := r.URL.Query().Get("provider")
 	discover := r.URL.Query().Get("discover") == "true"
 	if discover {
@@ -1041,7 +1491,25 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	} else {
 		models = h.providers.AllModels()
 	}
+	filteredModels := make([]ModelInfo, 0, len(models))
+	for _, model := range models {
+		if principal.Policy.AllowModel(model.Provider, model.ID) {
+			filteredModels = append(filteredModels, model)
+		}
+	}
 	providerInfos := h.providers.GetProviderInfos()
+	providerCounts := make(map[string]int)
+	for _, model := range filteredModels {
+		providerCounts[model.Provider]++
+	}
+	filteredProviders := make([]ProviderInfo, 0, len(providerInfos))
+	for _, provider := range providerInfos {
+		if providerCounts[provider.Name] == 0 {
+			continue
+		}
+		provider.Count = providerCounts[provider.Name]
+		filteredProviders = append(filteredProviders, provider)
+	}
 
 	sources := make(map[string]bool)
 	for _, p := range providerInfos {
@@ -1057,11 +1525,11 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"models":           models,
-		"providers":        providerInfos,
+		"models":           filteredModels,
+		"providers":        filteredProviders,
 		"selection_method": "round_robin",
 		"source":           overallSource,
-		"count":            len(models),
+		"count":            len(filteredModels),
 		"updated_at":       time.Now().Format(time.RFC3339),
 		"global_params":    LLMParams{},
 	}
@@ -1126,14 +1594,25 @@ func (h *Handler) StartAutoDiscover(ctx context.Context, providerName string, in
 
 // ListTools returns all registered tools with their name and description.
 func (h *Handler) ListTools(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
 	if h.registry == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"tools": []any{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.List()})
+	allowedTools := principal.Policy.FilterAllowedToolNames(h.registry.Names())
+	writeJSON(w, http.StatusOK, map[string]any{"tools": h.registry.ListByNames(allowedTools)})
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.Upload {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "upload not allowed"})
+		return
+	}
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to parse form"})
 		return
@@ -1148,8 +1627,14 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// Use a UUID as the stored filename to avoid path traversal and name collisions.
 	// The original filename is preserved only in the response metadata.
+	scope := requestScope(r)
+	uploadDir := h.uploadDir(scope)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save file"})
+		return
+	}
 	fileID := uuid.New().String()
-	filePath := filepath.Join(h.uploadDir, fileID)
+	filePath := filepath.Join(uploadDir, fileID)
 
 	out, err := os.Create(filePath)
 	if err != nil {
@@ -1174,6 +1659,8 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		Size:      header.Size,
 		URL:       "/api/files/" + fileID,
 		CreatedAt: time.Now().UnixMilli(),
+		TenantID:  scope.TenantID,
+		UserID:    scope.UserID,
 	}
 
 	h.log.Info("file uploaded", zap.String("filename", header.Filename), zap.String("id", fileID))
@@ -1181,14 +1668,21 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.Upload {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	fileID := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if fileID == "" {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
-	filePath := filepath.Join(h.uploadDir, fileID)
-	if !isUnderDir(filePath, h.uploadDir) {
+	scope := requestScope(r)
+	uploadDir := h.uploadDir(scope)
+	filePath := filepath.Join(uploadDir, fileID)
+	if !isUnderDir(filePath, uploadDir) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -1196,14 +1690,21 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.Upload {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "upload not allowed"})
+		return
+	}
 	fileID := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if fileID == "" {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
-	filePath := filepath.Join(h.uploadDir, fileID)
-	if !isUnderDir(filePath, h.uploadDir) {
+	scope := requestScope(r)
+	uploadDir := h.uploadDir(scope)
+	filePath := filepath.Join(uploadDir, fileID)
+	if !isUnderDir(filePath, uploadDir) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -1226,11 +1727,16 @@ func isUnderDir(path, dir string) bool {
 
 // ListConversations returns all conversations (without messages) ordered newest-first.
 func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsRead {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation access not allowed"})
+		return
+	}
 	if h.storageStore == nil {
 		writeJSON(w, http.StatusOK, []*storage.Conversation{})
 		return
 	}
-	convs, err := h.storageStore.List()
+	convs, err := h.storageStore.List(requestScope(r))
 	if err != nil {
 		h.log.Error("failed to list conversations", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list conversations"})
@@ -1241,6 +1747,11 @@ func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
 
 // GetConversation returns a single conversation including full message history.
 func (h *Handler) GetConversation(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsRead {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation access not allowed"})
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
@@ -1250,7 +1761,7 @@ func (h *Handler) GetConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
 		return
 	}
-	conv, err := h.storageStore.Load(id)
+	conv, err := h.storageStore.Load(requestScope(r), id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
@@ -1260,19 +1771,70 @@ func (h *Handler) GetConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if !principal.Policy.Permissions.TracesRead {
+		writeJSON(w, http.StatusOK, stripConversationTrace(conv))
+		return
+	}
 	writeJSON(w, http.StatusOK, conv)
 }
 
-// DeleteConversation removes a conversation from storage and evicts it from the in-memory cache.
-func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CompactConversation(w http.ResponseWriter, r *http.Request) {
+	if !h.compactConfig.Enabled {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "compact conversation disabled"})
+		return
+	}
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.CompactConversationWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "compact conversation not allowed"})
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
 		return
 	}
+	var req compactConversationRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+			return
+		}
+	}
+	if req.Model != "" {
+		modelID, _, providerUsed, _ := h.resolveAllowedModel(principal, req.Model, "")
+		if modelID == "" || providerUsed == "" || !principal.Policy.AllowModel(providerUsed, modelID) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Error: "compact model not allowed"})
+			return
+		}
+	}
+	session := h.store.Get(requestScope(r), id)
+	msg, err := h.compactConversation(r.Context(), principal, session, req.Prompt, req.Model, false)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if !principal.Policy.Permissions.TracesRead && msg != nil {
+		msg.Trace = nil
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// DeleteConversation removes a conversation from storage and evicts it from the in-memory cache.
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
+		return
+	}
+	scope := requestScope(r)
 	var filesToDelete []storage.UploadedFile
 	if h.storageStore != nil {
-		if conv, err := h.storageStore.Load(id); err == nil {
+		if conv, err := h.storageStore.Load(scope, id); err == nil {
 			filesToDelete = collectFiles(conv.Messages)
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			h.log.Error("failed to load conversation before delete", zap.String("id", id), zap.Error(err))
@@ -1280,7 +1842,7 @@ func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.store.Delete(id); err != nil {
+	if err := h.store.Delete(scope, id); err != nil {
 		h.log.Error("failed to delete conversation", zap.String("id", id), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete conversation"})
 		return
@@ -1292,15 +1854,21 @@ func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 
 // DeleteMessage removes a single message from a conversation.
 func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
 	convID := r.PathValue("id")
 	msgID := r.PathValue("msgId")
 	if convID == "" || msgID == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
 		return
 	}
+	scope := requestScope(r)
 	var filesToDelete []storage.UploadedFile
 	if h.storageStore != nil {
-		conv, err := h.storageStore.Load(convID)
+		conv, err := h.storageStore.Load(scope, convID)
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
@@ -1323,7 +1891,7 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.store.DeleteMessage(convID, msgID); err != nil {
+	if err := h.store.DeleteMessage(scope, convID, msgID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
 		} else {
@@ -1333,7 +1901,7 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.storageStore != nil {
-		if conv, err := h.storageStore.Load(convID); err == nil {
+		if conv, err := h.storageStore.Load(scope, convID); err == nil {
 			filesToDelete = excludeFiles(filesToDelete, collectFiles(conv.Messages))
 		}
 	}
@@ -1345,15 +1913,21 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 // DeleteMessagesFrom removes a message and all messages after it from a conversation.
 // Used when a user edits a message — all subsequent turns are discarded.
 func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
 	convID := r.PathValue("id")
 	msgID := r.PathValue("msgId")
 	if convID == "" || msgID == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id or message id"})
 		return
 	}
+	scope := requestScope(r)
 	var filesToDelete []storage.UploadedFile
 	if h.storageStore != nil {
-		conv, err := h.storageStore.Load(convID)
+		conv, err := h.storageStore.Load(scope, convID)
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
@@ -1374,7 +1948,7 @@ func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.store.DeleteMessagesFrom(convID, msgID); err != nil {
+	if err := h.store.DeleteMessagesFrom(scope, convID, msgID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
 		} else {
@@ -1384,7 +1958,7 @@ func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.storageStore != nil {
-		if conv, err := h.storageStore.Load(convID); err == nil {
+		if conv, err := h.storageStore.Load(scope, convID); err == nil {
 			filesToDelete = excludeFiles(filesToDelete, collectFiles(conv.Messages))
 		}
 	}
@@ -1395,6 +1969,11 @@ func (h *Handler) DeleteMessagesFrom(w http.ResponseWriter, r *http.Request) {
 
 // RenameConversation updates the title of a conversation.
 func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
@@ -1407,7 +1986,7 @@ func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
-	if err := h.store.RenameTitle(id, body.Title); err != nil {
+	if err := h.store.RenameTitle(requestScope(r), id, body.Title); err != nil {
 		h.log.Error("failed to rename conversation", zap.String("id", id), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to rename conversation"})
 		return
@@ -1418,12 +1997,17 @@ func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
 
 // TogglePinConversation flips the pinned state of a conversation.
 func (h *Handler) TogglePinConversation(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "missing conversation id"})
 		return
 	}
-	pinned, err := h.store.TogglePin(id)
+	pinned, err := h.store.TogglePin(requestScope(r), id)
 	if err != nil {
 		h.log.Error("failed to toggle pin", zap.String("id", id), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to toggle pin"})

@@ -6,30 +6,33 @@ import (
 	"sync"
 	"time"
 
+	"promptd/internal/auth"
+	"promptd/internal/storage"
+
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
-// Scheduler fires scheduled prompt executions via cron or one-time timers.
 type Scheduler struct {
 	store         *Store
 	runner        *Runner
-	systemPrompts map[string]string // prompt name → content
+	authService   *auth.Service
+	systemPrompts map[string]string
 	log           *zap.Logger
 	cron          *cron.Cron
 	mu            sync.Mutex
-	entries       map[string]cron.EntryID // scheduleID → cron entry
-	timers        map[string]*time.Timer  // scheduleID → one-time timer
-	running       map[string]bool         // scheduleID → active execution guard
-	ctx           context.Context         // app-lifetime context for all executions
+	entries       map[string]cron.EntryID
+	timers        map[string]*time.Timer
+	running       map[string]bool
+	ctx           context.Context
 }
 
-// New creates a Scheduler. Call Start to load existing schedules and begin ticking.
-func New(store *Store, runner *Runner, systemPrompts map[string]string, log *zap.Logger) *Scheduler {
+func New(store *Store, runner *Runner, authService *auth.Service, systemPrompts map[string]string, log *zap.Logger) *Scheduler {
 	return &Scheduler{
 		store:         store,
 		runner:        runner,
+		authService:   authService,
 		systemPrompts: systemPrompts,
 		log:           log,
 		cron:          cron.New(cron.WithSeconds()),
@@ -39,13 +42,13 @@ func New(store *Store, runner *Runner, systemPrompts map[string]string, log *zap
 	}
 }
 
-// Store returns the underlying Store (used by the HTTP handler for direct reads).
 func (s *Scheduler) Store() *Store { return s.store }
 
-// Start loads all enabled schedules and begins the cron ticker.
+func scheduleKey(scope storage.Scope, id string) string { return scope.Key() + ":" + id }
+
 func (s *Scheduler) Start(ctx context.Context) error {
 	s.ctx = ctx
-	schedules, err := s.store.ListSchedules()
+	schedules, err := s.store.ListAllSchedules()
 	if err != nil {
 		return fmt.Errorf("load schedules on start: %w", err)
 	}
@@ -55,8 +58,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 			continue
 		}
 		if err := s.schedule(sc); err != nil {
-			s.log.Warn("failed to schedule on startup",
-				zap.String("id", sc.ID), zap.String("name", sc.Name), zap.Error(err))
+			s.log.Warn("failed to schedule on startup", zap.String("id", sc.ID), zap.String("name", sc.Name), zap.Error(err))
 			continue
 		}
 		loaded++
@@ -66,7 +68,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels all pending jobs.
 func (s *Scheduler) Stop() {
 	s.cron.Stop()
 	s.mu.Lock()
@@ -77,17 +78,42 @@ func (s *Scheduler) Stop() {
 	s.log.Info("scheduler stopped")
 }
 
-// Add creates a new schedule, persists it, and activates it if enabled.
-func (s *Scheduler) Add(ctx context.Context, sc *Schedule) error {
+func (s *Scheduler) validateSchedule(scope storage.Scope, sc *Schedule) error {
+	principal, err := s.authService.BuildPrincipalByScope(auth.ResourceScope{TenantID: scope.TenantID, UserID: scope.UserID})
+	if err != nil {
+		return err
+	}
+	if !principal.Policy.Permissions.SchedulesWrite {
+		return fmt.Errorf("schedule write not allowed")
+	}
+	if sc.SystemPrompt != "" && !principal.Policy.AllowPrompt(sc.SystemPrompt) {
+		return fmt.Errorf("system prompt %q is not allowed", sc.SystemPrompt)
+	}
+	if sc.ModelID != "" && sc.Provider != "" && !principal.Policy.AllowModel(sc.Provider, sc.ModelID) {
+		return fmt.Errorf("model %q is not allowed", sc.ModelID)
+	}
+	for _, tool := range sc.AllowedTools {
+		if !principal.Policy.AllowTool(tool) {
+			return fmt.Errorf("tool %q is not allowed", tool)
+		}
+	}
+	return nil
+}
+
+func (s *Scheduler) Add(ctx context.Context, scope storage.Scope, sc *Schedule) error {
 	now := time.Now()
 	sc.ID = uuid.New().String()
 	sc.CreatedAt = now
 	sc.UpdatedAt = now
-
+	sc.TenantID = scope.TenantID
+	sc.UserID = scope.UserID
+	if err := s.validateSchedule(scope, sc); err != nil {
+		return err
+	}
 	if err := s.computeNextRun(sc); err != nil {
 		return err
 	}
-	if err := s.store.SaveSchedule(sc); err != nil {
+	if err := s.store.SaveSchedule(scope, sc); err != nil {
 		return err
 	}
 	if sc.Enabled {
@@ -96,21 +122,23 @@ func (s *Scheduler) Add(ctx context.Context, sc *Schedule) error {
 	return nil
 }
 
-// Update saves changes to an existing schedule and re-registers it.
-func (s *Scheduler) Update(ctx context.Context, sc *Schedule) error {
-	// Load to preserve CreatedAt.
-	existing, err := s.store.LoadSchedule(sc.ID)
+func (s *Scheduler) Update(ctx context.Context, scope storage.Scope, sc *Schedule) error {
+	existing, err := s.store.LoadSchedule(scope, sc.ID)
 	if err != nil {
 		return err
 	}
 	sc.CreatedAt = existing.CreatedAt
 	sc.UpdatedAt = time.Now()
-
+	sc.TenantID = scope.TenantID
+	sc.UserID = scope.UserID
+	if err := s.validateSchedule(scope, sc); err != nil {
+		return err
+	}
 	if err := s.computeNextRun(sc); err != nil {
 		return err
 	}
-	s.unschedule(sc.ID)
-	if err := s.store.SaveSchedule(sc); err != nil {
+	s.unschedule(scope, sc.ID)
+	if err := s.store.SaveSchedule(scope, sc); err != nil {
 		return err
 	}
 	if sc.Enabled {
@@ -119,90 +147,82 @@ func (s *Scheduler) Update(ctx context.Context, sc *Schedule) error {
 	return nil
 }
 
-// Remove deletes a schedule and cancels any pending job.
-func (s *Scheduler) Remove(id string) error {
-	s.unschedule(id)
-	return s.store.DeleteSchedule(id)
+func (s *Scheduler) Remove(scope storage.Scope, id string) error {
+	s.unschedule(scope, id)
+	return s.store.DeleteSchedule(scope, id)
 }
 
-// Trigger runs a schedule immediately in the background (non-blocking).
-// Uses s.ctx (app-lifetime) so the execution is not tied to the HTTP request.
-func (s *Scheduler) Trigger(ctx context.Context, id string) error {
-	if _, err := s.store.LoadSchedule(id); err != nil {
+func (s *Scheduler) Trigger(ctx context.Context, scope storage.Scope, id string) error {
+	if _, err := s.store.LoadSchedule(scope, id); err != nil {
 		return err
 	}
-	go s.execute(s.ctx, id, true)
+	go s.execute(s.ctx, scope, id, true)
 	return nil
 }
 
-// schedule registers a job with the cron engine or a one-time timer.
-// It always uses s.ctx (the app-lifetime context) so that closures are never
-// tied to a short-lived HTTP request context.
 func (s *Scheduler) schedule(sc *Schedule) error {
+	scope := storage.Scope{TenantID: sc.TenantID, UserID: sc.UserID}
+	key := scheduleKey(scope, sc.ID)
 	switch sc.Type {
 	case ScheduleTypeCron:
 		entryID, err := s.cron.AddFunc(sc.CronExpr, func() {
-			s.execute(s.ctx, sc.ID, false)
+			s.execute(s.ctx, scope, sc.ID, false)
 		})
 		if err != nil {
 			return fmt.Errorf("invalid cron expression %q: %w", sc.CronExpr, err)
 		}
 		s.mu.Lock()
-		s.entries[sc.ID] = entryID
+		s.entries[key] = entryID
 		s.mu.Unlock()
-
 	case ScheduleTypeOnce:
 		if sc.RunAt == nil {
 			return fmt.Errorf("run_at is required for once schedule")
 		}
 		delay := time.Until(*sc.RunAt)
 		if delay <= 0 {
-			return nil // already past — skip silently
+			return nil
 		}
 		t := time.AfterFunc(delay, func() {
-			s.execute(s.ctx, sc.ID, false)
+			s.execute(s.ctx, scope, sc.ID, false)
 		})
 		s.mu.Lock()
-		s.timers[sc.ID] = t
+		s.timers[key] = t
 		s.mu.Unlock()
 	}
 	return nil
 }
 
-// unschedule cancels any registered job for the given schedule ID.
-func (s *Scheduler) unschedule(id string) {
+func (s *Scheduler) unschedule(scope storage.Scope, id string) {
+	key := scheduleKey(scope, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if eid, ok := s.entries[id]; ok {
+	if eid, ok := s.entries[key]; ok {
 		s.cron.Remove(eid)
-		delete(s.entries, id)
+		delete(s.entries, key)
 	}
-	if t, ok := s.timers[id]; ok {
+	if t, ok := s.timers[key]; ok {
 		t.Stop()
-		delete(s.timers, id)
+		delete(s.timers, key)
 	}
 }
 
-// execute runs a single schedule. It is concurrency-safe: concurrent invocations
-// for the same schedule are skipped (the previous run takes precedence).
-// Manual triggers bypass the Enabled guard so "Run now" works for disabled schedules.
-func (s *Scheduler) execute(ctx context.Context, scheduleID string, manual bool) {
-	// Guard against concurrent runs of the same schedule.
+func (s *Scheduler) execute(ctx context.Context, scope storage.Scope, scheduleID string, manual bool) {
+	key := scheduleKey(scope, scheduleID)
 	s.mu.Lock()
-	if s.running[scheduleID] {
+	if s.running[key] {
 		s.mu.Unlock()
-		s.log.Info("skipping execution — previous run still active", zap.String("id", scheduleID))
+		s.log.Info("skipping execution — previous run still active", zap.String("id", scheduleID), zap.String("scope", key))
 		return
 	}
-	s.running[scheduleID] = true
+	s.running[key] = true
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		delete(s.running, scheduleID)
+		delete(s.running, key)
 		s.mu.Unlock()
 	}()
 
-	sc, err := s.store.LoadSchedule(scheduleID)
+	sc, err := s.store.LoadSchedule(scope, scheduleID)
 	if err != nil {
 		s.log.Error("execute: load schedule failed", zap.String("id", scheduleID), zap.Error(err))
 		return
@@ -210,45 +230,55 @@ func (s *Scheduler) execute(ctx context.Context, scheduleID string, manual bool)
 	if !manual && !sc.Enabled {
 		return
 	}
-
-	exec := &Execution{
-		ID:          uuid.New().String(),
-		ScheduleID:  scheduleID,
-		TriggeredAt: time.Now(),
-		Status:      ExecutionStatusRunning,
+	principal, err := s.authService.BuildPrincipalByScope(auth.ResourceScope{TenantID: scope.TenantID, UserID: scope.UserID})
+	if err != nil {
+		s.log.Error("schedule principal resolve failed", zap.String("id", scheduleID), zap.Error(err))
+		return
 	}
-
+	exec := &Execution{ID: uuid.New().String(), ScheduleID: scheduleID, TriggeredAt: time.Now(), Status: ExecutionStatusRunning}
 	var systemPromptText string
 	if sc.SystemPrompt != "" {
+		if !principal.Policy.AllowPrompt(sc.SystemPrompt) {
+			exec.Status = ExecutionStatusError
+			exec.Error = fmt.Sprintf("system prompt %q is not allowed", sc.SystemPrompt)
+			_ = s.store.SaveExecution(scope, exec, sc.RetainHistory)
+			return
+		}
 		systemPromptText = s.systemPrompts[sc.SystemPrompt]
+	}
+	resolvedModel, _, resolvedProvider, _ := s.runner.resolver.ResolveModel(sc.ModelID, sc.Provider)
+	if resolvedModel != "" && !principal.Policy.AllowModel(resolvedProvider, resolvedModel) {
+		exec.Status = ExecutionStatusError
+		exec.Error = fmt.Sprintf("model %q from provider %q is not allowed", resolvedModel, resolvedProvider)
+		_ = s.store.SaveExecution(scope, exec, sc.RetainHistory)
+		return
+	}
+	allowedTools := principal.Policy.FilterAllowedToolNames(sc.AllowedTools)
+	if sc.AllowedTools == nil {
+		allowedTools = principal.Policy.FilterAllowedToolNames(s.runner.registry.Names())
 	}
 
 	s.log.Info("executing schedule", zap.String("id", scheduleID), zap.String("name", sc.Name))
-
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-
 	start := time.Now()
 	result, runErr := s.runner.Run(runCtx, RunConfig{
 		Prompt:       sc.Prompt,
 		ModelID:      sc.ModelID,
 		Provider:     sc.Provider,
 		SystemPrompt: systemPromptText,
-		AllowedTools: sc.AllowedTools,
+		AllowedTools: allowedTools,
 		Params:       sc.Params,
 		TraceEnabled: sc.TraceEnabled,
 	})
 	durationMs := time.Since(start).Milliseconds()
-
 	now := time.Now()
 	exec.CompletedAt = &now
 	exec.DurationMs = durationMs
-
 	if runErr != nil {
 		exec.Status = ExecutionStatusError
 		exec.Error = runErr.Error()
-		s.log.Error("schedule execution failed",
-			zap.String("id", scheduleID), zap.String("name", sc.Name), zap.Error(runErr))
+		s.log.Error("schedule execution failed", zap.String("id", scheduleID), zap.String("name", sc.Name), zap.Error(runErr))
 	} else {
 		exec.Status = ExecutionStatusSuccess
 		exec.Response = result.Response
@@ -257,33 +287,27 @@ func (s *Scheduler) execute(ctx context.Context, scheduleID string, manual bool)
 		exec.LLMCalls = result.LLMCalls
 		exec.ToolCalls = result.ToolCalls
 		exec.Trace = result.Trace
-		s.log.Info("schedule executed",
-			zap.String("id", scheduleID), zap.String("name", sc.Name),
-			zap.Int64("duration_ms", durationMs), zap.String("model", result.ModelUsed))
+		s.log.Info("schedule executed", zap.String("id", scheduleID), zap.String("name", sc.Name), zap.Int64("duration_ms", durationMs), zap.String("model", result.ModelUsed))
 	}
-
-	if err := s.store.SaveExecution(exec, sc.RetainHistory); err != nil {
+	if err := s.store.SaveExecution(scope, exec, sc.RetainHistory); err != nil {
 		s.log.Error("failed to save execution", zap.String("schedule_id", scheduleID), zap.Error(err))
 	}
-
-	// Update last/next run on the schedule record.
 	triggered := exec.TriggeredAt
 	sc.LastRunAt = &triggered
 	if sc.Type == ScheduleTypeOnce {
 		sc.Enabled = false
 		sc.NextRunAt = nil
-		s.unschedule(scheduleID)
+		s.unschedule(scope, scheduleID)
 	} else if sc.Type == ScheduleTypeCron && sc.CronExpr != "" {
 		if next, err := nextCronTime(sc.CronExpr); err == nil {
 			sc.NextRunAt = &next
 		}
 	}
-	if err := s.store.SaveSchedule(sc); err != nil {
+	if err := s.store.SaveSchedule(scope, sc); err != nil {
 		s.log.Error("failed to update schedule post-execution", zap.String("id", scheduleID), zap.Error(err))
 	}
 }
 
-// computeNextRun sets sc.NextRunAt based on the schedule type; validates cron expressions.
 func (s *Scheduler) computeNextRun(sc *Schedule) error {
 	switch sc.Type {
 	case ScheduleTypeCron:
@@ -306,8 +330,6 @@ func (s *Scheduler) computeNextRun(sc *Schedule) error {
 	return nil
 }
 
-// nextCronTime parses a 6-field cron expression (with seconds) and returns the
-// next scheduled time after now.
 func nextCronTime(expr string) (time.Time, error) {
 	parser := cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	sched, err := parser.Parse(expr)

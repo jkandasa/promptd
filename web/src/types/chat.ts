@@ -73,6 +73,7 @@ export interface Message {
   id: string
   role: Role
   content: string
+  compactSummary?: boolean
   ts: Date
   timeTaken?: number
   llmCalls?: number
@@ -102,6 +103,12 @@ export interface UIConfig {
   aiDisclaimer?: string
   promptSuggestions?: string[]
   systemPrompts?: SystemPrompt[]
+  compactConversation?: {
+    enabled?: boolean
+    defaultPrompt?: string
+    afterMessages?: number
+    afterTokens?: number
+  }
 }
 
 export interface ConversationMeta {
@@ -112,6 +119,8 @@ export interface ConversationMeta {
   system_prompt?: string
   params?: LLMParamsOverride
   pinned?: boolean
+  compacted_through_message_id?: string
+  compact_summary_message_id?: string
   created_at: string
   updated_at: string
 }
@@ -121,6 +130,7 @@ export interface StorageMessage {
   role: string
   content: string
   sent_at: string
+  compact_summary?: boolean
   files?: UploadedFile[]
   model?: string
   provider?: string

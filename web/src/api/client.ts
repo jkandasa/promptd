@@ -17,6 +17,33 @@ export type ChatResponse = {
   assistant_msg_id?: string
   trace?: LLMRound[]
   used_params?: UsedParams
+  compact_summary?: {
+    id: string
+    role: string
+    content: string
+    sent_at: string
+    compact_summary?: boolean
+    model?: string
+    provider?: string
+    time_taken_ms?: number
+    llm_calls?: number
+    tool_calls?: number
+    trace?: LLMRound[]
+  }
+}
+
+export type CompactSummaryResponse = {
+  id: string
+  role: string
+  content: string
+  sent_at: string
+  compact_summary?: boolean
+  model?: string
+  provider?: string
+  time_taken_ms?: number
+  llm_calls?: number
+  tool_calls?: number
+  trace?: LLMRound[]
 }
 
 export class ChatError extends Error {
@@ -68,6 +95,46 @@ export interface ModelData {
     top_p?: number
     top_k?: number
   }
+}
+
+export interface AuthMe {
+  user_id: string
+  tenant_id: string
+  roles: string[]
+  permissions: {
+    chat?: boolean
+    upload?: boolean
+    conversations_read?: boolean
+    conversations_write?: boolean
+    compact_conversation_write?: boolean
+    schedules_read?: boolean
+    schedules_write?: boolean
+    traces_read?: boolean
+    admin?: boolean
+  }
+  super_admin: boolean
+}
+
+export async function apiLogin(userId: string, password: string): Promise<AuthMe> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, password }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Login failed')
+  return data as AuthMe
+}
+
+export async function apiLogout(): Promise<void> {
+  await fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+}
+
+export async function apiGetMe(): Promise<AuthMe | null> {
+  const res = await fetch(`${API_BASE}/auth/me`)
+  if (res.status === 401) return null
+  if (!res.ok) throw new Error('Failed to load current user')
+  return res.json()
 }
 
 export async function apiListTools(): Promise<ToolInfo[]> {
@@ -157,6 +224,17 @@ export async function apiDeleteMessage(convId: string, msgId: string): Promise<v
 
 export async function apiDeleteMessagesFrom(convId: string, msgId: string): Promise<void> {
   await fetch(`${API_BASE}/conversations/${convId}/messages/${msgId}/after`, { method: 'DELETE' })
+}
+
+export async function apiCompactConversation(convId: string, prompt?: string, model?: string): Promise<CompactSummaryResponse> {
+  const res = await fetch(`${API_BASE}/conversations/${convId}/compact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: prompt || undefined, model: model || undefined }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to compact conversation')
+  return data as CompactSummaryResponse
 }
 
 export async function apiDeleteFile(fileId: string): Promise<void> {
