@@ -110,7 +110,7 @@ This keeps the code ready for future DB-backed conversation/schedule storage whi
 ## Verification
 
 - `go build ./...`
-- `pnpm build` in `web/`
+- `yarn build` in `web/`
 
 ## Follow-Ups Worth Doing
 

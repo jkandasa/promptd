@@ -164,7 +164,7 @@ Start from `config_template.yaml`.
 - `mcp.*`: MCP connection management
 - `llm.system_prompts`: required selectable prompts
 - `ui.*`: welcome copy and prompt suggestions
-- RBAC details: `docs/rbac.md`
+- RBAC details: `docs/RBAC_IMPLEMENTATION_DETAILS.md`
 
 ### HTTPS
 
@@ -220,7 +220,7 @@ Behavior:
 
 ### RBAC
 
-RBAC configuration and permission details are documented in `docs/rbac.md`.
+RBAC configuration and permission details are documented in `docs/RBAC_IMPLEMENTATION_DETAILS.md`.
 
 ## API Surface
 
