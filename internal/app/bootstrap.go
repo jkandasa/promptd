@@ -110,7 +110,8 @@ func BuildProviderRegistry(cfg *appconfig.Config, logger *zap.Logger) *handler.P
 			TopK:        p.Params.TopK,
 		}
 		staticModels := BuildModelInfos(p.Models, p.Params, p.Name)
-		client := handler.NewLLMClient(p.APIKey, p.BaseURL, logger)
+		httpClient := handler.NewLLMHTTPClient(logger)
+		client := handler.NewLLMClient(p.APIKey, p.BaseURL, httpClient)
 		sel := handler.NewModelSelector(staticModels, p.SelectionMethod)
 		autoDiscoverOn := p.AutoDiscover.Enabled != nil && *p.AutoDiscover.Enabled
 		if autoDiscoverOn {
@@ -119,10 +120,19 @@ func BuildProviderRegistry(cfg *appconfig.Config, logger *zap.Logger) *handler.P
 		providerEntries = append(providerEntries, &handler.ProviderEntry{
 			Name:          p.Name,
 			Client:        client,
+			APIKey:        p.APIKey,
+			BaseURL:       p.BaseURL,
+			HTTPClient:    httpClient,
 			ModelSelector: sel,
 			GlobalParams:  globalParams,
 			StaticModels:  staticModels,
 			AutoDiscover:  autoDiscoverOn,
+			FileUploads: handler.ProviderFileUploadConfig{
+				Enabled:            p.FileUploads.Enabled != nil && *p.FileUploads.Enabled,
+				Purpose:            p.FileUploads.Purpose,
+				MaxInlineTextBytes: p.FileUploads.MaxInlineTextBytes,
+				PreferInlineImages: p.FileUploads.PreferInlineImages,
+			},
 		})
 		logger.Info("provider registered",
 			zap.String("name", p.Name),

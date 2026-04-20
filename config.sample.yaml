@@ -60,6 +60,11 @@ llm:
     - name: "openrouter"
       api_key: "replace-with-api-key"
       base_url: "https://openrouter.ai/api/v1"
+      file_uploads:
+        enabled: false
+        purpose: "user_data"
+        max_inline_text_bytes: 131072
+        prefer_inline_images: false
       models:
         - "openai/gpt-4o-mini"
       auto_discover:

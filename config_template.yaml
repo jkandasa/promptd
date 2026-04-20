@@ -4,7 +4,10 @@
 
 data:
   # Root directory for all promptd data files (default: ./data).
-  # Conversations are stored in <dir>/conversations, uploads in <dir>/uploads.
+  # Data is stored under tenant/user scoped directories:
+  #   <dir>/tenants/<tenant>/users/<user>/conversations
+  #   <dir>/tenants/<tenant>/users/<user>/uploads
+  #   <dir>/tenants/<tenant>/users/<user>/schedules
   # dir: "./data"
 
 server:
@@ -184,6 +187,23 @@ llm:
       auto_discover:
         enabled: false
         refresh_interval: 60m  # Minimum: 1m. Go duration: 10s, 30m, 1h, etc.
+
+      # Optional attachment handling for OpenAI-compatible providers.
+      # Small text files are still inlined first.
+      # Larger text, images, and binaries use provider uploads only when enabled.
+      # Enable this only after confirming the provider supports both /files uploads
+      # and chat file references for the models you plan to use.
+      # file_uploads:
+      #   enabled: false
+      #   purpose: "user_data"
+      #   max_inline_text_bytes: 131072
+      #   prefer_inline_images: false
+
+      # Notes:
+      # - OpenAI can usually enable file uploads directly.
+      # - OpenRouter/custom OpenAI-compatible endpoints should stay disabled
+      #   until you have validated the provider/model behavior.
+      # - prefer_inline_images only affects fallback when provider upload is not used.
 
     # Add more providers as needed:
     # - name: "groq"

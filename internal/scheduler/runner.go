@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
+	"promptd/internal/llm"
 	"promptd/internal/storage"
 	"promptd/internal/tools"
 
-	openai "github.com/sashabaranov/go-openai"
+	openai "github.com/openai/openai-go/v3"
 	"go.uber.org/zap"
 )
 
@@ -18,13 +20,13 @@ const maxRunnerIterations = 20
 // RunConfig holds per-execution parameters.
 type RunConfig struct {
 	Prompt       string
-	ModelID      string              // empty → use selector default
-	Provider     string              // optional: pin execution to a specific provider
-	SystemPrompt string              // literal system prompt text (not a name)
+	ModelID      string // empty → use selector default
+	Provider     string // optional: pin execution to a specific provider
+	SystemPrompt string // literal system prompt text (not a name)
 	// AllowedTools: nil = all tools, []string{} = no tools, non-empty = filtered set.
 	AllowedTools []string
 	// Params overrides LLM generation parameters (nil = use model/global defaults).
-	Params       *storage.UsedParams
+	Params *storage.UsedParams
 	// TraceEnabled overrides the runner's global trace flag (nil = use runner default).
 	TraceEnabled *bool
 }
@@ -40,7 +42,7 @@ type RunResult struct {
 }
 
 // ModelResolver resolves a preferred model ID (and optional provider name) to
-// the actual model ID, display name, provider name, and openai.Client to use.
+// the actual model ID, display name, provider name, and provider client to use.
 type ModelResolver interface {
 	ResolveModel(preferred, provider string) (id, name, providerUsed string, client *openai.Client)
 }
@@ -71,15 +73,15 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 	openaiTools := r.filterTools(cfg.AllowedTools)
 
 	// Build initial message list.
-	messages := make([]openai.ChatCompletionMessage, 0, 2)
+	messages := make([]llm.Message, 0, 2)
 	if cfg.SystemPrompt != "" {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
+		messages = append(messages, llm.Message{
+			Role:    llm.RoleSystem,
 			Content: cfg.SystemPrompt,
 		})
 	}
-	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
+	messages = append(messages, llm.Message{
+		Role:    llm.RoleUser,
 		Content: cfg.Prompt,
 	})
 
@@ -98,20 +100,22 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 		}
 		llmCalls++
 
-		req := openai.ChatCompletionRequest{
-			Model:    model,
-			Messages: messages,
-			Tools:    openaiTools,
+		body := map[string]any{
+			"model":    model,
+			"messages": schedulerMessagesToRaw(messages),
+		}
+		if len(openaiTools) > 0 {
+			body["tools"] = openaiTools
 		}
 		if p := cfg.Params; p != nil {
 			if p.Temperature != nil {
-				req.Temperature = *p.Temperature
+				body["temperature"] = *p.Temperature
 			}
 			if p.MaxTokens != 0 {
-				req.MaxTokens = p.MaxTokens
+				body["max_tokens"] = p.MaxTokens
 			}
 			if p.TopP != nil {
-				req.TopP = *p.TopP
+				body["top_p"] = *p.TopP
 			}
 		}
 
@@ -121,7 +125,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 		}
 
 		llmStart := time.Now()
-		resp, err := client.CreateChatCompletion(ctx, req)
+		resp, err := createSchedulerChatCompletion(ctx, client, body)
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
 			return nil, fmt.Errorf("LLM error: %w", err)
@@ -131,7 +135,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 		}
 		choice := resp.Choices[0]
 
-		if choice.FinishReason != openai.FinishReasonToolCalls {
+		if choice.FinishReason != llm.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
 				return nil, fmt.Errorf("model returned empty response (finish_reason: %q)", choice.FinishReason)
 			}
@@ -177,8 +181,8 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 				Result:     result,
 				DurationMs: toolDurationMs,
 			})
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleTool,
 				ToolCallID: tc.ID,
 				Content:    result,
 				Name:       tc.Function.Name,
@@ -193,7 +197,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*RunResult, error) {
 	}
 }
 
-func (r *Runner) filterTools(allowed []string) []openai.Tool {
+func (r *Runner) filterTools(allowed []string) []llm.Tool {
 	if r.registry == nil || r.registry.Empty() {
 		return nil
 	}
@@ -209,7 +213,7 @@ func (r *Runner) filterTools(allowed []string) []openai.Tool {
 	for _, name := range allowed {
 		allowedSet[name] = true
 	}
-	var filtered []openai.Tool
+	var filtered []llm.Tool
 	for _, t := range r.registry.OpenAITools() {
 		if allowedSet[t.Function.Name] {
 			filtered = append(filtered, t)
@@ -218,7 +222,7 @@ func (r *Runner) filterTools(allowed []string) []openai.Tool {
 	return filtered
 }
 
-func (r *Runner) executeTool(ctx context.Context, tc openai.ToolCall) (string, error) {
+func (r *Runner) executeTool(ctx context.Context, tc llm.ToolCall) (string, error) {
 	tool, ok := r.registry.Get(tc.Function.Name)
 	if !ok {
 		return fmt.Sprintf("tool %q not found", tc.Function.Name), nil
@@ -234,7 +238,7 @@ func (r *Runner) executeTool(ctx context.Context, tc openai.ToolCall) (string, e
 	return result, nil
 }
 
-func runnerTraceUsage(u openai.Usage) *storage.TokenUsage {
+func runnerTraceUsage(u llm.Usage) *storage.TokenUsage {
 	tu := &storage.TokenUsage{
 		PromptTokens:     u.PromptTokens,
 		CompletionTokens: u.CompletionTokens,
@@ -247,4 +251,33 @@ func runnerTraceUsage(u openai.Usage) *storage.TokenUsage {
 		tu.CachedTokens = u.PromptTokensDetails.CachedTokens
 	}
 	return tu
+}
+
+func schedulerMessagesToRaw(messages []llm.Message) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		m := map[string]any{"role": msg.Role, "content": msg.Content}
+		if msg.Name != "" {
+			m["name"] = msg.Name
+		}
+		if msg.ToolCallID != "" {
+			m["tool_call_id"] = msg.ToolCallID
+		}
+		if len(msg.ToolCalls) > 0 {
+			m["tool_calls"] = msg.ToolCalls
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func createSchedulerChatCompletion(ctx context.Context, client *openai.Client, body any) (llm.ChatCompletionResponse, error) {
+	var resp llm.ChatCompletionResponse
+	if client == nil {
+		return resp, fmt.Errorf("provider client not configured")
+	}
+	if err := client.Execute(ctx, http.MethodPost, "chat/completions", body, &resp); err != nil {
+		return resp, err
+	}
+	return resp, nil
 }

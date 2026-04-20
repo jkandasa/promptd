@@ -69,6 +69,12 @@ type LLMProviderConfig struct {
 	Models          []LLMModel         `yaml:"models"`
 	Params          LLMParams          `yaml:"params"`
 	AutoDiscover    AutoDiscoverConfig `yaml:"auto_discover"`
+	FileUploads     struct {
+		Enabled            *bool  `yaml:"enabled"`
+		Purpose            string `yaml:"purpose"`
+		MaxInlineTextBytes int    `yaml:"max_inline_text_bytes"`
+		PreferInlineImages bool   `yaml:"prefer_inline_images"`
+	} `yaml:"file_uploads"`
 }
 
 type SystemPromptConfig struct {
@@ -245,6 +251,21 @@ func Load(path string) (*Config, error) {
 			if p.AutoDiscover.RefreshInterval < time.Minute {
 				p.AutoDiscover.RefreshInterval = time.Minute
 			}
+		}
+		if p.FileUploads.Enabled == nil {
+			enabled := false
+			baseURL := strings.ToLower(strings.TrimSpace(p.BaseURL))
+			name := strings.ToLower(strings.TrimSpace(p.Name))
+			if strings.Contains(baseURL, "api.openai.com") || name == "openai" {
+				enabled = true
+			}
+			p.FileUploads.Enabled = &enabled
+		}
+		if p.FileUploads.Purpose == "" {
+			p.FileUploads.Purpose = "user_data"
+		}
+		if p.FileUploads.MaxInlineTextBytes <= 0 {
+			p.FileUploads.MaxInlineTextBytes = 128 * 1024
 		}
 	}
 	if cfg.Log.Level == "" {

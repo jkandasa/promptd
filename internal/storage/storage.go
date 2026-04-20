@@ -7,7 +7,7 @@ package storage
 import (
 	"time"
 
-	openai "github.com/sashabaranov/go-openai"
+	"promptd/internal/llm"
 )
 
 const MessageRoleError = "error"
@@ -36,7 +36,7 @@ type TraceToolDef struct {
 }
 
 // ToolDefFromOpenAI converts an openai.Tool to a TraceToolDef for trace recording.
-func ToolDefFromOpenAI(t openai.Tool) TraceToolDef {
+func ToolDefFromOpenAI(t llm.Tool) TraceToolDef {
 	return TraceToolDef{
 		Name:        t.Function.Name,
 		Description: t.Function.Description,
@@ -97,7 +97,7 @@ type LLMRound struct {
 }
 
 // ToTraceMessage converts an openai SDK message to our slim TraceMessage.
-func ToTraceMessage(m openai.ChatCompletionMessage) TraceMessage {
+func ToTraceMessage(m llm.Message) TraceMessage {
 	tm := TraceMessage{
 		Role:             m.Role,
 		Content:          m.Content,
@@ -117,7 +117,7 @@ func ToTraceMessage(m openai.ChatCompletionMessage) TraceMessage {
 }
 
 // ToTraceMessages converts a slice of openai SDK messages to TraceMessages.
-func ToTraceMessages(msgs []openai.ChatCompletionMessage) []TraceMessage {
+func ToTraceMessages(msgs []llm.Message) []TraceMessage {
 	out := make([]TraceMessage, len(msgs))
 	for i, m := range msgs {
 		out[i] = ToTraceMessage(m)
@@ -135,15 +135,24 @@ type MessageToolCall struct {
 	Arguments string `yaml:"-" json:"-"`
 }
 
+type ProviderFileRef struct {
+	Provider   string `yaml:"provider" json:"provider"`
+	FileID     string `yaml:"file_id" json:"file_id"`
+	UploadedAt int64  `yaml:"uploaded_at" json:"uploaded_at"`
+}
+
 // UploadedFile stores file metadata attached to a user message.
 type UploadedFile struct {
-	ID        string `yaml:"id"         json:"id"`
-	Filename  string `yaml:"filename"   json:"filename"`
-	Size      int64  `yaml:"size"       json:"size"`
-	URL       string `yaml:"url"        json:"url"`
-	CreatedAt int64  `yaml:"created_at" json:"created_at"`
-	TenantID  string `yaml:"tenant_id,omitempty" json:"-"`
-	UserID    string `yaml:"user_id,omitempty" json:"-"`
+	ID           string            `yaml:"id"         json:"id"`
+	Filename     string            `yaml:"filename"   json:"filename"`
+	Size         int64             `yaml:"size"       json:"size"`
+	ContentType  string            `yaml:"content_type,omitempty" json:"content_type,omitempty"`
+	SHA256       string            `yaml:"sha256,omitempty" json:"sha256,omitempty"`
+	URL          string            `yaml:"url"        json:"url"`
+	CreatedAt    int64             `yaml:"created_at" json:"created_at"`
+	ProviderRefs []ProviderFileRef `yaml:"provider_refs,omitempty" json:"provider_refs,omitempty"`
+	TenantID     string            `yaml:"tenant_id,omitempty" json:"-"`
+	UserID       string            `yaml:"user_id,omitempty" json:"-"`
 }
 
 // Message is a single turn in a conversation.
@@ -217,13 +226,13 @@ type Store interface {
 }
 
 // ToOpenAI converts storage messages back to the openai SDK type.
-func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
-	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
+func ToOpenAI(msgs []Message) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Role == MessageRoleError {
 			continue
 		}
-		msg := openai.ChatCompletionMessage{
+		msg := llm.Message{
 			Role:       m.Role,
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
@@ -233,10 +242,10 @@ func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
 			continue
 		}
 		for _, tc := range m.InlineToolCalls {
-			msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{
+			msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
 				ID:   tc.ID,
-				Type: openai.ToolTypeFunction,
-				Function: openai.FunctionCall{
+				Type: llm.ToolTypeFunction,
+				Function: llm.FunctionCall{
 					Name:      tc.Name,
 					Arguments: tc.Arguments,
 				},
@@ -248,7 +257,7 @@ func ToOpenAI(msgs []Message) []openai.ChatCompletionMessage {
 }
 
 // FromOpenAI converts openai SDK messages to storage messages.
-func FromOpenAI(msgs []openai.ChatCompletionMessage) []Message {
+func FromOpenAI(msgs []llm.Message) []Message {
 	out := make([]Message, len(msgs))
 	for i, m := range msgs {
 		out[i] = Message{

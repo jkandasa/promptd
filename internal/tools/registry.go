@@ -7,7 +7,7 @@ import (
 	"sort"
 	"sync"
 
-	openai "github.com/sashabaranov/go-openai"
+	"promptd/internal/llm"
 )
 
 // Tool is the interface every tool must implement.
@@ -153,15 +153,15 @@ func (r *Registry) ListByNames(names []string) []ToolInfo {
 	return out
 }
 
-// OpenAITools converts all registered tools to the format expected by go-openai.
-func (r *Registry) OpenAITools() []openai.Tool {
+// OpenAITools converts all registered tools to the format expected by the chat client.
+func (r *Registry) OpenAITools() []llm.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]openai.Tool, 0, len(r.tools))
+	out := make([]llm.Tool, 0, len(r.tools))
 	for _, t := range r.tools {
-		out = append(out, openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
+		out = append(out, llm.Tool{
+			Type: llm.ToolTypeFunction,
+			Function: &llm.FunctionDefinition{
 				Name:        t.Name(),
 				Description: t.Description(),
 				Parameters:  t.Parameters(),
@@ -171,21 +171,21 @@ func (r *Registry) OpenAITools() []openai.Tool {
 	return out
 }
 
-func (r *Registry) OpenAIToolsByNames(names []string) []openai.Tool {
+func (r *Registry) OpenAIToolsByNames(names []string) []llm.Tool {
 	allowed := make(map[string]bool, len(names))
 	for _, name := range names {
 		allowed[name] = true
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]openai.Tool, 0, len(allowed))
+	out := make([]llm.Tool, 0, len(allowed))
 	for _, t := range r.tools {
 		if !allowed[t.Name()] {
 			continue
 		}
-		out = append(out, openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
+		out = append(out, llm.Tool{
+			Type: llm.ToolTypeFunction,
+			Function: &llm.FunctionDefinition{
 				Name:        t.Name(),
 				Description: t.Description(),
 				Parameters:  t.Parameters(),

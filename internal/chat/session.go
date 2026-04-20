@@ -5,10 +5,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"promptd/internal/llm"
 	"promptd/internal/storage"
 
 	"github.com/google/uuid"
-	openai "github.com/sashabaranov/go-openai"
 )
 
 // Session holds the in-memory conversation state for a single chat session.
@@ -43,7 +43,7 @@ func (s *Session) Add(role, content string, files []storage.UploadedFile) string
 	s.conv.Messages = append(s.conv.Messages, storage.Message{ID: id, Role: role, Content: content, Files: files, SentAt: time.Now()})
 	s.conv.UpdatedAt = time.Now()
 	// Auto-title from first user message (truncated to 60 runes).
-	if s.conv.Title == "" && role == openai.ChatMessageRoleUser {
+	if s.conv.Title == "" && role == llm.RoleUser {
 		s.conv.Title = truncate(content, 60)
 	}
 	s.persist()
@@ -52,7 +52,7 @@ func (s *Session) Add(role, content string, files []storage.UploadedFile) string
 
 // AddFinalMessage appends the final assistant reply with its associated
 // performance metadata and LLM trace. Returns the new message ID.
-func (s *Session) AddFinalMessage(msg openai.ChatCompletionMessage, model, provider string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
+func (s *Session) AddFinalMessage(msg llm.Message, model, provider string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -98,7 +98,7 @@ func (s *Session) AddErrorMessage(content, model, provider string) string {
 
 // AddMessage appends an openai message to the in-memory history for LLM context
 // but does NOT persist it to storage. Only user and assistant messages are stored.
-func (s *Session) AddMessage(msg openai.ChatCompletionMessage) {
+func (s *Session) AddMessage(msg llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sm := storage.Message{
@@ -172,6 +172,23 @@ func (s *Session) SetParams(p *storage.UsedParams) {
 	s.persist()
 }
 
+// UpdateMessageFiles replaces the stored file metadata for a single message.
+// This is used to persist provider-side file references after lazy uploads.
+func (s *Session) UpdateMessageFiles(msgID string, files []storage.UploadedFile) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.conv.Messages {
+		if s.conv.Messages[i].ID != msgID {
+			continue
+		}
+		s.conv.Messages[i].Files = files
+		s.conv.UpdatedAt = time.Now()
+		s.persist()
+		return true
+	}
+	return false
+}
+
 // SystemPrompt returns the selected system prompt name for this conversation.
 func (s *Session) SystemPrompt() string {
 	s.mu.Lock()
@@ -180,7 +197,7 @@ func (s *Session) SystemPrompt() string {
 }
 
 // History returns a copy of the message slice as openai messages.
-func (s *Session) History() []openai.ChatCompletionMessage {
+func (s *Session) History() []llm.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return storage.ToOpenAI(s.conv.Messages)
@@ -232,7 +249,7 @@ func (s *Session) SetCompactionSummary(content, compactPrompt, model, provider s
 	}
 	msg := storage.Message{
 		ID:             msgID,
-		Role:           openai.ChatMessageRoleAssistant,
+		Role:           llm.RoleAssistant,
 		Content:        content,
 		SentAt:         time.Now(),
 		Model:          model,
@@ -288,7 +305,7 @@ func (s *Session) persist() {
 	c := s.conv
 	msgs := make([]storage.Message, 0, len(s.conv.Messages))
 	for _, m := range s.conv.Messages {
-		if !m.Transient && (m.Role == openai.ChatMessageRoleUser || m.Role == openai.ChatMessageRoleAssistant || m.Role == storage.MessageRoleError) {
+		if !m.Transient && (m.Role == llm.RoleUser || m.Role == llm.RoleAssistant || m.Role == storage.MessageRoleError) {
 			msgs = append(msgs, m)
 		}
 	}

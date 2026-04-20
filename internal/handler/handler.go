@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,13 +20,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	openai "github.com/openai/openai-go/v3"
 
 	"promptd/internal/auth"
 	"promptd/internal/chat"
+	"promptd/internal/llm"
 	"promptd/internal/storage"
 	"promptd/internal/tools"
 
-	openai "github.com/sashabaranov/go-openai"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +46,13 @@ type ModelInfo struct {
 	Provider string    `json:"provider,omitempty"`
 	Params   LLMParams `json:"params,omitempty"`
 	IsManual bool      `json:"is_manual,omitempty"`
+}
+
+type ProviderFileUploadConfig struct {
+	Enabled            bool
+	Purpose            string
+	MaxInlineTextBytes int
+	PreferInlineImages bool
 }
 
 type ModelSelector struct {
@@ -146,10 +157,14 @@ type ProviderInfo struct {
 type ProviderEntry struct {
 	Name          string
 	Client        *openai.Client
+	APIKey        string
+	BaseURL       string
+	HTTPClient    *http.Client
 	ModelSelector *ModelSelector
 	GlobalParams  LLMParams
 	StaticModels  []ModelInfo
 	AutoDiscover  bool
+	FileUploads   ProviderFileUploadConfig
 }
 
 // ProviderRegistry manages multiple LLM providers and routes requests to the
@@ -336,6 +351,12 @@ func (r *ProviderRegistry) GetProviderInfos() []ProviderInfo {
 	return infos
 }
 
+func (r *ProviderRegistry) ProviderEntry(name string) *ProviderEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.byName[name]
+}
+
 type Handler struct {
 	providers           *ProviderRegistry
 	systemPrompts       map[string]string
@@ -478,30 +499,65 @@ func stripConversationTrace(conv *storage.Conversation) *storage.Conversation {
 	return &copyConv
 }
 
-func (h *Handler) buildMessages(scope storage.Scope, session *chat.Session, currentFiles []storage.UploadedFile) []openai.ChatCompletionMessage {
-	var messages []openai.ChatCompletionMessage
+func filterHistoryMessages(history []storage.Message) []storage.Message {
+	lastUserIdx := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == llm.RoleUser {
+			lastUserIdx = i
+			break
+		}
+	}
+	filtered := make([]storage.Message, 0, len(history))
+	for i, msg := range history {
+		if i >= lastUserIdx {
+			filtered = append(filtered, msg)
+			continue
+		}
+		switch msg.Role {
+		case llm.RoleUser:
+			filtered = append(filtered, msg)
+		case llm.RoleAssistant:
+			if msg.Content != "" {
+				filtered = append(filtered, msg)
+			}
+		}
+	}
+	return filtered
+}
+
+func (h *Handler) buildMessages(scope storage.Scope, session *chat.Session, _ []storage.UploadedFile) []llm.Message {
+	var messages []llm.Message
 	conv := session.Snapshot()
 	promptName := session.SystemPrompt()
 	if prompt := h.systemPrompts[promptName]; prompt != "" {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: prompt,
-		})
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: prompt})
 	}
 	if summary := h.compactionSummaryMessage(conv); summary != nil {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: "Conversation summary so far:\n" + summary.Content,
-		})
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: "Conversation summary so far:\n" + summary.Content})
 	}
-	history := filterHistory(storage.ToOpenAI(h.messagesAfterCompaction(conv)))
-	if len(currentFiles) > 0 && len(history) > 0 {
-		last := len(history) - 1
-		if history[last].Role == openai.ChatMessageRoleUser {
-			history[last] = h.buildUserLLMMessage(scope, history[last].Content, currentFiles)
+	for _, msg := range filterHistoryMessages(h.messagesAfterCompaction(conv)) {
+		if msg.Role == storage.MessageRoleError || msg.CompactSummary {
+			continue
 		}
+		traceMsg := llm.Message{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+			Name:       msg.Name,
+		}
+		if msg.Role == llm.RoleUser && len(msg.Files) > 0 {
+			traceMsg.Content = h.buildAttachmentText(scope, msg.Content, msg.Files)
+		}
+		for _, tc := range msg.InlineToolCalls {
+			traceMsg.ToolCalls = append(traceMsg.ToolCalls, llm.ToolCall{
+				ID:       tc.ID,
+				Type:     llm.ToolTypeFunction,
+				Function: llm.FunctionCall{Name: tc.Name, Arguments: tc.Arguments},
+			})
+		}
+		messages = append(messages, traceMsg)
 	}
-	return append(messages, history...)
+	return messages
 }
 
 func (h *Handler) messagesAfterCompaction(conv storage.Conversation) []storage.Message {
@@ -556,7 +612,7 @@ func countUserMessages(msgs []storage.Message) int {
 		if msg.CompactSummary {
 			continue
 		}
-		if msg.Role == openai.ChatMessageRoleUser {
+		if msg.Role == llm.RoleUser {
 			count++
 		}
 	}
@@ -574,7 +630,7 @@ func estimateMessageTokens(msgs []storage.Message) int {
 			total += 4 + (len([]rune(content)) / 4)
 		}
 		total += 6
-		if msg.Role == openai.ChatMessageRoleUser && len(msg.Files) > 0 {
+		if msg.Role == llm.RoleUser && len(msg.Files) > 0 {
 			for _, file := range msg.Files {
 				total += 8 + (len([]rune(file.Filename)) / 4)
 			}
@@ -585,44 +641,36 @@ func estimateMessageTokens(msgs []storage.Message) int {
 
 const maxInlinedTextFileBytes = 128 * 1024
 
-func (h *Handler) buildUserMessageContent(message string, files []storage.UploadedFile) string {
-	if len(files) == 0 {
-		return message
-	}
-	var b strings.Builder
-	b.WriteString("Attached files:\n")
-	for _, f := range files {
-		fmt.Fprintf(&b, "- %s\n", f.Filename)
-	}
-	if message != "" {
-		b.WriteString("\nUser request: ")
-		b.WriteString(message)
-	}
-	return b.String()
+type preparedAttachment struct {
+	File     storage.UploadedFile
+	Mode     string
+	Text     string
+	ImageURL string
+	FileID   string
+	Note     string
 }
 
-func (h *Handler) buildUserLLMMessage(scope storage.Scope, content string, files []storage.UploadedFile) openai.ChatCompletionMessage {
-	parts := []openai.ChatMessagePart{{
-		Type: openai.ChatMessagePartTypeText,
-		Text: h.buildAttachmentText(scope, content, files),
-	}}
-	for _, f := range files {
-		imageURL, ok := h.inlineImageDataURL(scope, f)
-		if !ok {
-			continue
-		}
-		parts = append(parts, openai.ChatMessagePart{
-			Type: openai.ChatMessagePartTypeImageURL,
-			ImageURL: &openai.ChatMessageImageURL{
-				URL:    imageURL,
-				Detail: openai.ImageURLDetailAuto,
-			},
-		})
+func rawUserMessageContent(content string, files []storage.UploadedFile) string {
+	if len(files) == 0 {
+		return content
 	}
-	return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
+	var prefix strings.Builder
+	prefix.WriteString("Attached files:\n")
+	for _, f := range files {
+		fmt.Fprintf(&prefix, "- %s\n", f.Filename)
+	}
+	p := prefix.String()
+	if strings.HasPrefix(content, p+"\nUser request: ") {
+		return strings.TrimPrefix(content, p+"\nUser request: ")
+	}
+	if content == p || content == strings.TrimSuffix(p, "\n") {
+		return ""
+	}
+	return content
 }
 
 func (h *Handler) buildAttachmentText(scope storage.Scope, content string, files []storage.UploadedFile) string {
+	content = rawUserMessageContent(content, files)
 	if len(files) == 0 {
 		return content
 	}
@@ -665,12 +713,283 @@ func (h *Handler) readAttachmentForPrompt(scope storage.Scope, file storage.Uplo
 	return string(data), ""
 }
 
-func (h *Handler) inlineImageDataURL(scope storage.Scope, file storage.UploadedFile) (string, bool) {
-	data, err := h.readUploadedFile(scope, file)
-	if err != nil || !isImageFile(file.Filename, data) {
-		return "", false
+func providerRefFor(file storage.UploadedFile, provider string) *storage.ProviderFileRef {
+	for i := range file.ProviderRefs {
+		if file.ProviderRefs[i].Provider == provider {
+			ref := file.ProviderRefs[i]
+			return &ref
+		}
+	}
+	return nil
+}
+
+func upsertProviderRef(file storage.UploadedFile, provider, fileID string) storage.UploadedFile {
+	for i := range file.ProviderRefs {
+		if file.ProviderRefs[i].Provider == provider {
+			file.ProviderRefs[i].FileID = fileID
+			file.ProviderRefs[i].UploadedAt = time.Now().UnixMilli()
+			return file
+		}
+	}
+	file.ProviderRefs = append(file.ProviderRefs, storage.ProviderFileRef{Provider: provider, FileID: fileID, UploadedAt: time.Now().UnixMilli()})
+	return file
+}
+
+func detectFileContentType(file storage.UploadedFile, data []byte) string {
+	if strings.TrimSpace(file.ContentType) != "" {
+		return file.ContentType
 	}
 	contentType := http.DetectContentType(data)
+	if strings.HasPrefix(contentType, "application/octet-stream") {
+		if imageContentType := imageContentTypeFromName(file.Filename); imageContentType != "" {
+			return imageContentType
+		}
+	}
+	return contentType
+}
+
+func fileSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func isImageAttachment(file storage.UploadedFile, data []byte) bool {
+	contentType := detectFileContentType(file, data)
+	return strings.HasPrefix(contentType, "image/") || isImageFile(file.Filename, data)
+}
+
+func isTextAttachment(file storage.UploadedFile, data []byte) bool {
+	contentType := detectFileContentType(file, data)
+	return strings.HasPrefix(contentType, "text/") || isTextLikeFile(file.Filename, data)
+}
+
+func (h *Handler) uploadFileToProvider(ctx context.Context, entry *ProviderEntry, file storage.UploadedFile, data []byte) (storage.UploadedFile, string, error) {
+	if entry == nil || !entry.FileUploads.Enabled {
+		return file, "", fmt.Errorf("provider file uploads disabled")
+	}
+	if ref := providerRefFor(file, entry.Name); ref != nil && ref.FileID != "" {
+		return file, ref.FileID, nil
+	}
+	uploaded, err := entry.Client.Files.New(ctx, openai.FileNewParams{File: bytes.NewReader(data), Purpose: openai.FilePurpose(entry.FileUploads.Purpose)})
+	if err != nil {
+		return file, "", err
+	}
+	file = upsertProviderRef(file, entry.Name, uploaded.ID)
+	return file, uploaded.ID, nil
+}
+
+func (h *Handler) prepareAttachment(ctx context.Context, scope storage.Scope, entry *ProviderEntry, file storage.UploadedFile) (preparedAttachment, error) {
+	data, err := h.readUploadedFile(scope, file)
+	if err != nil {
+		return preparedAttachment{File: file, Mode: "metadata_only", Note: "attachment could not be read by the server"}, nil
+	}
+	file.ContentType = detectFileContentType(file, data)
+	if file.SHA256 == "" {
+		file.SHA256 = fileSHA256(data)
+	}
+	maxInline := maxInlinedTextFileBytes
+	if entry != nil && entry.FileUploads.MaxInlineTextBytes > 0 {
+		maxInline = entry.FileUploads.MaxInlineTextBytes
+	}
+	if isTextAttachment(file, data) && len(data) <= maxInline {
+		return preparedAttachment{File: file, Mode: "inline_text", Text: string(data)}, nil
+	}
+	if entry != nil && entry.FileUploads.Enabled {
+		updatedFile, fileID, uploadErr := h.uploadFileToProvider(ctx, entry, file, data)
+		if uploadErr == nil {
+			return preparedAttachment{File: updatedFile, Mode: "uploaded_reference", FileID: fileID}, nil
+		}
+		h.log.Warn("provider file upload failed; falling back", zap.String("provider", entry.Name), zap.String("filename", file.Filename), zap.Error(uploadErr))
+		file = updatedFile
+	}
+	if isImageAttachment(file, data) {
+		if entry != nil && entry.FileUploads.PreferInlineImages {
+			if imageURL, ok := h.inlineImageDataURL(scope, file); ok {
+				return preparedAttachment{File: file, Mode: "inline_image", ImageURL: imageURL, Note: "uploaded file reference unavailable; sent as inline image"}, nil
+			}
+		}
+		note := fmt.Sprintf("image attachment metadata only (%s, %d bytes)", file.ContentType, file.Size)
+		if file.ContentType == "" {
+			note = fmt.Sprintf("image attachment metadata only (%d bytes)", file.Size)
+		}
+		if entry != nil && !entry.FileUploads.Enabled {
+			note += "; provider file uploads are disabled"
+		}
+		if entry != nil && entry.FileUploads.Enabled && !entry.FileUploads.PreferInlineImages {
+			note += "; inline image fallback disabled"
+		}
+		return preparedAttachment{File: file, Mode: "metadata_only", Note: note}, nil
+	}
+	if isTextAttachment(file, data) {
+		if len(data) > maxInline {
+			return preparedAttachment{File: file, Mode: "inline_text", Text: string(data[:maxInline]) + "\n[truncated after upload fallback]", Note: "uploaded file reference unavailable; text was truncated"}, nil
+		}
+		return preparedAttachment{File: file, Mode: "inline_text", Text: string(data), Note: "uploaded file reference unavailable; sent as inline text"}, nil
+	}
+	note := fmt.Sprintf("binary attachment metadata only (%s, %d bytes)", file.ContentType, file.Size)
+	if file.ContentType == "" {
+		note = fmt.Sprintf("binary attachment metadata only (%d bytes)", file.Size)
+	}
+	return preparedAttachment{File: file, Mode: "metadata_only", Note: note}, nil
+}
+
+func contentPartsToText(content string, attachments []preparedAttachment) string {
+	var b strings.Builder
+	content = strings.TrimSpace(content)
+	if content != "" {
+		b.WriteString(content)
+	}
+	if len(attachments) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Attachment details:\n")
+		for _, attachment := range attachments {
+			fmt.Fprintf(&b, "- %s", attachment.File.Filename)
+			switch attachment.Mode {
+			case "inline_text":
+				fmt.Fprintf(&b, "\n  Inlined contents:\n%s\n", indentText(attachment.Text, "  "))
+			case "uploaded_reference":
+				fmt.Fprintf(&b, " (provider file id: %s)\n", attachment.FileID)
+			default:
+				if attachment.Note != "" {
+					fmt.Fprintf(&b, " (%s)\n", attachment.Note)
+				} else {
+					b.WriteString("\n")
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func sanitizeAssistantMessage(msg llm.Message) llm.Message {
+	msg.Content = strings.TrimLeft(msg.Content, "\n")
+	msg.Refusal = strings.TrimLeft(msg.Refusal, "\n")
+	msg.ReasoningContent = strings.TrimLeft(msg.ReasoningContent, "\n")
+	return msg
+}
+
+func (h *Handler) buildUserMessageParts(ctx context.Context, scope storage.Scope, entry *ProviderEntry, msg storage.Message, session *chat.Session) ([]map[string]any, llm.Message, error) {
+	content := rawUserMessageContent(msg.Content, msg.Files)
+	parts := make([]map[string]any, 0, len(msg.Files)+1)
+	prepared := make([]preparedAttachment, 0, len(msg.Files))
+	updatedFiles := make([]storage.UploadedFile, len(msg.Files))
+	if content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": content})
+	}
+	for i, file := range msg.Files {
+		attachment, err := h.prepareAttachment(ctx, scope, entry, file)
+		if err != nil {
+			return nil, llm.Message{}, err
+		}
+		prepared = append(prepared, attachment)
+		updatedFiles[i] = attachment.File
+		switch attachment.Mode {
+		case "inline_text":
+			parts = append(parts, map[string]any{"type": "text", "text": fmt.Sprintf("Attached file %q:\n%s", attachment.File.Filename, attachment.Text)})
+		case "inline_image":
+			parts = append(parts,
+				map[string]any{"type": "text", "text": fmt.Sprintf("Attached image %q.", attachment.File.Filename)},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": attachment.ImageURL, "detail": llm.ImageURLDetailAuto}},
+			)
+		case "uploaded_reference":
+			parts = append(parts, map[string]any{"type": "file", "file": map[string]any{"file_id": attachment.FileID}})
+		default:
+			parts = append(parts, map[string]any{"type": "text", "text": fmt.Sprintf("Attached file %q: %s", attachment.File.Filename, attachment.Note)})
+		}
+	}
+	if len(msg.Files) > 0 {
+		session.UpdateMessageFiles(msg.ID, updatedFiles)
+	}
+	traceMsg := llm.Message{Role: llm.RoleUser, Content: contentPartsToText(content, prepared)}
+	return parts, traceMsg, nil
+}
+
+func storageMessageToRawMap(msg storage.Message) map[string]any {
+	out := map[string]any{"role": msg.Role}
+	if msg.Content != "" {
+		out["content"] = msg.Content
+	}
+	if msg.Name != "" {
+		out["name"] = msg.Name
+	}
+	if msg.ToolCallID != "" {
+		out["tool_call_id"] = msg.ToolCallID
+	}
+	if len(msg.InlineToolCalls) > 0 {
+		calls := make([]map[string]any, 0, len(msg.InlineToolCalls))
+		for _, tc := range msg.InlineToolCalls {
+			calls = append(calls, map[string]any{
+				"id":       tc.ID,
+				"type":     llm.ToolTypeFunction,
+				"function": map[string]any{"name": tc.Name, "arguments": tc.Arguments},
+			})
+		}
+		out["tool_calls"] = calls
+	}
+	return out
+}
+
+func (h *Handler) buildChatCompletionRequest(ctx context.Context, scope storage.Scope, session *chat.Session, entry *ProviderEntry, model string, modelParams LLMParams, tools []llm.Tool) (map[string]any, []llm.Message, error) {
+	conv := session.Snapshot()
+	rawMessages := make([]map[string]any, 0)
+	traceMessages := make([]llm.Message, 0)
+	promptName := session.SystemPrompt()
+	if prompt := h.systemPrompts[promptName]; prompt != "" {
+		rawMessages = append(rawMessages, map[string]any{"role": llm.RoleSystem, "content": prompt})
+		traceMessages = append(traceMessages, llm.Message{Role: llm.RoleSystem, Content: prompt})
+	}
+	if summary := h.compactionSummaryMessage(conv); summary != nil {
+		summaryContent := "Conversation summary so far:\n" + summary.Content
+		rawMessages = append(rawMessages, map[string]any{"role": llm.RoleSystem, "content": summaryContent})
+		traceMessages = append(traceMessages, llm.Message{Role: llm.RoleSystem, Content: summaryContent})
+	}
+	for _, msg := range filterHistoryMessages(h.messagesAfterCompaction(conv)) {
+		if msg.Role == storage.MessageRoleError || msg.CompactSummary {
+			continue
+		}
+		if msg.Role == llm.RoleUser && len(msg.Files) > 0 {
+			parts, traceMsg, err := h.buildUserMessageParts(ctx, scope, entry, msg, session)
+			if err != nil {
+				return nil, nil, err
+			}
+			rawMessages = append(rawMessages, map[string]any{"role": llm.RoleUser, "content": parts})
+			traceMessages = append(traceMessages, traceMsg)
+			continue
+		}
+		rawMessages = append(rawMessages, storageMessageToRawMap(msg))
+		traceMsg := llm.Message{Role: msg.Role, Content: msg.Content, Name: msg.Name, ToolCallID: msg.ToolCallID}
+		for _, tc := range msg.InlineToolCalls {
+			traceMsg.ToolCalls = append(traceMsg.ToolCalls, llm.ToolCall{ID: tc.ID, Type: llm.ToolTypeFunction, Function: llm.FunctionCall{Name: tc.Name, Arguments: tc.Arguments}})
+		}
+		traceMessages = append(traceMessages, traceMsg)
+	}
+	body := map[string]any{"model": model, "messages": rawMessages}
+	if modelParams.Temperature != nil {
+		body["temperature"] = *modelParams.Temperature
+	}
+	if modelParams.MaxTokens != 0 {
+		body["max_tokens"] = modelParams.MaxTokens
+	}
+	if modelParams.TopP != nil {
+		body["top_p"] = *modelParams.TopP
+	}
+	if modelParams.TopK != 0 {
+		body["top_k"] = modelParams.TopK
+	}
+	if len(tools) > 0 {
+		body["tools"] = tools
+	}
+	return body, traceMessages, nil
+}
+
+func (h *Handler) inlineImageDataURL(scope storage.Scope, file storage.UploadedFile) (string, bool) {
+	data, err := h.readUploadedFile(scope, file)
+	if err != nil || !isImageAttachment(file, data) {
+		return "", false
+	}
+	contentType := detectFileContentType(file, data)
 	if !strings.HasPrefix(contentType, "image/") {
 		contentType = imageContentTypeFromName(file.Filename)
 	}
@@ -817,18 +1136,18 @@ func indentText(text, prefix string) string {
 // Messages from the last user message onward are left untouched because they
 // belong to the currently active tool-call loop and must remain intact for the
 // OpenAI API contract.
-func filterHistory(history []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+func filterHistory(history []llm.Message) []llm.Message {
 	// Find the index of the last user message. Everything from there onward is
 	// the active turn and must not be touched.
 	lastUserIdx := -1
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == openai.ChatMessageRoleUser {
+		if history[i].Role == llm.RoleUser {
 			lastUserIdx = i
 			break
 		}
 	}
 
-	filtered := make([]openai.ChatCompletionMessage, 0, len(history))
+	filtered := make([]llm.Message, 0, len(history))
 	for i, msg := range history {
 		if i >= lastUserIdx {
 			// Active turn — keep everything as-is.
@@ -839,14 +1158,14 @@ func filterHistory(history []openai.ChatCompletionMessage) []openai.ChatCompleti
 		// carry actual text content. Drop pure tool-call assistant messages
 		// (content == "" and ToolCalls set) and all tool-result messages.
 		switch msg.Role {
-		case openai.ChatMessageRoleUser:
+		case llm.RoleUser:
 			filtered = append(filtered, msg)
-		case openai.ChatMessageRoleAssistant:
+		case llm.RoleAssistant:
 			if msg.Content != "" {
 				filtered = append(filtered, msg)
 			}
 			// else: pure tool-call request — drop it
-			// openai.ChatMessageRoleTool: drop entirely
+			// llm.RoleTool: drop entirely
 		}
 	}
 	return filtered
@@ -873,9 +1192,9 @@ func (h *Handler) requireAllowedSystemPrompt(principal *auth.Principal, promptNa
 	return nil
 }
 
-// traceUsage converts an openai.Usage to our storage.TokenUsage, including
+// traceUsage converts an llm.Usage to our storage.TokenUsage, including
 // reasoning and cached-prompt token breakdowns when the provider returns them.
-func traceUsage(u openai.Usage) *storage.TokenUsage {
+func traceUsage(u llm.Usage) *storage.TokenUsage {
 	tu := &storage.TokenUsage{
 		PromptTokens:     u.PromptTokens,
 		CompletionTokens: u.CompletionTokens,
@@ -900,20 +1219,21 @@ const maxToolIterations = 20
 // Returns the reply text, the final assistant message, model used, LLM call count,
 // tool call count, the full trace of all LLM round-trips, the effective params used,
 // and any error.
-func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams, currentFiles []storage.UploadedFile) (string, openai.ChatCompletionMessage, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
+func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, sessionID string, session *chat.Session, preferredModel, provider string, reqParams LLMParams, currentFiles []storage.UploadedFile) (string, llm.Message, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
 	scope := storage.Scope{TenantID: principal.Scope.TenantID, UserID: principal.Scope.UserID}
 	if preferredModel != "" && provider != "" && !principal.Policy.AllowModel(provider, preferredModel) {
-		return "", openai.ChatCompletionMessage{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q is not allowed", preferredModel)
+		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q is not allowed", preferredModel)
 	}
 	model, _, providerUsed, llmClient := h.resolveAllowedModel(principal, preferredModel, provider)
-	if model == "" || providerUsed == "" || llmClient == nil {
-		return "", openai.ChatCompletionMessage{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("no allowed model available")
+	providerEntry := h.providers.ProviderEntry(providerUsed)
+	if model == "" || providerUsed == "" || llmClient == nil || providerEntry == nil {
+		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("no allowed model available")
 	}
 	if !principal.Policy.AllowModel(providerUsed, model) {
-		return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
+		return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
 	}
 
 	// Resolve effective params: model-config defaults, overridden by UI request.
@@ -947,53 +1267,45 @@ func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, session
 
 	for {
 		if llmCalls >= maxToolIterations {
-			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
-		requestMsgs := h.buildMessages(scope, session, currentFiles)
-		req := openai.ChatCompletionRequest{
-			Model:    model,
-			Messages: requestMsgs,
-		}
-		if modelParams.Temperature != nil {
-			req.Temperature = *modelParams.Temperature
-		}
-		if modelParams.MaxTokens != 0 {
-			req.MaxTokens = modelParams.MaxTokens
-		}
-		if modelParams.TopP != nil {
-			req.TopP = *modelParams.TopP
-		}
+		allowedTools := []llm.Tool(nil)
 		if h.registry != nil && !h.registry.Empty() {
-			allowedTools := principal.Policy.FilterAllowedToolNames(h.registry.Names())
-			if len(allowedTools) > 0 {
-				req.Tools = h.registry.OpenAIToolsByNames(allowedTools)
+			toolNames := principal.Policy.FilterAllowedToolNames(h.registry.Names())
+			if len(toolNames) > 0 {
+				allowedTools = h.registry.OpenAIToolsByNames(toolNames)
 			}
+		}
+		requestBody, requestMsgs, err := h.buildChatCompletionRequest(ctx, scope, session, providerEntry, model, modelParams, allowedTools)
+		if err != nil {
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("build chat request: %w", err)
 		}
 
 		// Snapshot available tools for the trace before the API call.
 		var availableTools []storage.TraceToolDef
-		for _, t := range req.Tools {
+		for _, t := range allowedTools {
 			availableTools = append(availableTools, storage.ToolDefFromOpenAI(t))
 		}
 
 		h.log.Debug("llm request",
 			zap.String("session_id", sessionID),
 			zap.String("model", model),
-			zap.Any("messages", req.Messages),
+			zap.Any("messages", requestMsgs),
 		)
 
 		llmStart := time.Now()
-		resp, err := llmClient.CreateChatCompletion(ctx, req)
+		resp, err := createRawChatCompletion(ctx, providerEntry, requestBody)
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
-			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
 		}
 		choice := resp.Choices[0]
+		choice.Message = sanitizeAssistantMessage(choice.Message)
 
 		h.log.Debug("llm response",
 			zap.String("session_id", sessionID),
@@ -1005,9 +1317,9 @@ func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, session
 		)
 
 		// No tool calls — we have the final answer. Record the round and return.
-		if choice.FinishReason != openai.FinishReasonToolCalls {
+		if choice.FinishReason != llm.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", openai.ChatCompletionMessage{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
+				return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("model returned an empty response (finish_reason: %q) — the model may not support tool calling", choice.FinishReason)
 			}
 			if h.TraceEnabled {
 				trace = append(trace, storage.LLMRound{
@@ -1050,8 +1362,8 @@ func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, session
 				Result:     result,
 				DurationMs: toolDurationMs,
 			})
-			session.AddMessage(openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
+			session.AddMessage(llm.Message{
+				Role:       llm.RoleTool,
 				ToolCallID: tc.ID,
 				Content:    result,
 				Name:       tc.Function.Name,
@@ -1137,7 +1449,7 @@ func compactableMessages(conv storage.Conversation, excludeTrailingUser bool) ([
 			msgs = filtered
 		}
 	}
-	if excludeTrailingUser && len(msgs) > 0 && msgs[len(msgs)-1].Role == openai.ChatMessageRoleUser {
+	if excludeTrailingUser && len(msgs) > 0 && msgs[len(msgs)-1].Role == llm.RoleUser {
 		msgs = msgs[:len(msgs)-1]
 	}
 	if len(msgs) == 0 {
@@ -1211,35 +1523,37 @@ func (h *Handler) compactConversation(ctx context.Context, principal *auth.Princ
 	if modelID == "" || providerUsed == "" || client == nil {
 		return nil, fmt.Errorf("no allowed model available for compaction")
 	}
-	requestMessages := []openai.ChatCompletionMessage{{
-		Role:    openai.ChatMessageRoleSystem,
+	providerEntry := h.providers.ProviderEntry(providerUsed)
+	requestMessages := []llm.Message{{
+		Role:    llm.RoleSystem,
 		Content: prompt,
 	}}
 	if summary := h.compactionSummaryMessage(conv); summary != nil && strings.TrimSpace(summary.Content) != "" {
-		requestMessages = append(requestMessages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
+		requestMessages = append(requestMessages, llm.Message{
+			Role:    llm.RoleUser,
 			Content: "Existing summary:\n" + strings.TrimSpace(summary.Content),
 		})
 	}
-	requestMessages = append(requestMessages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
+	requestMessages = append(requestMessages, llm.Message{
+		Role:    llm.RoleUser,
 		Content: "New conversation content to merge into the rolling summary:\n\n" + formatCompactionTranscript(msgs),
 	})
 	started := time.Now()
-	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{Model: modelID, Messages: requestMessages})
+	resp, err := createRawChatCompletion(ctx, providerEntry, map[string]any{"model": modelID, "messages": requestMessages})
 	if err != nil {
 		return nil, fmt.Errorf("compact conversation: %w", err)
 	}
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("compact conversation returned no choices")
 	}
-	content := strings.TrimSpace(resp.Choices[0].Message.Content)
+	responseMsg := sanitizeAssistantMessage(resp.Choices[0].Message)
+	content := strings.TrimSpace(responseMsg.Content)
 	if content == "" {
 		return nil, fmt.Errorf("compact conversation returned empty summary")
 	}
 	trace := []storage.LLMRound{{
 		Request:       storage.ToTraceMessages(requestMessages),
-		Response:      storage.ToTraceMessage(resp.Choices[0].Message),
+		Response:      storage.ToTraceMessage(responseMsg),
 		LLMDurationMs: time.Since(started).Milliseconds(),
 		Usage:         traceUsage(resp.Usage),
 	}}
@@ -1253,7 +1567,7 @@ func (h *Handler) compactConversation(ctx context.Context, principal *auth.Princ
 	return nil, fmt.Errorf("failed to persist compact summary")
 }
 
-func (h *Handler) executeTool(ctx context.Context, principal *auth.Principal, tc openai.ToolCall) (string, error) {
+func (h *Handler) executeTool(ctx context.Context, principal *auth.Principal, tc llm.ToolCall) (string, error) {
 	if principal != nil && !principal.Policy.AllowTool(tc.Function.Name) {
 		return fmt.Sprintf("tool %q is not allowed", tc.Function.Name), nil
 	}
@@ -1296,8 +1610,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	session := h.store.Get(scope, req.SessionID)
 
-	userContent := h.buildUserMessageContent(req.Message, req.Files)
-
 	// Record the user's explicit model choice before the first persist so it's
 	// included in the very first save (triggered by Add below).
 	if err := h.requireAllowedSystemPrompt(principal, req.SystemPrompt); err != nil {
@@ -1327,7 +1639,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	session.SetParams(convParams)
-	userMsgID := session.Add(openai.ChatMessageRoleUser, userContent, req.Files)
+	userMsgID := session.Add(llm.RoleUser, req.Message, req.Files)
 	compactSummary := h.maybeAutoCompact(r.Context(), principal, session)
 
 	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), principal, req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
@@ -1542,22 +1854,22 @@ func (h *Handler) DiscoverAndUpdateModels(ctx context.Context, providerName stri
 		return fmt.Errorf("unknown provider %q", providerName)
 	}
 
-	resp, err := entry.Client.ListModels(ctx)
+	resp, err := entry.Client.Models.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list models for provider %q: %w", providerName, err)
 	}
 
 	staticByID := make(map[string]ModelInfo, len(entry.StaticModels))
-	infos := make([]ModelInfo, 0, len(entry.StaticModels)+len(resp.Models))
+	infos := make([]ModelInfo, 0, len(entry.StaticModels)+len(resp.Data))
 	for _, m := range entry.StaticModels {
 		staticByID[m.ID] = m
 		infos = append(infos, m)
 	}
-	seen := make(map[string]bool, len(entry.StaticModels)+len(resp.Models))
+	seen := make(map[string]bool, len(entry.StaticModels)+len(resp.Data))
 	for _, m := range infos {
 		seen[m.ID] = true
 	}
-	for _, md := range resp.Models {
+	for _, md := range resp.Data {
 		if seen[md.ID] {
 			continue
 		}
@@ -1634,6 +1946,12 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	fileID := uuid.New().String()
 	filePath := filepath.Join(uploadDir, fileID)
 
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.log.Error("failed to read uploaded file", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save file"})
+		return
+	}
 	out, err := os.Create(filePath)
 	if err != nil {
 		h.log.Error("failed to create file", zap.Error(err))
@@ -1642,7 +1960,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, file); err != nil {
+	if _, err := out.Write(data); err != nil {
 		h.log.Error("failed to write file", zap.Error(err))
 		if removeErr := os.Remove(filePath); removeErr != nil {
 			h.log.Warn("failed to clean up partial upload", zap.String("path", filePath), zap.Error(removeErr))
@@ -1652,13 +1970,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	uploadedFile := storage.UploadedFile{
-		ID:        fileID,
-		Filename:  header.Filename,
-		Size:      header.Size,
-		URL:       "/api/files/" + fileID,
-		CreatedAt: time.Now().UnixMilli(),
-		TenantID:  scope.TenantID,
-		UserID:    scope.UserID,
+		ID:          fileID,
+		Filename:    header.Filename,
+		Size:        int64(len(data)),
+		ContentType: detectFileContentType(storage.UploadedFile{Filename: header.Filename}, data),
+		SHA256:      fileSHA256(data),
+		URL:         "/api/files/" + fileID,
+		CreatedAt:   time.Now().UnixMilli(),
+		TenantID:    scope.TenantID,
+		UserID:      scope.UserID,
 	}
 
 	h.log.Info("file uploaded", zap.String("filename", header.Filename), zap.String("id", fileID))

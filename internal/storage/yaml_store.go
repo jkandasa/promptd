@@ -40,17 +40,27 @@ func filename(c *Conversation) string {
 }
 
 func (s *YAMLStore) findFile(dir, id string) string {
+	matches := s.findFiles(dir, id)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+func (s *YAMLStore) findFiles(dir, id string) []string {
 	suffix := "-" + id + ".yaml"
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return nil
 	}
+	var matches []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
-			return filepath.Join(dir, e.Name())
+			matches = append(matches, filepath.Join(dir, e.Name()))
 		}
 	}
-	return ""
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	return matches
 }
 
 func (s *YAMLStore) Save(scope Scope, c *Conversation) error {
@@ -72,35 +82,59 @@ func (s *YAMLStore) Save(scope Scope, c *Conversation) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, target)
+	if err := os.Rename(tmp, target); err != nil {
+		return err
+	}
+	for _, existing := range s.findFiles(dir, c.ID) {
+		if existing == target {
+			continue
+		}
+		if err := os.Remove(existing); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *YAMLStore) Load(scope Scope, id string) (*Conversation, error) {
 	dir := s.scopeDir(scope)
 	s.mu.RLock()
-	path := s.findFile(dir, id)
+	paths := s.findFiles(dir, id)
 	s.mu.RUnlock()
-	if path == "" {
+	if len(paths) == 0 {
 		return nil, ErrNotFound
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrNotFound
+	var firstErr error
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		return nil, err
+		var c Conversation
+		if err := yaml.Unmarshal(data, &c); err != nil {
+			if firstErr == nil {
+				firstErr = errors.New(path + ": " + err.Error())
+			}
+			continue
+		}
+		if c.TenantID != "" && c.TenantID != scope.TenantID {
+			continue
+		}
+		if c.UserID != "" && c.UserID != scope.UserID {
+			continue
+		}
+		return &c, nil
 	}
-	var c Conversation
-	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, err
+	if firstErr != nil {
+		return nil, firstErr
 	}
-	if c.TenantID != "" && c.TenantID != scope.TenantID {
-		return nil, ErrNotFound
-	}
-	if c.UserID != "" && c.UserID != scope.UserID {
-		return nil, ErrNotFound
-	}
-	return &c, nil
+	return nil, ErrNotFound
 }
 
 func (s *YAMLStore) List(scope Scope) ([]*Conversation, error) {
@@ -126,7 +160,7 @@ func (s *YAMLStore) List(scope Scope) ([]*Conversation, error) {
 		id := stem[16:]
 		c, err := s.Load(scope, id)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		convs = append(convs, &Conversation{
 			TenantID:                  c.TenantID,
