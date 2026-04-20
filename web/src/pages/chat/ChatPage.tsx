@@ -40,6 +40,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
+  StopOutlined,
 } from '@ant-design/icons'
 import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, uid } from '../../utils/helpers'
 import type { ModelData, ModelInfo, ProviderInfo } from '../../api/client'
@@ -90,6 +91,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
+  const chatAbortControllerRef = useRef<AbortController | null>(null)
   const [selectedModel, setSelectedModel] = useState<string>(initialStoredModel)
   const [selectedProvider, setSelectedProvider] = useState<string>(initialStoredProvider)
   const [providerModels, setProviderModels] = useState<ModelInfo[]>([])
@@ -431,13 +433,15 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     setUploadedFiles([])
     setLoading(true)
     loadingRef.current = true
+    const abortController = new AbortController()
+    chatAbortControllerRef.current = abortController
 
     try {
       const modelId = selectedModelRef.current
       const modelToSend = modelId || undefined
       const systemPromptToSend = selectedSystemPromptRef.current || undefined
       const providerToSend = selectedProviderRef.current || singleProvider || undefined
-      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, providerToSend)
+      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, providerToSend, abortController.signal)
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
       }
@@ -462,6 +466,9 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
       setMessages((prev) => [...prev, assistantMsg])
       refreshConversations()
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return
+      }
       const serverModel = err instanceof ChatError ? err.model : undefined
       const serverProvider = err instanceof ChatError ? err.provider : undefined
       const requestedModel = selectedModelRef.current
@@ -478,6 +485,9 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
       }
       setMessages((prev) => [...prev, errMsg])
     } finally {
+      if (chatAbortControllerRef.current === abortController) {
+        chatAbortControllerRef.current = null
+      }
       setLoading(false)
       loadingRef.current = false
       setTimeout(() => {
@@ -524,6 +534,10 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     if (e.target.value.length <= MAX_MESSAGE_LENGTH) {
       setInput(e.target.value)
     }
+  }, [])
+
+  const stopProcessing = useCallback(() => {
+    chatAbortControllerRef.current?.abort()
   }, [])
 
   const scrollToBottom = () => {
@@ -906,7 +920,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message…"
                   autoSize={{ minRows: 2, maxRows: 6 }}
-                  disabled={loading || uploading || loadingConversation}
+                  disabled={uploading || loadingConversation}
                   aria-label="Message input"
                   style={{ borderRadius: 12, resize: 'none', fontSize: 15, padding: '12px 50px 48px 16px' }}
                 />
@@ -1059,13 +1073,14 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                       />
                     </Tooltip>
                   )}
-                  <Tooltip title="Send">
+                  <Tooltip title={loading ? 'Stop' : 'Send'}>
                     <Button
                       type="primary"
-                      icon={<SendOutlined />}
-                      onClick={() => send()}
-                      disabled={(!input.trim() && uploadedFiles.length === 0) || loading || !hasSelectedSystemPrompt}
-                      aria-label="Send message"
+                      danger={loading}
+                      icon={loading ? <StopOutlined /> : <SendOutlined />}
+                      onClick={loading ? stopProcessing : () => send()}
+                      disabled={loading ? false : ((!input.trim() && uploadedFiles.length === 0) || !hasSelectedSystemPrompt)}
+                      aria-label={loading ? 'Stop processing' : 'Send message'}
                       style={{ height: 34, width: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     />
                   </Tooltip>

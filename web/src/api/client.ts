@@ -168,11 +168,13 @@ export async function apiChat(
   systemPrompt?: string,
   params?: LLMParamsOverride,
   provider?: string,
+  signal?: AbortSignal,
 ): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
+    signal,
   })
   const data = await res.json()
   if (!res.ok) throw new ChatError(data.error || 'Request failed', data.model, data.provider, data.error_msg_id)
