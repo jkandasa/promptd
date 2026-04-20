@@ -252,7 +252,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: .github/docker/release.Dockerfile
+          file: Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
           build-args: |

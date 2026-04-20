@@ -3,6 +3,7 @@
 BIN     := promptd
 CMD     := ./cmd
 CONFIG  ?= ./config.yaml
+IMAGE   ?= ghcr.io/jkandasa/promptd:local
 
 # ---------------------------------------------------------------------------
 # Version stamping — override any of these on the command line or let them
@@ -42,6 +43,10 @@ run-go:
 .PHONY: build
 build: ui
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) $(CMD)
+
+.PHONY: docker-build
+docker-build: build
+	docker build --build-arg BINARY_PATH=./$(BIN) -t $(IMAGE) .
 
 .PHONY: clean
 clean:
