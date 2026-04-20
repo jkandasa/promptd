@@ -88,7 +88,7 @@ func runServe(configPath string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	logger := appcore.BuildLogger(cfg.Log.Level)
+	logger := appcore.BuildLogger(cfg.Log.Level, cfg.Log.Encoding, cfg.Log.EnableStacktrace)
 	defer func() { _ = logger.Sync() }()
 
 	v := version.Get()

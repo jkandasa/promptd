@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	appconfig "promptd/internal/config"
@@ -13,6 +14,11 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+)
+
+const (
+	logEncodingConsole = "console"
+	logEncodingJSON    = "json"
 )
 
 func BuildModelInfos(models []appconfig.LLMModel, globalParams appconfig.LLMParams, providerName string) []handler.ModelInfo {
@@ -41,16 +47,23 @@ func BuildModelInfos(models []appconfig.LLMModel, globalParams appconfig.LLMPara
 	return infos
 }
 
-func BuildLogger(level string) *zap.Logger {
+func BuildLogger(level, encoding string, enableStacktrace bool) *zap.Logger {
 	lvl := zapcore.InfoLevel
 	if err := lvl.UnmarshalText([]byte(level)); err != nil {
 		lvl = zapcore.InfoLevel
 	}
 
-	cfg := zap.NewDevelopmentConfig()
+	encoding = normalizeLogEncoding(encoding)
+	cfg := zap.NewProductionConfig()
 	cfg.Level = zap.NewAtomicLevelAt(lvl)
+	cfg.Encoding = encoding
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	if encoding == logEncodingConsole {
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	}
+	if !enableStacktrace {
+		cfg.DisableStacktrace = true
+	}
 
 	logger, err := cfg.Build()
 	if err != nil {
@@ -58,6 +71,17 @@ func BuildLogger(level string) *zap.Logger {
 		os.Exit(1)
 	}
 	return logger
+}
+
+func normalizeLogEncoding(encoding string) string {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "", logEncodingConsole:
+		return logEncodingConsole
+	case logEncodingJSON:
+		return logEncodingJSON
+	default:
+		return logEncodingConsole
+	}
 }
 
 func BuildRegistry(logger *zap.Logger) *tools.Registry {

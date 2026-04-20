@@ -73,6 +73,8 @@ llm:
 
 log:
   level: "info"
+  encoding: "console"
+  enable_stacktrace: false
 
 mcp:
   servers: []

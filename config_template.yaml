@@ -216,6 +216,12 @@ log:
   # Log level: debug, info, warn, error (default: info)
   level: "info"
 
+  # Log encoding: console or json (default: console)
+  encoding: "console"
+
+  # Include stack traces on error logs (default: false)
+  enable_stacktrace: false
+
 mcp:
   # Number of consecutive health check failures before unregistering (default: 3)
   # health_max_failures: 3

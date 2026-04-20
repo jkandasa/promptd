@@ -116,6 +116,12 @@ type MCPServerConfig struct {
 	Insecure                bool              `yaml:"insecure"`
 }
 
+type LogConfig struct {
+	Level            string `yaml:"level"`
+	Encoding         string `yaml:"encoding"`
+	EnableStacktrace bool   `yaml:"enable_stacktrace"`
+}
+
 type Config struct {
 	Data struct {
 		Dir string `yaml:"dir"`
@@ -148,9 +154,7 @@ type Config struct {
 			Enabled *bool    `yaml:"enabled"`
 		} `yaml:"trace"`
 	} `yaml:"llm"`
-	Log struct {
-		Level string `yaml:"level"`
-	} `yaml:"log"`
+	Log   LogConfig         `yaml:"log"`
 	MCP struct {
 		HealthMaxFailures       int               `yaml:"health_max_failures"`
 		HealthInterval          time.Duration     `yaml:"health_interval"`
