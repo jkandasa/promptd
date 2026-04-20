@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"promptd/internal/auth"
 	"promptd/internal/scheduler"
 
 	"go.uber.org/zap"
@@ -21,11 +22,35 @@ func NewScheduleHandler(sched *scheduler.Scheduler, log *zap.Logger) *ScheduleHa
 	return &ScheduleHandler{sched: sched, log: log}
 }
 
-// List returns all schedules.
-func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
+func (h *ScheduleHandler) requireSchedulesRead(w http.ResponseWriter, r *http.Request) (*auth.Principal, bool) {
 	principal := requestPrincipal(r)
 	if principal == nil || !principal.Policy.Permissions.SchedulesRead {
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule access not allowed"})
+		return nil, false
+	}
+	return principal, true
+}
+
+func (h *ScheduleHandler) requireSchedulesWrite(w http.ResponseWriter, r *http.Request) (*auth.Principal, bool) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+		return nil, false
+	}
+	return principal, true
+}
+
+func (h *ScheduleHandler) writeScheduleStoreError(w http.ResponseWriter, err error, internalMessage string) {
+	if errors.Is(err, scheduler.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, errorResponse{Error: internalMessage})
+}
+
+// List returns all schedules.
+func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireSchedulesRead(w, r); !ok {
 		return
 	}
 	scope := requestScope(r)
@@ -43,19 +68,13 @@ func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Get returns a single schedule by ID.
 func (h *ScheduleHandler) Get(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesRead {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule access not allowed"})
+	if _, ok := h.requireSchedulesRead(w, r); !ok {
 		return
 	}
 	id := r.PathValue("id")
 	sc, err := h.sched.Store().LoadSchedule(requestScope(r), id)
 	if err != nil {
-		if errors.Is(err, scheduler.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
-		} else {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load schedule"})
-		}
+		h.writeScheduleStoreError(w, err, "failed to load schedule")
 		return
 	}
 	writeJSON(w, http.StatusOK, sc)
@@ -63,9 +82,7 @@ func (h *ScheduleHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Create creates a new schedule.
 func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+	if _, ok := h.requireSchedulesWrite(w, r); !ok {
 		return
 	}
 	var sc scheduler.Schedule
@@ -91,9 +108,7 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // Update replaces an existing schedule.
 func (h *ScheduleHandler) Update(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+	if _, ok := h.requireSchedulesWrite(w, r); !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -117,18 +132,12 @@ func (h *ScheduleHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete removes a schedule.
 func (h *ScheduleHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+	if _, ok := h.requireSchedulesWrite(w, r); !ok {
 		return
 	}
 	id := r.PathValue("id")
 	if err := h.sched.Remove(requestScope(r), id); err != nil {
-		if errors.Is(err, scheduler.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
-		} else {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete"})
-		}
+		h.writeScheduleStoreError(w, err, "failed to delete")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -136,9 +145,7 @@ func (h *ScheduleHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // Trigger runs a schedule immediately (non-blocking — returns before execution completes).
 func (h *ScheduleHandler) Trigger(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+	if _, ok := h.requireSchedulesWrite(w, r); !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -155,9 +162,8 @@ func (h *ScheduleHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 
 // ListExecutions returns the execution history for a schedule.
 func (h *ScheduleHandler) ListExecutions(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesRead {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule access not allowed"})
+	principal, ok := h.requireSchedulesRead(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -179,19 +185,13 @@ func (h *ScheduleHandler) ListExecutions(w http.ResponseWriter, r *http.Request)
 
 // DeleteExecution removes a single execution record.
 func (h *ScheduleHandler) DeleteExecution(w http.ResponseWriter, r *http.Request) {
-	principal := requestPrincipal(r)
-	if principal == nil || !principal.Policy.Permissions.SchedulesWrite {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "schedule write not allowed"})
+	if _, ok := h.requireSchedulesWrite(w, r); !ok {
 		return
 	}
 	schedID := r.PathValue("id")
 	execID := r.PathValue("execId")
 	if err := h.sched.Store().DeleteExecution(requestScope(r), schedID, execID); err != nil {
-		if errors.Is(err, scheduler.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
-		} else {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete execution"})
-		}
+		h.writeScheduleStoreError(w, err, "failed to delete execution")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
