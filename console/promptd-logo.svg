@@ -1,0 +1,37 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Main "p" shape -->
+  <path d="M90 40
+           L90 190
+           Q90 210 110 210
+           L120 210
+           L120 130
+           Q120 110 140 110
+           Q180 110 180 75
+           Q180 40 140 40
+           Z"
+        fill="url(#grad)"/>
+
+  <!-- Circular part -->
+  <path d="M140 40
+           Q210 40 210 105
+           Q210 170 140 170
+           Q120 170 120 150
+           Q120 130 140 130
+           Q180 130 180 105
+           Q180 75 140 75
+           Q120 75 120 55
+           Q120 40 140 40
+           Z"
+        fill="url(#grad)"/>
+
+  <!-- Motion lines -->
+  <rect x="40" y="95" width="40" height="10" rx="5" fill="#7C3AED"/>
+  <rect x="50" y="115" width="30" height="10" rx="5" fill="#7C3AED"/>
+</svg>

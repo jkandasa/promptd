@@ -103,6 +103,9 @@ func (s *Service) AuthenticateBearer(token string) (*Principal, error) {
 	if token == "" {
 		return nil, ErrUnauthorized
 	}
+	if principal, err := s.AuthenticateSessionToken(token); err == nil {
+		return principal, nil
+	}
 	now := time.Now()
 	for _, user := range s.usersByID {
 		if user.Disabled {
@@ -132,6 +135,31 @@ func (s *Service) AuthenticateBearer(token string) (*Principal, error) {
 	return nil, ErrUnauthorized
 }
 
+func (s *Service) AuthenticateSessionToken(tokenValue string) (*Principal, error) {
+	tokenValue = strings.TrimSpace(tokenValue)
+	if tokenValue == "" {
+		return nil, ErrUnauthorized
+	}
+	parsed, err := jwt.ParseWithClaims(tokenValue, &sessionClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(s.jwtConfig.Secret), nil
+	})
+	if err != nil || !parsed.Valid {
+		return nil, ErrUnauthorized
+	}
+	claims, ok := parsed.Claims.(*sessionClaims)
+	if !ok {
+		return nil, ErrUnauthorized
+	}
+	principal, err := s.BuildPrincipalByScope(ResourceScope{TenantID: claims.TenantID, UserID: claims.UserID})
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+	return principal, nil
+}
+
 func (s *Service) buildPrincipal(user *User, via string) (*Principal, error) {
 	policy, err := CompileEffectivePolicy(user.Roles, s.roles)
 	if err != nil {
@@ -154,7 +182,8 @@ func (s *Service) BuildPrincipalByScope(scope ResourceScope) (*Principal, error)
 	return s.buildPrincipal(user, "internal")
 }
 
-func (s *Service) IssueSessionCookie(w http.ResponseWriter, principal *Principal) error {
+func (s *Service) IssueSessionToken(principal *Principal) (string, time.Time, error) {
+	expiresAt := time.Now().Add(s.jwtConfig.TTL)
 	claims := sessionClaims{
 		UserID:   principal.Scope.UserID,
 		TenantID: principal.Scope.TenantID,
@@ -162,13 +191,21 @@ func (s *Service) IssueSessionCookie(w http.ResponseWriter, principal *Principal
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   principal.Scope.UserID,
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtConfig.TTL)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(s.jwtConfig.Secret))
 	if err != nil {
-		return err
+		return "", time.Time{}, err
+	}
+	return signed, expiresAt, nil
+}
+
+func (s *Service) IssueSessionCookie(w http.ResponseWriter, principal *Principal) (string, time.Time, error) {
+	signed, expiresAt, err := s.IssueSessionToken(principal)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.jwtConfig.CookieName,
@@ -179,7 +216,7 @@ func (s *Service) IssueSessionCookie(w http.ResponseWriter, principal *Principal
 		Secure:   false,
 		MaxAge:   int(s.jwtConfig.TTL.Seconds()),
 	})
-	return nil
+	return signed, expiresAt, nil
 }
 
 func (s *Service) ClearSessionCookie(w http.ResponseWriter) {
@@ -204,24 +241,7 @@ func (s *Service) AuthenticateRequest(r *http.Request) (*Principal, error) {
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
 		return nil, ErrUnauthorized
 	}
-	parsed, err := jwt.ParseWithClaims(cookie.Value, &sessionClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if token.Method != jwt.SigningMethodHS256 {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return []byte(s.jwtConfig.Secret), nil
-	})
-	if err != nil || !parsed.Valid {
-		return nil, ErrUnauthorized
-	}
-	claims, ok := parsed.Claims.(*sessionClaims)
-	if !ok {
-		return nil, ErrUnauthorized
-	}
-	principal, err := s.BuildPrincipalByScope(ResourceScope{TenantID: claims.TenantID, UserID: claims.UserID})
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	return principal, nil
+	return s.AuthenticateSessionToken(cookie.Value)
 }
 
 func (s *Service) Require(next http.Handler) http.Handler {

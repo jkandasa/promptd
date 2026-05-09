@@ -1,0 +1,211 @@
+import 'package:flutter/material.dart';
+
+import '../../models/promptd_models.dart';
+import '../../state/promptd_app_state.dart';
+
+class ConversationPanel extends StatelessWidget {
+  const ConversationPanel({super.key, required this.state});
+
+  final PromptdAppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final pinned = state.conversations.where((item) => item.pinned).toList();
+    final recent = state.conversations.where((item) => !item.pinned).toList();
+
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Text('Conversations', style: theme.textTheme.titleMedium),
+                const Spacer(),
+                IconButton.filledTonal(
+                  tooltip: 'New chat',
+                  onPressed: state.startNewConversation,
+                  icon: const Icon(Icons.add_rounded),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: state.conversations.isEmpty
+                ? const _EmptyConversations()
+                : ListView(
+                    padding: const EdgeInsets.all(10),
+                    children: [
+                      if (pinned.isNotEmpty) ...[
+                        _SectionLabel(label: 'Pinned'),
+                        for (final item in pinned)
+                          _ConversationTile(state: state, conversation: item),
+                      ],
+                      if (recent.isNotEmpty) ...[
+                        _SectionLabel(label: 'Recent'),
+                        for (final item in recent)
+                          _ConversationTile(state: state, conversation: item),
+                      ],
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConversationTile extends StatelessWidget {
+  const _ConversationTile({required this.state, required this.conversation});
+
+  final PromptdAppState state;
+  final ConversationMeta conversation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final selected = state.selectedConversationId == conversation.id;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: selected
+            ? theme.colorScheme.primary.withValues(alpha: 0.1)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => state.loadConversation(conversation.id),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 9, 4, 9),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        conversation.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _conversationMeta(conversation),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.58,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Conversation actions',
+                  onSelected: (value) {
+                    if (value == 'pin') {
+                      state.togglePinConversation(conversation.id);
+                    }
+                    if (value == 'delete') {
+                      state.deleteConversation(conversation.id);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'pin',
+                      child: Row(
+                        children: [
+                          Icon(
+                            conversation.pinned
+                                ? Icons.push_pin
+                                : Icons.push_pin_outlined,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(conversation.pinned ? 'Unpin' : 'Pin'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline_rounded),
+                          SizedBox(width: 10),
+                          Text('Delete'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _conversationMeta(ConversationMeta conversation) {
+    final provider = conversation.provider ?? '';
+    final model = conversation.model ?? '';
+    final date = conversation.updatedAt ?? conversation.createdAt;
+    final parts = [
+      if (provider.isNotEmpty) provider,
+      if (model.isNotEmpty) model,
+      if (date != null) _compactDate(date),
+    ];
+    return parts.join(' · ');
+  }
+
+  String _compactDate(DateTime date) {
+    final local = date.toLocal();
+    return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.56),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyConversations extends StatelessWidget {
+  const _EmptyConversations();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          'No conversations yet',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ),
+    );
+  }
+}

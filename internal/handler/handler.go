@@ -158,16 +158,16 @@ type ProviderInfo struct {
 
 // ProviderEntry holds a single LLM provider's client and model list.
 type ProviderEntry struct {
-	Name          string
-	Client        *openai.Client
-	APIKey        string
-	BaseURL       string
-	HTTPClient    *http.Client
-	ModelSelector *ModelSelector
-	GlobalParams  LLMParams
-	StaticModels  []ModelInfo
-	AutoDiscover  bool
-	FileUploads   ProviderFileUploadConfig
+	Name            string
+	Client          *openai.Client
+	APIKey          string
+	BaseURL         string
+	HTTPClient      *http.Client
+	ModelSelector   *ModelSelector
+	GlobalParams    LLMParams
+	StaticModels    []ModelInfo
+	AutoDiscover    bool
+	FileUploads     ProviderFileUploadConfig
 	ImageGeneration ProviderImageGenerationConfig
 }
 
@@ -451,19 +451,19 @@ type chatRequest struct {
 }
 
 type chatResponse struct {
-	Reply          string              `json:"reply"`
-	Mode           string              `json:"mode,omitempty"`
-	Model          string              `json:"model"`
-	Provider       string              `json:"provider,omitempty"`
+	Reply          string                 `json:"reply"`
+	Mode           string                 `json:"mode,omitempty"`
+	Model          string                 `json:"model"`
+	Provider       string                 `json:"provider,omitempty"`
 	Files          []storage.UploadedFile `json:"files,omitempty"`
-	TimeTaken      int64               `json:"time_taken_ms"`
-	LLMCalls       int                 `json:"llm_calls"`
-	ToolCalls      int                 `json:"tool_calls"`
-	UserMsgID      string              `json:"user_msg_id"`
-	AssistantMsgID string              `json:"assistant_msg_id"`
-	Trace          []storage.LLMRound  `json:"trace,omitempty"`
-	UsedParams     *storage.UsedParams `json:"used_params,omitempty"`
-	CompactSummary *storage.Message    `json:"compact_summary,omitempty"`
+	TimeTaken      int64                  `json:"time_taken_ms"`
+	LLMCalls       int                    `json:"llm_calls"`
+	ToolCalls      int                    `json:"tool_calls"`
+	UserMsgID      string                 `json:"user_msg_id"`
+	AssistantMsgID string                 `json:"assistant_msg_id"`
+	Trace          []storage.LLMRound     `json:"trace,omitempty"`
+	UsedParams     *storage.UsedParams    `json:"used_params,omitempty"`
+	CompactSummary *storage.Message       `json:"compact_summary,omitempty"`
 }
 
 type errorResponse struct {
@@ -2049,15 +2049,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		reply        string
-		finalMsg     llm.Message
+		reply          string
+		finalMsg       llm.Message
 		assistantFiles []storage.UploadedFile
-		model        string
-		providerUsed string
-		llmCalls     int
-		toolCalls    int
-		trace        []storage.LLMRound
-		usedParams   *storage.UsedParams
+		model          string
+		providerUsed   string
+		llmCalls       int
+		toolCalls      int
+		trace          []storage.LLMRound
+		usedParams     *storage.UsedParams
 	)
 	var err error
 	if req.Mode == "image_generation" {
@@ -2156,11 +2156,21 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid credentials"})
 		return
 	}
-	if err := h.authService.IssueSessionCookie(w, principal); err != nil {
+	token, expiresAt, err := h.authService.IssueSessionCookie(w, principal)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to issue session"})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.authService.ToMeResponse(principal))
+	me := h.authService.ToMeResponse(principal)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_id":     me.UserID,
+		"tenant_id":   me.TenantID,
+		"roles":       me.Roles,
+		"permissions": me.Permissions,
+		"super_admin": me.SuperAdmin,
+		"token":       token,
+		"expires_at":  expiresAt.Format(time.RFC3339),
+	})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
