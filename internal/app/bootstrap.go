@@ -133,6 +133,11 @@ func BuildProviderRegistry(cfg *appconfig.Config, logger *zap.Logger) *handler.P
 				MaxInlineTextBytes: p.FileUploads.MaxInlineTextBytes,
 				PreferInlineImages: p.FileUploads.PreferInlineImages,
 			},
+			ImageGeneration: handler.ProviderImageGenerationConfig{
+				Enabled:       p.ImageGeneration.Enabled != nil && *p.ImageGeneration.Enabled,
+				Strategy:      p.ImageGeneration.Strategy,
+				ResponseField: p.ImageGeneration.ResponseField,
+			},
 		})
 		logger.Info("provider registered",
 			zap.String("name", p.Name),

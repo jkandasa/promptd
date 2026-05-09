@@ -52,7 +52,7 @@ func (s *Session) Add(role, content string, files []storage.UploadedFile) string
 
 // AddFinalMessage appends the final assistant reply with its associated
 // performance metadata and LLM trace. Returns the new message ID.
-func (s *Session) AddFinalMessage(msg llm.Message, model, provider string, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
+func (s *Session) AddFinalMessage(msg llm.Message, mode, model, provider string, files []storage.UploadedFile, timeTakenMs int64, llmCalls int, toolCalls int, trace []storage.LLMRound, usedParams *storage.UsedParams) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := uuid.New().String()
@@ -60,11 +60,13 @@ func (s *Session) AddFinalMessage(msg llm.Message, model, provider string, timeT
 		ID:          id,
 		Role:        msg.Role,
 		Content:     msg.Content,
+		Mode:        mode,
 		ToolCallID:  msg.ToolCallID,
 		Name:        msg.Name,
 		SentAt:      time.Now(),
 		Model:       model,
 		Provider:    provider,
+		Files:       files,
 		TimeTakenMs: timeTakenMs,
 		LLMCalls:    llmCalls,
 		ToolCalls:   toolCalls,
@@ -74,6 +76,23 @@ func (s *Session) AddFinalMessage(msg llm.Message, model, provider string, timeT
 	s.conv.UpdatedAt = time.Now()
 	s.persist()
 	return id
+}
+
+func (s *Session) SetMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conv.Mode == mode {
+		return
+	}
+	s.conv.Mode = mode
+	s.conv.UpdatedAt = time.Now()
+	s.persist()
+}
+
+func (s *Session) Mode() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conv.Mode
 }
 
 // AddErrorMessage appends a persisted UI-visible error message for the
@@ -209,6 +228,7 @@ func (s *Session) Reset() {
 	defer s.mu.Unlock()
 	s.conv.Messages = nil
 	s.conv.Title = ""
+	s.conv.Mode = ""
 	s.conv.Model = ""
 	s.conv.SystemPrompt = ""
 	s.conv.CompactSummaryMessageID = ""

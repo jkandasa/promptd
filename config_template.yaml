@@ -205,6 +205,19 @@ llm:
       #   until you have validated the provider/model behavior.
       # - prefer_inline_images only affects fallback when provider upload is not used.
 
+      # Optional image-generation routing for this provider.
+      # strategy:
+      # - chat_completions: send chat/completions with modalities: ["image"]
+      # - images_api: use /images/generations and /images/edits style endpoints
+      # response_field:
+      # - message_images: read choices[0].message.images[].image_url.url
+      # - content_parts: read image_url parts from assistant content arrays
+      # - images_data: read Images API data[].b64_json or data[].url
+      # image_generation:
+      #   enabled: true
+      #   strategy: "chat_completions"
+      #   response_field: "message_images"
+
     # Add more providers as needed:
     # - name: "groq"
     #   api_key: ""

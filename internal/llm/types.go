@@ -1,5 +1,7 @@
 package llm
 
+import "encoding/json"
+
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
@@ -27,6 +29,10 @@ type ImageURL struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type GeneratedImage struct {
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
 type MessagePart struct {
 	Type     string    `json:"type,omitempty"`
 	Text     string    `json:"text,omitempty"`
@@ -41,7 +47,51 @@ type Message struct {
 	Name             string        `json:"name,omitempty"`
 	ToolCallID       string        `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall    `json:"tool_calls,omitempty"`
+	Images           []GeneratedImage `json:"images,omitempty"`
 	MultiContent     []MessagePart `json:"-"`
+}
+
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Role             string          `json:"role,omitempty"`
+		Content          json.RawMessage `json:"content,omitempty"`
+		Refusal          string          `json:"refusal,omitempty"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		Name             string          `json:"name,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+		Images           []GeneratedImage `json:"images,omitempty"`
+	}
+	var raw alias
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Refusal = raw.Refusal
+	m.ReasoningContent = raw.ReasoningContent
+	m.Name = raw.Name
+	m.ToolCallID = raw.ToolCallID
+	m.ToolCalls = raw.ToolCalls
+	m.Images = raw.Images
+	m.Content = ""
+	m.MultiContent = nil
+	if len(raw.Content) == 0 || string(raw.Content) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(raw.Content, &m.Content); err == nil {
+		return nil
+	}
+	if err := json.Unmarshal(raw.Content, &m.MultiContent); err == nil {
+		return nil
+	}
+	var wrapped struct {
+		Content []MessagePart `json:"content"`
+	}
+	if err := json.Unmarshal(raw.Content, &wrapped); err == nil && len(wrapped.Content) > 0 {
+		m.MultiContent = wrapped.Content
+		return nil
+	}
+	return nil
 }
 
 type FunctionDefinition struct {

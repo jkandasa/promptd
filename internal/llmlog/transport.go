@@ -29,7 +29,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	debug := t.log.Core().Enabled(zap.DebugLevel)
 
 	if debug {
-		reqBody := readAndRestore(&req.Body)
+		reqBody := readAndRestore(&req.Body, true)
 		t.log.Debug("llm http request",
 			zap.String("method", req.Method),
 			zap.String("url", req.URL.String()),
@@ -48,7 +48,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	patchReasoningField(&resp.Body)
 
 	if debug {
-		respBody := readAndRestore(&resp.Body)
+		respBody := readAndRestore(&resp.Body, false)
 		t.log.Debug("llm http response",
 			zap.Int("status", resp.StatusCode),
 			zap.Any("headers", redactHeaders(resp.Header)),
@@ -67,7 +67,7 @@ func patchReasoningField(body *io.ReadCloser) {
 	if *body == nil {
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(*body, maxLogBodyBytes))
+	data, err := io.ReadAll(*body)
 	(*body).Close()
 	if err != nil || len(data) == 0 {
 		*body = io.NopCloser(bytes.NewReader(data))
@@ -154,13 +154,19 @@ func applyReasoningPatch(data []byte) []byte {
 
 // readAndRestore reads up to maxLogBodyBytes from the body, then replaces it with
 // a fresh reader that yields the full original content so callers are unaffected.
-func readAndRestore(body *io.ReadCloser) string {
+func readAndRestore(body *io.ReadCloser, limit bool) string {
 	if *body == nil {
 		return ""
 	}
-	data, _ := io.ReadAll(io.LimitReader(*body, maxLogBodyBytes))
+	data, _ := io.ReadAll(*body)
 	(*body).Close()
 	*body = io.NopCloser(bytes.NewReader(data))
+	if limit && len(data) > maxLogBodyBytes {
+		return string(data[:maxLogBodyBytes])
+	}
+	if !limit && len(data) > maxLogBodyBytes {
+		return string(data[:maxLogBodyBytes])
+	}
 	return string(data)
 }
 

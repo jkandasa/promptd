@@ -44,7 +44,7 @@ import {
 } from '@ant-design/icons'
 import { MAX_FILES_PER_MESSAGE, MAX_FILE_SIZE, MAX_MESSAGE_LENGTH, uid } from '../../utils/helpers'
 import type { ModelData, ModelInfo, ProviderInfo } from '../../api/client'
-import type { Role, UploadedFile } from '../../types/chat'
+import type { ChatMode, Role, UploadedFile } from '../../types/chat'
 import { getFirstSystemPromptName, getSortedSystemPrompts, isKnownSystemPrompt } from '../../types/chat'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import promptdLogo from '../../promptd-logo.svg'
@@ -64,6 +64,7 @@ const { useToken } = theme
 const CHAT_PROVIDER_STORAGE_KEY = 'promptd.chat.selectedProvider'
 const CHAT_MODEL_STORAGE_KEY = 'promptd.chat.selectedModel'
 const CHAT_SYSTEM_PROMPT_STORAGE_KEY = 'promptd.chat.selectedSystemPrompt'
+const CHAT_MODE_STORAGE_KEY = 'promptd.chat.mode'
 
 interface ChatPageProps {
   models: ModelInfo[]
@@ -84,6 +85,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   const initialStoredProvider = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_PROVIDER_STORAGE_KEY) ?? '' : ''
   const initialStoredModel = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY) ?? '' : ''
   const initialStoredSystemPrompt = typeof window !== 'undefined' ? window.localStorage.getItem(CHAT_SYSTEM_PROMPT_STORAGE_KEY) ?? '' : ''
+  const initialStoredMode = typeof window !== 'undefined' && window.localStorage.getItem(CHAT_MODE_STORAGE_KEY) === 'image_generation' ? 'image_generation' : 'chat'
 
   const [sessionId, setSessionId] = useState<string | null>(selectedConversationId ?? null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -94,6 +96,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   const chatAbortControllerRef = useRef<AbortController | null>(null)
   const [selectedModel, setSelectedModel] = useState<string>(initialStoredModel)
   const [selectedProvider, setSelectedProvider] = useState<string>(initialStoredProvider)
+  const [chatMode, setChatMode] = useState<ChatMode>(initialStoredMode)
   const [providerModels, setProviderModels] = useState<ModelInfo[]>([])
   const [loadingProviderModels, setLoadingProviderModels] = useState(false)
   const [providerModelsReadyFor, setProviderModelsReadyFor] = useState<string | null>(null)
@@ -200,6 +203,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
           id: uid(),
           role: m.role as Role,
           content: m.content,
+          mode: m.mode,
           files: m.files,
           ts: m.sent_at ? new Date(m.sent_at) : new Date(detail.updated_at),
           provider: m.provider,
@@ -213,6 +217,8 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
           compactSummary: m.compact_summary,
         }))
       setMessages(uiMsgs)
+      const nextMode: ChatMode = detail.mode === 'image_generation' ? 'image_generation' : 'chat'
+      setChatMode(nextMode)
       const nextProvider = detail.provider || ''
       const nextModel = nextProvider ? detail.model || '' : ''
       if (detail.params && Object.keys(detail.params).length > 0) {
@@ -323,6 +329,11 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     else window.localStorage.removeItem(CHAT_PROVIDER_STORAGE_KEY)
   }, [selectedProvider])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode)
+  }, [chatMode])
+
   const isMultiProvider = (modelData.providers?.length ?? 0) > 1
   const singleProvider = !isMultiProvider && (modelData.providers?.length ?? 0) === 1 ? modelData.providers?.[0]?.name ?? '' : ''
   const effectiveProvider = selectedProvider || singleProvider
@@ -381,13 +392,14 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     setMessages([])
     setInput('')
     setUploadedFiles([])
+    setChatMode(initialStoredMode)
     pendingParamsRef.current = null
     loadingConversationIdRef.current = null
     loadedConversationIdRef.current = null
-    const nextPrompt = selectedSystemPromptRef.current || getFirstSystemPromptName(uiConfig)
+    const nextPrompt = getFirstSystemPromptName(uiConfig)
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [discardUploadedFiles, uiConfig])
+  }, [discardUploadedFiles, initialStoredMode, uiConfig])
 
   const removeUploadedFile = useCallback((fileId: string) => {
     setUploadedFiles((prev) => {
@@ -417,7 +429,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
 
   const send = useCallback(async (overrideText?: string) => {
     if (loadingRef.current) return
-    if (!selectedSystemPromptRef.current) return
+    if (chatMode === 'chat' && !selectedSystemPromptRef.current) return
     const text = (overrideText ?? input).trim()
     if (!text && uploadedFilesRef.current.length === 0) return
 
@@ -439,9 +451,9 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     try {
       const modelId = selectedModelRef.current
       const modelToSend = modelId || undefined
-      const systemPromptToSend = selectedSystemPromptRef.current || undefined
+      const systemPromptToSend = chatMode === 'chat' ? (selectedSystemPromptRef.current || undefined) : undefined
       const providerToSend = selectedProviderRef.current || singleProvider || undefined
-      const response = await apiChat(currentSessionId, text, files, modelToSend, systemPromptToSend, llmParamsRef.current, providerToSend, abortController.signal)
+      const response = await apiChat(currentSessionId, text, chatMode, files, modelToSend, systemPromptToSend, llmParamsRef.current, providerToSend, abortController.signal)
       if (response.user_msg_id) {
         setMessages((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, msgId: response.user_msg_id } : m))
       }
@@ -452,6 +464,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
         id: uid(),
         role: 'assistant',
         content: response.reply,
+        mode: response.mode ?? chatMode,
         ts: new Date(),
         timeTaken: response.time_taken_ms,
         llmCalls: response.llm_calls,
@@ -495,7 +508,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
         el?.focus()
       }, 0)
     }
-  }, [input, onConversationChange, refreshConversations, singleProvider, upsertCompactSummaryMessage])
+  }, [chatMode, input, onConversationChange, refreshConversations, singleProvider, upsertCompactSummaryMessage])
 
   const handleDeleteMessage = useCallback((id: string) => {
     setMessages((prev) => {
@@ -580,6 +593,14 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
   }, [effectiveProvider])
 
   const availableModels = useMemo(() => effectiveProvider ? providerModels : [], [effectiveProvider, providerModels])
+  const selectedProviderInfo = useMemo(() => {
+    if (!effectiveProvider) return null
+    return modelData.providers?.find((provider) => provider.name === effectiveProvider) ?? null
+  }, [effectiveProvider, modelData.providers])
+  const hasAnyImageProvider = useMemo(() => (modelData.providers?.some((provider) => provider.image_generation_enabled) ?? false), [modelData.providers])
+  const imageModeAvailable = effectiveProvider
+    ? !!selectedProviderInfo?.image_generation_enabled
+    : hasAnyImageProvider
 
   const filterSelectOption = (input: string, option?: { label?: unknown; value?: unknown; data?: { searchText?: string } }) => {
     if (!input) return true
@@ -657,14 +678,25 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
     })),
   ], [uiConfig])
   useEffect(() => {
+    if (chatMode !== 'chat') return
     if (selectedConversationId) return
     if (selectedSystemPrompt && isKnownSystemPrompt(uiConfig, selectedSystemPrompt)) return
     const nextPrompt = getFirstSystemPromptName(uiConfig)
     if (!nextPrompt) return
     setSelectedSystemPrompt(nextPrompt)
     selectedSystemPromptRef.current = nextPrompt
-  }, [selectedConversationId, selectedSystemPrompt, uiConfig])
-  const hasSelectedSystemPrompt = selectedSystemPrompt !== ''
+  }, [chatMode, selectedConversationId, selectedSystemPrompt, uiConfig])
+  useEffect(() => {
+    if (chatMode === 'image_generation' && !imageModeAvailable) {
+      setChatMode('chat')
+    }
+  }, [chatMode, imageModeAvailable])
+
+  const hasSelectedSystemPrompt = chatMode === 'image_generation' || selectedSystemPrompt !== ''
+  const modeOptions = useMemo(() => ([
+    { label: 'Chat', value: 'chat' },
+    ...(imageModeAvailable ? [{ label: 'Image', value: 'image_generation' as const }] : []),
+  ]), [imageModeAvailable])
   const compactModelOptions = useMemo(() => ([
     { label: 'Auto', value: '' },
     ...models.map((model) => ({
@@ -855,14 +887,19 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                       Promptd · AI Assistant
                     </Text>
                     <Text type="secondary" className="hero-description">
-                      Start with a prompt below or type your own request. Ask for debugging, code changes, summaries, or planning help.
+                      {chatMode === 'image_generation'
+                        ? 'Describe the image you want to create, or attach an image and describe how it should be transformed.'
+                        : 'Start with a prompt below or type your own request. Ask for debugging, code changes, summaries, or planning help.'}
                     </Text>
                   </div>
                 </div>
 
                 {/* Prompt suggestions */}
                 <div className="prompt-grid">
-                  {(uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?']).map((prompt) => (
+                  {(chatMode === 'image_generation'
+                    ? ['Create a product hero image', 'Turn this photo into anime style', 'Generate a minimalist logo concept', 'Make this sketch look photorealistic']
+                    : (uiConfig.promptSuggestions || ['Explain how this works', 'Help me write code', 'Summarize the key points', 'What are best practices?'])
+                  ).map((prompt) => (
                     <button
                       key={prompt}
                       className="prompt-chip"
@@ -939,7 +976,19 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                       style={{ height: 28, width: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
                     />
                   </Tooltip>
-                  {systemPromptOptions.length > 0 && (
+                  <Select
+                    className="toolbar-select"
+                    value={chatMode}
+                    onChange={(v: ChatMode) => setChatMode(v)}
+                    size="small"
+                    aria-label="Select chat mode"
+                    options={modeOptions}
+                    disabled={loading || loadingConversation}
+                    variant="borderless"
+                    placement="topLeft"
+                    style={{ flex: '0 0 116px', width: 116 }}
+                  />
+                  {chatMode === 'chat' && systemPromptOptions.length > 0 && (
                     <Select
                       className="toolbar-select"
                       value={selectedSystemPrompt}
@@ -1062,7 +1111,7 @@ export function ChatPage({ models, modelData, uiConfig, isDark, canCompactConver
                   />
                 </div>
                 <div className="input-send">
-                  {uiConfig.compactConversation?.enabled && canCompactConversation && (sessionId || messages.length > 0) && (
+                  {chatMode === 'chat' && uiConfig.compactConversation?.enabled && canCompactConversation && (sessionId || messages.length > 0) && (
                     <Tooltip title="Compact conversation">
                       <Button
                         icon={<CompressOutlined />}

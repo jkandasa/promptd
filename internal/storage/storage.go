@@ -5,6 +5,7 @@
 package storage
 
 import (
+	"strings"
 	"time"
 
 	"promptd/internal/llm"
@@ -98,9 +99,26 @@ type LLMRound struct {
 
 // ToTraceMessage converts an openai SDK message to our slim TraceMessage.
 func ToTraceMessage(m llm.Message) TraceMessage {
+	content := m.Content
+	if content == "" && len(m.MultiContent) > 0 {
+		parts := make([]string, 0, len(m.MultiContent))
+		for _, part := range m.MultiContent {
+			switch part.Type {
+			case "text":
+				if part.Text != "" {
+					parts = append(parts, part.Text)
+				}
+			case "image_url":
+				if part.ImageURL != nil && part.ImageURL.URL != "" {
+					parts = append(parts, "[image] "+part.ImageURL.URL)
+				}
+			}
+		}
+		content = strings.Join(parts, "\n")
+	}
 	tm := TraceMessage{
 		Role:             m.Role,
-		Content:          m.Content,
+		Content:          content,
 		Refusal:          m.Refusal,
 		ReasoningContent: m.ReasoningContent,
 		Name:             m.Name,
@@ -165,6 +183,7 @@ type Message struct {
 	SentAt         time.Time `yaml:"sent_at" json:"sent_at"`
 	CompactSummary bool      `yaml:"compact_summary,omitempty" json:"compact_summary,omitempty"`
 	// Metadata — non-zero only for final assistant replies.
+	Mode        string         `yaml:"mode,omitempty"          json:"mode,omitempty"`
 	Model       string         `yaml:"model,omitempty"         json:"model,omitempty"`
 	Provider    string         `yaml:"provider,omitempty"      json:"provider,omitempty"`
 	Files       []UploadedFile `yaml:"files,omitempty" json:"files,omitempty"`
@@ -192,6 +211,7 @@ type Conversation struct {
 	UserID                    string      `yaml:"user_id"    json:"user_id,omitempty"`
 	ID                        string      `yaml:"id"         json:"id"`
 	Title                     string      `yaml:"title"      json:"title"`
+	Mode                      string      `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Model                     string      `yaml:"model"      json:"model"`
 	Provider                  string      `yaml:"provider,omitempty"      json:"provider,omitempty"`
 	SystemPrompt              string      `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`

@@ -167,6 +167,7 @@ func (s *YAMLStore) List(scope Scope) ([]*Conversation, error) {
 			UserID:                    c.UserID,
 			ID:                        c.ID,
 			Title:                     c.Title,
+			Mode:                      c.Mode,
 			Model:                     c.Model,
 			Provider:                  c.Provider,
 			SystemPrompt:              c.SystemPrompt,

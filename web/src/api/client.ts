@@ -1,12 +1,13 @@
 import type {
   ToolInfo, UIConfig, ConversationMeta, ConversationDetail,
-  LLMParamsOverride, UploadedFile, LLMRound, UsedParams,
+  LLMParamsOverride, UploadedFile, LLMRound, UsedParams, ChatMode,
 } from '../types/chat'
 
 const API_BASE = '/api'
 
 export type ChatResponse = {
   reply: string
+  mode?: ChatMode
   model: string
   provider?: string
   time_taken_ms: number
@@ -79,6 +80,7 @@ export interface ProviderInfo {
   count: number
   updated_at?: string
   refresh_interval?: string
+  image_generation_enabled?: boolean
 }
 
 export interface ModelData {
@@ -163,6 +165,7 @@ export async function apiGetModels(provider?: string, discover = false): Promise
 export async function apiChat(
   sessionId: string,
   message: string,
+  mode: ChatMode,
   files?: UploadedFile[],
   model?: string,
   systemPrompt?: string,
@@ -173,7 +176,7 @@ export async function apiChat(
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, message, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
+    body: JSON.stringify({ session_id: sessionId, message, mode, files, model, provider: provider || undefined, system_prompt: systemPrompt, params }),
     signal,
   })
   const data = await res.json()

@@ -13,7 +13,9 @@ import (
 	"io/fs"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -146,11 +148,12 @@ func (m *ModelSelector) GetSelectionMethod() string {
 
 // ProviderInfo summarises a configured LLM provider for the /models API response.
 type ProviderInfo struct {
-	Name            string `json:"name"`
-	Source          string `json:"source,omitempty"`
-	Count           int    `json:"count"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
-	RefreshInterval string `json:"refresh_interval,omitempty"`
+	Name                   string `json:"name"`
+	Source                 string `json:"source,omitempty"`
+	Count                  int    `json:"count"`
+	UpdatedAt              string `json:"updated_at,omitempty"`
+	RefreshInterval        string `json:"refresh_interval,omitempty"`
+	ImageGenerationEnabled bool   `json:"image_generation_enabled,omitempty"`
 }
 
 // ProviderEntry holds a single LLM provider's client and model list.
@@ -165,6 +168,13 @@ type ProviderEntry struct {
 	StaticModels  []ModelInfo
 	AutoDiscover  bool
 	FileUploads   ProviderFileUploadConfig
+	ImageGeneration ProviderImageGenerationConfig
+}
+
+type ProviderImageGenerationConfig struct {
+	Enabled       bool
+	Strategy      string
+	ResponseField string
 }
 
 // ProviderRegistry manages multiple LLM providers and routes requests to the
@@ -335,9 +345,10 @@ func (r *ProviderRegistry) GetProviderInfos() []ProviderInfo {
 	for _, e := range entries {
 		e.ModelSelector.mu.Lock()
 		info := ProviderInfo{
-			Name:   e.Name,
-			Source: e.ModelSelector.source,
-			Count:  len(e.ModelSelector.models),
+			Name:                   e.Name,
+			Source:                 e.ModelSelector.source,
+			Count:                  len(e.ModelSelector.models),
+			ImageGenerationEnabled: e.ImageGeneration.Enabled,
 		}
 		if !e.ModelSelector.lastUpdated.IsZero() {
 			info.UpdatedAt = e.ModelSelector.lastUpdated.Format(time.RFC3339)
@@ -431,6 +442,7 @@ func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSy
 type chatRequest struct {
 	SessionID    string                 `json:"session_id"`
 	Message      string                 `json:"message"`
+	Mode         string                 `json:"mode,omitempty"`
 	Files        []storage.UploadedFile `json:"files,omitempty"`
 	Model        string                 `json:"model,omitempty"`
 	Provider     string                 `json:"provider,omitempty"`
@@ -440,8 +452,10 @@ type chatRequest struct {
 
 type chatResponse struct {
 	Reply          string              `json:"reply"`
+	Mode           string              `json:"mode,omitempty"`
 	Model          string              `json:"model"`
 	Provider       string              `json:"provider,omitempty"`
+	Files          []storage.UploadedFile `json:"files,omitempty"`
 	TimeTaken      int64               `json:"time_taken_ms"`
 	LLMCalls       int                 `json:"llm_calls"`
 	ToolCalls      int                 `json:"tool_calls"`
@@ -1192,6 +1206,17 @@ func (h *Handler) requireAllowedSystemPrompt(principal *auth.Principal, promptNa
 	return nil
 }
 
+func normalizeChatMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "chat":
+		return "chat"
+	case "image_generation":
+		return "image_generation"
+	default:
+		return ""
+	}
+}
+
 // traceUsage converts an llm.Usage to our storage.TokenUsage, including
 // reasoning and cached-prompt token breakdowns when the provider returns them.
 func traceUsage(u llm.Usage) *storage.TokenUsage {
@@ -1207,6 +1232,371 @@ func traceUsage(u llm.Usage) *storage.TokenUsage {
 		tu.CachedTokens = u.PromptTokensDetails.CachedTokens
 	}
 	return tu
+}
+
+func (h *Handler) runImageGeneration(ctx context.Context, principal *auth.Principal, session *chat.Session, prompt, preferredModel, provider string, reqParams LLMParams, inputFiles []storage.UploadedFile) (string, llm.Message, []storage.UploadedFile, string, string, []storage.LLMRound, *storage.UsedParams, error) {
+	model, _, providerUsed, llmClient := h.resolveAllowedModel(principal, preferredModel, provider)
+	providerEntry := h.providers.ProviderEntry(providerUsed)
+	if model == "" || providerUsed == "" || llmClient == nil || providerEntry == nil {
+		return "", llm.Message{}, nil, preferredModel, provider, nil, nil, fmt.Errorf("no allowed model available")
+	}
+	if !providerEntry.ImageGeneration.Enabled {
+		return "", llm.Message{}, nil, model, providerUsed, nil, nil, fmt.Errorf("image generation is not enabled for provider %q", providerUsed)
+	}
+	if !principal.Policy.AllowModel(providerUsed, model) {
+		return "", llm.Message{}, nil, model, providerUsed, nil, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
+	}
+
+	modelParams := h.providers.GetModelParamsForProvider(model, provider)
+	if reqParams.Temperature != nil {
+		modelParams.Temperature = reqParams.Temperature
+	}
+	if reqParams.MaxTokens != 0 {
+		modelParams.MaxTokens = reqParams.MaxTokens
+	}
+	if reqParams.TopP != nil {
+		modelParams.TopP = reqParams.TopP
+	}
+	if reqParams.TopK != 0 {
+		modelParams.TopK = reqParams.TopK
+	}
+
+	var usedParams *storage.UsedParams
+	if modelParams.Temperature != nil || modelParams.MaxTokens != 0 || modelParams.TopP != nil || modelParams.TopK != 0 {
+		usedParams = &storage.UsedParams{
+			Temperature: modelParams.Temperature,
+			MaxTokens:   modelParams.MaxTokens,
+			TopP:        modelParams.TopP,
+			TopK:        modelParams.TopK,
+		}
+	}
+
+	started := time.Now()
+	traceMessages := []llm.Message{{Role: llm.RoleUser, Content: strings.TrimSpace(prompt)}}
+	var (
+		assistantMsg   llm.Message
+		generatedFiles []storage.UploadedFile
+		traceUsageData *storage.TokenUsage
+	)
+	switch providerEntry.ImageGeneration.Strategy {
+	case "images_api":
+		imagesResp, err := h.generateImagesViaAPI(ctx, requestScopeFromPrincipal(principal), llmClient, model, strings.TrimSpace(prompt), inputFiles)
+		if err != nil {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, fmt.Errorf("image generation error: %w", err)
+		}
+		assistantMsg, generatedFiles, err = h.imagesAPIResponseToAssistantMessage(requestScopeFromPrincipal(principal), imagesResp)
+		if err != nil {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, err
+		}
+	case "chat_completions":
+		requestBody, requestMsgs, err := h.buildImageGenerationRequest(ctx, requestScopeFromPrincipal(principal), providerEntry, model, prompt, modelParams, inputFiles)
+		if err != nil {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, fmt.Errorf("build image generation request: %w", err)
+		}
+		traceMessages = requestMsgs
+		resp, err := createRawChatCompletion(ctx, providerEntry, requestBody)
+		if err != nil {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, fmt.Errorf("image generation error: %w", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, fmt.Errorf("image generation returned no choices")
+		}
+		assistantMsg, generatedFiles, err = h.extractGeneratedImages(requestScopeFromPrincipal(principal), resp.Choices[0].Message, providerEntry.ImageGeneration.ResponseField)
+		if err != nil {
+			return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, err
+		}
+		traceUsageData = traceUsage(resp.Usage)
+	default:
+		return "", llm.Message{}, nil, model, providerUsed, nil, usedParams, fmt.Errorf("unsupported image generation strategy %q", providerEntry.ImageGeneration.Strategy)
+	}
+	llmDurationMs := time.Since(started).Milliseconds()
+	trace := []storage.LLMRound{{Request: storage.ToTraceMessages(traceMessages), Response: storage.ToTraceMessage(assistantMsg), LLMDurationMs: llmDurationMs, Usage: traceUsageData}}
+	return assistantMsg.Content, assistantMsg, generatedFiles, model, providerUsed, trace, usedParams, nil
+}
+
+func requestScopeFromPrincipal(principal *auth.Principal) storage.Scope {
+	if principal == nil {
+		return storage.Scope{}
+	}
+	return storage.Scope{TenantID: principal.Scope.TenantID, UserID: principal.Scope.UserID}
+}
+
+func (h *Handler) buildImageGenerationRequest(ctx context.Context, scope storage.Scope, entry *ProviderEntry, model, prompt string, modelParams LLMParams, inputFiles []storage.UploadedFile) (map[string]any, []llm.Message, error) {
+	parts := make([]map[string]any, 0, len(inputFiles)+1)
+	if strings.TrimSpace(prompt) != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": strings.TrimSpace(prompt)})
+	}
+	for _, file := range inputFiles {
+		attachment, err := h.prepareAttachment(ctx, scope, entry, file)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch attachment.Mode {
+		case "inline_image":
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": attachment.ImageURL, "detail": llm.ImageURLDetailAuto}})
+		case "uploaded_reference":
+			parts = append(parts, map[string]any{"type": "file", "file": map[string]any{"file_id": attachment.FileID}})
+		case "inline_text":
+			parts = append(parts, map[string]any{"type": "text", "text": fmt.Sprintf("Reference file %q:\n%s", attachment.File.Filename, attachment.Text)})
+		default:
+			parts = append(parts, map[string]any{"type": "text", "text": fmt.Sprintf("Reference file %q: %s", attachment.File.Filename, attachment.Note)})
+		}
+	}
+	if len(parts) == 0 {
+		return nil, nil, fmt.Errorf("image generation requires a prompt or supported files")
+	}
+	body := map[string]any{
+		"model":      model,
+		"modalities": []string{"image"},
+		"messages": []map[string]any{{
+			"role":    llm.RoleUser,
+			"content": parts,
+		}},
+	}
+	if modelParams.Temperature != nil {
+		body["temperature"] = *modelParams.Temperature
+	}
+	if modelParams.MaxTokens != 0 {
+		body["max_tokens"] = modelParams.MaxTokens
+	}
+	if modelParams.TopP != nil {
+		body["top_p"] = *modelParams.TopP
+	}
+	if modelParams.TopK != 0 {
+		body["top_k"] = modelParams.TopK
+	}
+	traceMessages := []llm.Message{{Role: llm.RoleUser, Content: strings.TrimSpace(prompt)}}
+	return body, traceMessages, nil
+}
+
+func (h *Handler) extractGeneratedImages(scope storage.Scope, msg llm.Message, responseField string) (llm.Message, []storage.UploadedFile, error) {
+	msg = sanitizeAssistantMessage(msg)
+	generatedFiles := make([]storage.UploadedFile, 0)
+	switch responseField {
+	case "message_images", "":
+		for _, image := range msg.Images {
+			if image.ImageURL == nil || strings.TrimSpace(image.ImageURL.URL) == "" {
+				continue
+			}
+			file, err := h.persistGeneratedImage(scope, image.ImageURL.URL)
+			if err != nil {
+				return llm.Message{}, nil, err
+			}
+			generatedFiles = append(generatedFiles, file)
+		}
+	case "content_parts":
+		for _, part := range msg.MultiContent {
+			if part.ImageURL == nil || strings.TrimSpace(part.ImageURL.URL) == "" {
+				continue
+			}
+			file, err := h.persistGeneratedImage(scope, part.ImageURL.URL)
+			if err != nil {
+				return llm.Message{}, nil, err
+			}
+			generatedFiles = append(generatedFiles, file)
+		}
+	default:
+		return llm.Message{}, nil, fmt.Errorf("unsupported image generation response field %q", responseField)
+	}
+	if len(generatedFiles) == 0 {
+		return llm.Message{}, nil, fmt.Errorf("image generation returned no images")
+	}
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		content = "Generated image"
+		if len(generatedFiles) > 1 {
+			content = fmt.Sprintf("Generated %d images", len(generatedFiles))
+		}
+	}
+	msg.Content = content
+	return msg, generatedFiles, nil
+}
+
+func (h *Handler) generateImagesViaAPI(ctx context.Context, scope storage.Scope, client *openai.Client, model, prompt string, inputFiles []storage.UploadedFile) (*openai.ImagesResponse, error) {
+	if len(inputFiles) == 0 {
+		return client.Images.Generate(ctx, openai.ImageGenerateParams{
+			Prompt:         prompt,
+			Model:          model,
+			ResponseFormat: openai.ImageGenerateParamsResponseFormatB64JSON,
+			N:              openai.Int(1),
+		})
+	}
+	readers := make([]io.Reader, 0, len(inputFiles))
+	for _, file := range inputFiles {
+		data, err := h.readUploadedFile(scope, file)
+		if err != nil {
+			return nil, err
+		}
+		readers = append(readers, bytes.NewReader(data))
+	}
+	params := openai.ImageEditParams{
+		Prompt:         prompt,
+		Model:          model,
+		ResponseFormat: openai.ImageEditParamsResponseFormatB64JSON,
+		N:              openai.Int(1),
+	}
+	if len(readers) == 1 {
+		params.Image = openai.ImageEditParamsImageUnion{OfFile: readers[0]}
+	} else {
+		params.Image = openai.ImageEditParamsImageUnion{OfFileArray: readers}
+	}
+	return client.Images.Edit(ctx, params)
+}
+
+func (h *Handler) imagesAPIResponseToAssistantMessage(scope storage.Scope, resp *openai.ImagesResponse) (llm.Message, []storage.UploadedFile, error) {
+	if resp == nil || len(resp.Data) == 0 {
+		return llm.Message{}, nil, fmt.Errorf("image generation returned no images")
+	}
+	generatedFiles := make([]storage.UploadedFile, 0, len(resp.Data))
+	for _, image := range resp.Data {
+		file, err := h.persistGeneratedImageData(scope, image)
+		if err != nil {
+			return llm.Message{}, nil, err
+		}
+		generatedFiles = append(generatedFiles, file)
+	}
+	content := "Generated image"
+	if len(generatedFiles) > 1 {
+		content = fmt.Sprintf("Generated %d images", len(generatedFiles))
+	}
+	return llm.Message{Role: llm.RoleAssistant, Content: content}, generatedFiles, nil
+}
+
+func (h *Handler) persistGeneratedImageData(scope storage.Scope, image openai.Image) (storage.UploadedFile, error) {
+	if strings.TrimSpace(image.B64JSON) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(image.B64JSON)
+		if err != nil {
+			return storage.UploadedFile{}, fmt.Errorf("decode generated image payload: %w", err)
+		}
+		return h.persistGeneratedBytes(scope, decoded, "image/png", ".png")
+	}
+	if strings.TrimSpace(image.URL) != "" {
+		return h.persistGeneratedImage(scope, image.URL)
+	}
+	return storage.UploadedFile{}, fmt.Errorf("image generation returned no supported image data")
+}
+
+func (h *Handler) persistGeneratedImage(scope storage.Scope, dataURL string) (storage.UploadedFile, error) {
+	if strings.HasPrefix(dataURL, "data:") {
+		contentType, imageBytes, err := decodeGeneratedImageDataURL(dataURL)
+		if err != nil {
+			return storage.UploadedFile{}, err
+		}
+		return h.persistGeneratedBytes(scope, imageBytes, contentType, imageExtensionFromContentType(contentType))
+	}
+	resp, err := http.Get(dataURL)
+	if err != nil {
+		return storage.UploadedFile{}, fmt.Errorf("fetch generated image url: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return storage.UploadedFile{}, fmt.Errorf("fetch generated image url: unexpected status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return storage.UploadedFile{}, fmt.Errorf("read generated image url: %w", err)
+	}
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	return h.persistGeneratedBytes(scope, data, contentType, fileExtensionFromURL(dataURL))
+}
+
+func decodeGeneratedImageDataURL(dataURL string) (string, []byte, error) {
+	if !strings.HasPrefix(dataURL, "data:") {
+		return "", nil, fmt.Errorf("unsupported generated image payload")
+	}
+	commaIdx := strings.Index(dataURL, ",")
+	if commaIdx <= len("data:") {
+		return "", nil, fmt.Errorf("invalid generated image payload")
+	}
+	meta := dataURL[len("data:"):commaIdx]
+	payload := dataURL[commaIdx+1:]
+	if !strings.HasSuffix(strings.ToLower(meta), ";base64") {
+		return "", nil, fmt.Errorf("generated image payload is not base64")
+	}
+	contentType := strings.TrimSuffix(meta, ";base64")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("decode generated image payload: %w", err)
+	}
+	return contentType, decoded, nil
+}
+
+func (h *Handler) persistGeneratedBytes(scope storage.Scope, imageBytes []byte, contentType, extHint string) (storage.UploadedFile, error) {
+	if contentType == "" {
+		contentType = http.DetectContentType(imageBytes)
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		contentType = "image/png"
+	}
+	ext := normalizeImageExtension(extHint)
+	if ext == "" {
+		ext = imageExtensionFromContentType(contentType)
+	}
+	uploadDir := h.uploadDir(scope)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		return storage.UploadedFile{}, fmt.Errorf("create generated image dir: %w", err)
+	}
+	fileID := uuid.New().String()
+	filePath := h.uploadPath(scope, fileID)
+	if err := os.WriteFile(filePath, imageBytes, 0o644); err != nil {
+		return storage.UploadedFile{}, fmt.Errorf("save generated image: %w", err)
+	}
+	filename := "generated-" + fileID + ext
+	return storage.UploadedFile{
+		ID:          fileID,
+		Filename:    filename,
+		Size:        int64(len(imageBytes)),
+		ContentType: contentType,
+		SHA256:      fileSHA256(imageBytes),
+		URL:         "/api/files/" + fileID,
+		CreatedAt:   time.Now().UnixMilli(),
+		TenantID:    scope.TenantID,
+		UserID:      scope.UserID,
+	}, nil
+}
+
+func fileExtensionFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return normalizeImageExtension(path.Ext(parsed.Path))
+}
+
+func normalizeImageExtension(ext string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	if ext == "" {
+		return ""
+	}
+	if !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg":
+		return ext
+	default:
+		return ""
+	}
+}
+
+func imageExtensionFromContentType(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	case "image/svg+xml":
+		return ".svg"
+	default:
+		return ".png"
+	}
 }
 
 // maxToolIterations caps the tool-call loop to prevent infinite loops from
@@ -1597,6 +1987,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
+	mode := normalizeChatMode(req.Mode)
+	if mode == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid mode"})
+		return
+	}
+	req.Mode = mode
 	if req.Message == "" && len(req.Files) == 0 {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "message or files is required"})
 		return
@@ -1612,21 +2008,28 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	// Record the user's explicit model choice before the first persist so it's
 	// included in the very first save (triggered by Add below).
-	if err := h.requireAllowedSystemPrompt(principal, req.SystemPrompt); err != nil {
-		status := http.StatusBadRequest
-		if err.Error() == "system prompt not allowed" {
-			status = http.StatusForbidden
+	if req.Mode == "chat" {
+		if err := h.requireAllowedSystemPrompt(principal, req.SystemPrompt); err != nil {
+			status := http.StatusBadRequest
+			if err.Error() == "system prompt not allowed" {
+				status = http.StatusForbidden
+			}
+			writeJSON(w, status, errorResponse{Error: err.Error()})
+			return
 		}
-		writeJSON(w, status, errorResponse{Error: err.Error()})
-		return
 	}
 	for i := range req.Files {
 		req.Files[i].TenantID = scope.TenantID
 		req.Files[i].UserID = scope.UserID
 	}
+	session.SetMode(req.Mode)
 	session.SetModel(req.Model)
 	session.SetProvider(req.Provider)
-	session.SetSystemPrompt(req.SystemPrompt)
+	if req.Mode == "chat" {
+		session.SetSystemPrompt(req.SystemPrompt)
+	} else {
+		session.SetSystemPrompt("")
+	}
 	// Persist the current UI param overrides on the conversation so they can be
 	// restored when the conversation is loaded again. Nil means "use config defaults".
 	var convParams *storage.UsedParams
@@ -1640,9 +2043,28 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	session.SetParams(convParams)
 	userMsgID := session.Add(llm.RoleUser, req.Message, req.Files)
-	compactSummary := h.maybeAutoCompact(r.Context(), principal, session)
+	var compactSummary *storage.Message
+	if req.Mode == "chat" {
+		compactSummary = h.maybeAutoCompact(r.Context(), principal, session)
+	}
 
-	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runLLM(r.Context(), principal, req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
+	var (
+		reply        string
+		finalMsg     llm.Message
+		assistantFiles []storage.UploadedFile
+		model        string
+		providerUsed string
+		llmCalls     int
+		toolCalls    int
+		trace        []storage.LLMRound
+		usedParams   *storage.UsedParams
+	)
+	var err error
+	if req.Mode == "image_generation" {
+		reply, finalMsg, assistantFiles, model, providerUsed, trace, usedParams, err = h.runImageGeneration(r.Context(), principal, session, req.Message, req.Model, req.Provider, req.Params, req.Files)
+	} else {
+		reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err = h.runLLM(r.Context(), principal, req.SessionID, session, req.Model, req.Provider, req.Params, req.Files)
+	}
 	if err != nil {
 		h.log.Error("llm call failed", zap.String("session_id", req.SessionID), zap.Error(err))
 		errorMsgID := session.AddErrorMessage(err.Error(), model, providerUsed)
@@ -1651,7 +2073,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeTaken := time.Since(start).Milliseconds()
-	assistantMsgID := session.AddFinalMessage(finalMsg, model, providerUsed, timeTaken, llmCalls, toolCalls, trace, usedParams)
+	assistantMsgID := session.AddFinalMessage(finalMsg, req.Mode, model, providerUsed, assistantFiles, timeTaken, llmCalls, toolCalls, trace, usedParams)
 	h.log.Info("chat", zap.String("session_id", req.SessionID), zap.Int("history_len", len(session.History())), zap.Int64("time_ms", timeTaken), zap.Int("llm_calls", llmCalls), zap.Int("tool_calls", toolCalls), zap.String("model", model), zap.String("provider", providerUsed))
 	if !principal.Policy.Permissions.TracesRead {
 		trace = nil
@@ -1659,7 +2081,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			compactSummary.Trace = nil
 		}
 	}
-	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Model: model, Provider: providerUsed, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams, CompactSummary: compactSummary})
+	writeJSON(w, http.StatusOK, chatResponse{Reply: reply, Mode: req.Mode, Model: model, Provider: providerUsed, TimeTaken: timeTaken, LLMCalls: llmCalls, ToolCalls: toolCalls, Files: assistantFiles, UserMsgID: userMsgID, AssistantMsgID: assistantMsgID, Trace: trace, UsedParams: usedParams, CompactSummary: compactSummary})
 }
 
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {

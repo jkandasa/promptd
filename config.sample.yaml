@@ -60,6 +60,10 @@ llm:
     - name: "openrouter"
       api_key: "replace-with-api-key"
       base_url: "https://openrouter.ai/api/v1"
+      image_generation:
+        enabled: true
+        strategy: "chat_completions"
+        response_field: "message_images"
       file_uploads:
         enabled: false
         purpose: "user_data"

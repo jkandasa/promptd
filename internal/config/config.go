@@ -61,6 +61,12 @@ type AutoDiscoverConfig struct {
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 }
 
+type ImageGenerationConfig struct {
+	Enabled       *bool  `yaml:"enabled"`
+	Strategy      string `yaml:"strategy,omitempty"`
+	ResponseField string `yaml:"response_field,omitempty"`
+}
+
 type LLMProviderConfig struct {
 	Name            string             `yaml:"name"`
 	APIKey          string             `yaml:"api_key"`
@@ -75,6 +81,7 @@ type LLMProviderConfig struct {
 		MaxInlineTextBytes int    `yaml:"max_inline_text_bytes"`
 		PreferInlineImages bool   `yaml:"prefer_inline_images"`
 	} `yaml:"file_uploads"`
+	ImageGeneration ImageGenerationConfig `yaml:"image_generation"`
 }
 
 type SystemPromptConfig struct {
@@ -270,6 +277,21 @@ func Load(path string) (*Config, error) {
 		}
 		if p.FileUploads.MaxInlineTextBytes <= 0 {
 			p.FileUploads.MaxInlineTextBytes = 128 * 1024
+		}
+		if p.ImageGeneration.Enabled == nil {
+			enabled := p.ImageGeneration.Strategy != "" || p.ImageGeneration.ResponseField != ""
+			p.ImageGeneration.Enabled = &enabled
+		}
+		if p.ImageGeneration.Strategy == "" {
+			p.ImageGeneration.Strategy = "chat_completions"
+		}
+		if p.ImageGeneration.ResponseField == "" {
+			switch p.ImageGeneration.Strategy {
+			case "images_api":
+				p.ImageGeneration.ResponseField = "images_data"
+			default:
+				p.ImageGeneration.ResponseField = "message_images"
+			}
 		}
 	}
 	if cfg.Log.Level == "" {

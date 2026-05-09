@@ -3,6 +3,7 @@ import {
   CheckOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   FileOutlined,
   RobotOutlined,
@@ -43,6 +44,7 @@ export const Bubble = memo(function Bubble({
   const [isHovered, setIsHovered] = useState(false)
   const [previewVisible, setPreviewVisible] = useState(false)
   const [previewImage, setPreviewImage] = useState('')
+  const [previewFilename, setPreviewFilename] = useState('image')
 
   const mdComponents = useMemo(() => buildMarkdownComponents(), [])
 
@@ -63,9 +65,20 @@ export const Bubble = memo(function Bubble({
     return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
   }
 
-  const handleImageClick = (url: string) => {
+  const handleImageClick = (url: string, filename: string) => {
     setPreviewImage(url)
+    setPreviewFilename(filename)
     setPreviewVisible(true)
+  }
+
+  const handleDownload = (url: string, filename: string) => {
+    const anchor = document.createElement('a')
+    anchor.href = safeUrl(url)
+    anchor.download = filename
+    anchor.rel = 'noopener noreferrer'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
   }
 
   const bubbleStyle: React.CSSProperties = isCompactSummary
@@ -283,23 +296,35 @@ export const Bubble = memo(function Bubble({
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
             {msg.files.map((file) => (
               isImageFile(file.filename) ? (
-                <img
-                  key={file.id}
-                  src={safeUrl(file.url)}
-                  alt={file.filename}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleImageClick(safeUrl(file.url))}
-                  onKeyDown={(e) => e.key === 'Enter' && handleImageClick(safeUrl(file.url))}
-                  style={{
-                    width: 'min(360px, 100%)',
-                    maxWidth: '100%',
-                    maxHeight: 320,
-                    borderRadius: 4,
-                    cursor: 'pointer',
-                    objectFit: 'contain',
-                  }}
-                />
+                <div key={file.id} style={{ position: 'relative', display: 'inline-flex', maxWidth: '100%' }}>
+                  <img
+                    src={safeUrl(file.url)}
+                    alt={file.filename}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleImageClick(safeUrl(file.url), file.filename)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleImageClick(safeUrl(file.url), file.filename)}
+                    style={{
+                      width: 'min(360px, 100%)',
+                      maxWidth: '100%',
+                      maxHeight: 320,
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      objectFit: 'contain',
+                    }}
+                  />
+                  <Tooltip title="Download image">
+                    <Button
+                      type="primary"
+                      shape="circle"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => handleDownload(file.url, file.filename)}
+                      style={{ position: 'absolute', top: 8, right: 8, boxShadow: token.boxShadowSecondary }}
+                      aria-label={`Download ${file.filename}`}
+                    />
+                  </Tooltip>
+                </div>
               ) : (
                 <a
                   key={file.id}
@@ -325,7 +350,11 @@ export const Bubble = memo(function Bubble({
         )}
         <Modal
           open={previewVisible}
-          footer={null}
+          footer={previewImage ? [
+            <Button key="download" icon={<DownloadOutlined />} onClick={() => handleDownload(previewImage, previewFilename)}>
+              Download
+            </Button>,
+          ] : null}
           onCancel={() => { setPreviewVisible(false); setPreviewImage('') }}
           width="90vw"
           centered

@@ -1,6 +1,7 @@
 // Domain types shared across the app
 
 export type Role = 'user' | 'assistant' | 'error'
+export type ChatMode = 'chat' | 'image_generation'
 
 export interface UploadedFile {
   id: string
@@ -73,6 +74,7 @@ export interface Message {
   id: string
   role: Role
   content: string
+  mode?: ChatMode
   compactSummary?: boolean
   ts: Date
   timeTaken?: number
@@ -112,6 +114,7 @@ export interface UIConfig {
 export interface ConversationMeta {
   id: string
   title: string
+  mode?: ChatMode
   model: string
   provider?: string
   system_prompt?: string
@@ -127,6 +130,7 @@ export interface StorageMessage {
   id: string
   role: string
   content: string
+  mode?: ChatMode
   sent_at: string
   compact_summary?: boolean
   files?: UploadedFile[]
