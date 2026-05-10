@@ -78,13 +78,11 @@ class TraceDetailsDialog extends StatelessWidget {
                           color: theme.colorScheme.tertiary,
                         ),
                       if (totals.prompt + totals.completion > 0)
-                        _HeaderMetric(
-                          icon: Icons.token_rounded,
-                          label:
-                              '${totals.prompt} up ${totals.completion} down tok'
-                              '${totals.reasoning > 0 ? ' · ${totals.reasoning} reasoning' : ''}'
-                              '${totals.cached > 0 ? ' · ${totals.cached} cached' : ''}',
-                          color: theme.colorScheme.secondary,
+                        _HeaderTokenMetric(
+                          prompt: totals.prompt,
+                          completion: totals.completion,
+                          reasoning: totals.reasoning,
+                          cached: totals.cached,
                         ),
                     ],
                   ),
@@ -273,6 +271,7 @@ class _TraceSection extends StatelessWidget {
           Text(
             title,
             style: theme.textTheme.bodySmall?.copyWith(
+              fontSize: 13,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -311,6 +310,41 @@ class _TraceTag extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+class _DurationTag extends StatelessWidget {
+  const _DurationTag({required this.label, this.error = false});
+
+  final String label;
+  final bool error;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = error ? theme.colorScheme.error : theme.colorScheme.onSurface;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: error
+            ? theme.colorScheme.errorContainer
+            : theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(
+          color: error
+              ? theme.colorScheme.error.withValues(alpha: 0.32)
+              : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: color.withValues(alpha: error ? 1 : 0.72),
+          fontSize: 10,
+          height: 1.2,
+        ),
       ),
     );
   }
@@ -379,7 +413,10 @@ class _InlineExpansionState extends State<_InlineExpansion> {
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
                 ),
                 const SizedBox(width: 4),
-                Text(widget.title, style: theme.textTheme.bodySmall),
+                Text(
+                  widget.title,
+                  style: theme.textTheme.bodySmall?.copyWith(fontSize: 13),
+                ),
               ],
             ),
           ),
@@ -523,6 +560,7 @@ class _ToolCallCard extends StatelessWidget {
                     name ?? 'tool call',
                     style: theme.textTheme.labelMedium?.copyWith(
                       fontFamily: 'monospace',
+                      fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -539,7 +577,7 @@ class _ToolCallCard extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: _ContentBlock(
               content: _formatJsonString(args),
               compact: true,
@@ -607,13 +645,14 @@ class _ToolResultCard extends StatelessWidget {
                     result['name'] as String? ?? 'tool',
                     style: theme.textTheme.labelMedium?.copyWith(
                       fontFamily: 'monospace',
+                      fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                _TraceTag(
+                _DurationTag(
                   label: _fmtMs(_asInt(result['duration_ms'])),
-                  color: isError ? theme.colorScheme.error : _traceMuted,
+                  error: isError,
                 ),
               ],
             ),
@@ -1222,6 +1261,7 @@ class _ContentBlockState extends State<_ContentBlock> {
                       canCollapse && !_expanded ? '$displayed …' : displayed,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontFamily: 'monospace',
+                        fontSize: 13,
                         height: 1.55,
                       ),
                     ),
@@ -1271,6 +1311,7 @@ class _ContentBlockState extends State<_ContentBlock> {
                               ? 'Show less'
                               : '${lines.length - _previewLines} more lines',
                           style: theme.textTheme.bodySmall?.copyWith(
+                            fontSize: 13,
                             color: theme.colorScheme.primary,
                           ),
                         ),
@@ -1369,6 +1410,49 @@ class _HeaderMetric extends StatelessWidget {
         Icon(icon, size: 14, color: color),
         const SizedBox(width: 4),
         Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
+class _HeaderTokenMetric extends StatelessWidget {
+  const _HeaderTokenMetric({
+    required this.prompt,
+    required this.completion,
+    required this.reasoning,
+    required this.cached,
+  });
+
+  final int prompt;
+  final int completion;
+  final int reasoning;
+  final int cached;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.arrow_upward_rounded, size: 14, color: _traceBlue),
+        const SizedBox(width: 3),
+        Text('$prompt', style: style),
+        const SizedBox(width: 7),
+        Icon(Icons.arrow_downward_rounded, size: 14, color: _traceGreen),
+        const SizedBox(width: 3),
+        Text('$completion tok', style: style),
+        if (reasoning > 0) ...[
+          const SizedBox(width: 7),
+          Icon(Icons.psychology_alt_outlined, size: 14, color: _traceYellow),
+          const SizedBox(width: 3),
+          Text('$reasoning reasoning', style: style),
+        ],
+        if (cached > 0) ...[
+          const SizedBox(width: 7),
+          Icon(Icons.history_rounded, size: 14, color: _traceMuted),
+          const SizedBox(width: 3),
+          Text('$cached cached', style: style),
+        ],
       ],
     );
   }
