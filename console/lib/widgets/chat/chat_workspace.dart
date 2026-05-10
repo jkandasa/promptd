@@ -6,9 +6,10 @@ import '../search_select_field.dart';
 import 'message_bubble.dart';
 
 class ChatWorkspace extends StatefulWidget {
-  const ChatWorkspace({super.key, required this.state});
+  const ChatWorkspace({super.key, required this.state, this.leading});
 
   final PromptdAppState state;
+  final Widget? leading;
 
   @override
   State<ChatWorkspace> createState() => _ChatWorkspaceState();
@@ -37,7 +38,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
     return Card(
       child: Column(
         children: [
-          _ChatToolbar(state: state),
+          _ChatToolbar(state: state, leading: widget.leading),
           const Divider(height: 1),
           Expanded(
             child: state.messages.isEmpty
@@ -51,6 +52,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
                         message: state.messages[index],
                         onDelete: state.deleteMessage,
                         onEdit: state.editMessage,
+                        loadFileBytes: state.api.downloadFile,
                       );
                     },
                   ),
@@ -205,9 +207,10 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
 }
 
 class _ChatToolbar extends StatelessWidget {
-  const _ChatToolbar({required this.state});
+  const _ChatToolbar({required this.state, this.leading});
 
   final PromptdAppState state;
+  final Widget? leading;
 
   @override
   Widget build(BuildContext context) {
@@ -222,6 +225,7 @@ class _ChatToolbar extends StatelessWidget {
         runSpacing: 10,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          ?leading,
           SegmentedButton<String>(
             segments: const [
               ButtonSegment(

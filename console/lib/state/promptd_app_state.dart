@@ -283,6 +283,7 @@ class PromptdAppState extends ChangeNotifier {
           timeTakenMs: response.timeTakenMs,
           llmCalls: response.llmCalls,
           toolCalls: response.toolCalls,
+          files: response.files,
           trace: response.trace,
         ),
       ];

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../models/promptd_models.dart';
+import '../../services/file_downloader.dart';
 import 'trace_details_dialog.dart';
 
 class MessageBubble extends StatefulWidget {
@@ -11,11 +13,13 @@ class MessageBubble extends StatefulWidget {
     required this.message,
     required this.onDelete,
     required this.onEdit,
+    required this.loadFileBytes,
   });
 
   final ChatMessage message;
   final Future<void> Function(ChatMessage message) onDelete;
   final Future<void> Function(ChatMessage message, String content) onEdit;
+  final Future<Uint8List> Function(String url) loadFileBytes;
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
@@ -44,14 +48,16 @@ class _MessageBubbleState extends State<MessageBubble> {
     final isUser = message.role == 'user';
     final isError = message.role == 'error';
     final isCompact = message.compactSummary;
-    final color = isCompact
+    final color = _editing
+        ? theme.colorScheme.surfaceContainerLowest
+        : isCompact
         ? theme.colorScheme.primaryContainer
         : isError
         ? theme.colorScheme.errorContainer
         : isUser
         ? theme.colorScheme.primary
         : theme.colorScheme.surfaceContainerLowest;
-    final foreground = isUser && !isCompact
+    final foreground = isUser && !isCompact && !_editing
         ? Colors.white
         : theme.colorScheme.onSurface;
 
@@ -68,7 +74,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               decoration: BoxDecoration(
                 color: color,
                 borderRadius: BorderRadius.circular(8),
-                border: isUser && !isCompact
+                border: isUser && !isCompact && !_editing
                     ? null
                     : Border.all(color: theme.colorScheme.outlineVariant),
               ),
@@ -79,6 +85,13 @@ class _MessageBubbleState extends State<MessageBubble> {
                     : _content(context, foreground),
               ),
             ),
+            if (!_editing && message.files.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _MessageFiles(
+                files: message.files,
+                loadFileBytes: widget.loadFileBytes,
+              ),
+            ],
             if (!_editing) ...[
               const SizedBox(height: 4),
               _MessageActions(
@@ -169,32 +182,42 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   Widget _editForm(BuildContext context) {
-    return Column(
-      children: [
-        TextField(
-          controller: _editController,
-          autofocus: true,
-          minLines: 4,
-          maxLines: 12,
-          decoration: const InputDecoration(labelText: 'Edit message'),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton(
-              onPressed: () => setState(() => _editing = false),
-              child: const Text('Cancel'),
+    final width = (MediaQuery.sizeOf(context).width - 64).clamp(260.0, 640.0);
+    return SizedBox(
+      width: width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _editController,
+            autofocus: true,
+            minLines: 4,
+            maxLines: 12,
+            decoration: const InputDecoration(
+              labelText: 'Edit message',
+              alignLabelWithHint: true,
             ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: _submitEdit,
-              icon: const Icon(Icons.send_rounded),
-              label: const Text('Send'),
-            ),
-          ],
-        ),
-      ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => setState(() => _editing = false),
+                icon: const Icon(Icons.close_rounded),
+                label: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: _submitEdit,
+                icon: const Icon(Icons.send_rounded),
+                label: const Text('Send'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -214,6 +237,7 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
+    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -224,6 +248,10 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: const Text('Cancel'),
           ),
           FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.colorScheme.errorContainer,
+              foregroundColor: theme.colorScheme.onErrorContainer,
+            ),
             onPressed: () => Navigator.of(context).pop(true),
             icon: const Icon(Icons.delete_outline_rounded),
             label: const Text('Delete'),
@@ -266,6 +294,7 @@ class _MessageActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Wrap(
       spacing: 2,
       children: [
@@ -276,21 +305,295 @@ class _MessageActions extends StatelessWidget {
           onPressed: message.pending ? null : onCopy,
           icon: const Icon(Icons.copy_rounded),
         ),
-        IconButton(
-          tooltip: 'Edit message',
-          iconSize: 18,
-          visualDensity: VisualDensity.compact,
-          onPressed: message.pending ? null : onEdit,
-          icon: const Icon(Icons.edit_outlined),
-        ),
+        if (onEdit != null)
+          IconButton(
+            tooltip: 'Edit message',
+            iconSize: 18,
+            visualDensity: VisualDensity.compact,
+            onPressed: message.pending ? null : onEdit,
+            icon: const Icon(Icons.edit_outlined),
+          ),
         IconButton(
           tooltip: 'Delete message',
           iconSize: 18,
           visualDensity: VisualDensity.compact,
+          color: theme.colorScheme.error.withValues(alpha: 0.72),
           onPressed: message.pending ? null : onDelete,
           icon: const Icon(Icons.delete_outline_rounded),
         ),
       ],
+    );
+  }
+}
+
+class _MessageFiles extends StatelessWidget {
+  const _MessageFiles({required this.files, required this.loadFileBytes});
+
+  final List<UploadedFile> files;
+  final Future<Uint8List> Function(String url) loadFileBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final file in files)
+          file.isImage
+              ? _ImageAttachment(file: file, loadFileBytes: loadFileBytes)
+              : Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.insert_drive_file_outlined, size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        file.filename,
+                        style: theme.textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+      ],
+    );
+  }
+}
+
+class _ImageAttachment extends StatefulWidget {
+  const _ImageAttachment({required this.file, required this.loadFileBytes});
+
+  final UploadedFile file;
+  final Future<Uint8List> Function(String url) loadFileBytes;
+
+  @override
+  State<_ImageAttachment> createState() => _ImageAttachmentState();
+}
+
+class _ImageAttachmentState extends State<_ImageAttachment> {
+  late final Future<Uint8List> _bytesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _bytesFuture = widget.loadFileBytes(widget.file.url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final imageWidth = (MediaQuery.sizeOf(context).width - 56).clamp(
+      220.0,
+      360.0,
+    );
+    final image = FutureBuilder<Uint8List>(
+      future: _bytesFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return SizedBox(
+            width: imageWidth,
+            height: 220,
+            child: const Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError || snapshot.data == null) {
+          return _ImageError(filename: widget.file.filename);
+        }
+        return widget.file.isSvg
+            ? SvgPicture.memory(
+                snapshot.data!,
+                width: imageWidth,
+                height: 260,
+                fit: BoxFit.contain,
+              )
+            : Image.memory(
+                snapshot.data!,
+                width: imageWidth,
+                height: 260,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) =>
+                    _ImageError(filename: widget.file.filename),
+              );
+      },
+    );
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _showImagePreview(context),
+      child: Container(
+        constraints: BoxConstraints(maxWidth: imageWidth),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              children: [
+                image,
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton.filledTonal(
+                    tooltip: 'Download image',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _downloadImage(context),
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+              child: Text(
+                widget.file.filename,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showImagePreview(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 980, maxHeight: 760),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.file.filename,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Download image',
+                      onPressed: () => _downloadImage(context),
+                      icon: const Icon(Icons.download_rounded),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                Flexible(
+                  child: Center(
+                    child: widget.file.isSvg
+                        ? FutureBuilder<Uint8List>(
+                            future: _bytesFuture,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState !=
+                                  ConnectionState.done) {
+                                return const CircularProgressIndicator();
+                              }
+                              if (snapshot.hasError || snapshot.data == null) {
+                                return _ImageError(
+                                  filename: widget.file.filename,
+                                );
+                              }
+                              return SvgPicture.memory(
+                                snapshot.data!,
+                                fit: BoxFit.contain,
+                              );
+                            },
+                          )
+                        : FutureBuilder<Uint8List>(
+                            future: _bytesFuture,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState !=
+                                  ConnectionState.done) {
+                                return const CircularProgressIndicator();
+                              }
+                              if (snapshot.hasError || snapshot.data == null) {
+                                return _ImageError(
+                                  filename: widget.file.filename,
+                                );
+                              }
+                              return Image.memory(
+                                snapshot.data!,
+                                fit: BoxFit.contain,
+                                errorBuilder: (context, error, stackTrace) =>
+                                    _ImageError(filename: widget.file.filename),
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadImage(BuildContext context) async {
+    try {
+      final bytes = await _bytesFuture;
+      final savedTo = await saveDownloadedFile(
+        bytes: bytes,
+        filename: widget.file.filename,
+        contentType: widget.file.contentType,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Downloaded $savedTo')));
+    } catch (err) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Download failed: $err')));
+    }
+  }
+}
+
+class _ImageError extends StatelessWidget {
+  const _ImageError({required this.filename});
+
+  final String filename;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 260,
+      height: 160,
+      child: Center(
+        child: Text(
+          'Unable to load $filename',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ),
     );
   }
 }

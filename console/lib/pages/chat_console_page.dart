@@ -13,17 +13,47 @@ class ChatConsolePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showHistory = constraints.maxWidth >= 1100;
+        final wide = constraints.maxWidth >= 1100;
 
-        return Row(
-          children: [
-            if (showHistory)
+        if (wide) {
+          return Row(
+            children: [
               SizedBox(width: 300, child: ConversationPanel(state: state)),
-            if (showHistory) const SizedBox(width: 16),
-            Expanded(child: ChatWorkspace(state: state)),
-          ],
+              const SizedBox(width: 16),
+              Expanded(child: ChatWorkspace(state: state)),
+            ],
+          );
+        }
+
+        return ChatWorkspace(
+          state: state,
+          leading: Builder(
+            builder: (context) => IconButton.filledTonal(
+              tooltip: 'Conversation history',
+              onPressed: () => _showHistory(context),
+              icon: const Icon(Icons.history_rounded),
+            ),
+          ),
         );
       },
+    );
+  }
+
+  void _showHistory(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.72,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: ConversationPanel(
+            state: state,
+            onSelected: () => Navigator.of(context).pop(),
+          ),
+        ),
+      ),
     );
   }
 }

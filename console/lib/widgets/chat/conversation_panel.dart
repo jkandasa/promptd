@@ -4,9 +4,10 @@ import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
 
 class ConversationPanel extends StatelessWidget {
-  const ConversationPanel({super.key, required this.state});
+  const ConversationPanel({super.key, required this.state, this.onSelected});
 
   final PromptdAppState state;
+  final VoidCallback? onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -42,12 +43,20 @@ class ConversationPanel extends StatelessWidget {
                       if (pinned.isNotEmpty) ...[
                         _SectionLabel(label: 'Pinned'),
                         for (final item in pinned)
-                          _ConversationTile(state: state, conversation: item),
+                          _ConversationTile(
+                            state: state,
+                            conversation: item,
+                            onSelected: onSelected,
+                          ),
                       ],
                       if (recent.isNotEmpty) ...[
                         _SectionLabel(label: 'Recent'),
                         for (final item in recent)
-                          _ConversationTile(state: state, conversation: item),
+                          _ConversationTile(
+                            state: state,
+                            conversation: item,
+                            onSelected: onSelected,
+                          ),
                       ],
                     ],
                   ),
@@ -59,10 +68,15 @@ class ConversationPanel extends StatelessWidget {
 }
 
 class _ConversationTile extends StatelessWidget {
-  const _ConversationTile({required this.state, required this.conversation});
+  const _ConversationTile({
+    required this.state,
+    required this.conversation,
+    this.onSelected,
+  });
 
   final PromptdAppState state;
   final ConversationMeta conversation;
+  final VoidCallback? onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +92,10 @@ class _ConversationTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: () => state.loadConversation(conversation.id),
+          onTap: () async {
+            await state.loadConversation(conversation.id);
+            onSelected?.call();
+          },
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 9, 4, 9),
             child: Row(

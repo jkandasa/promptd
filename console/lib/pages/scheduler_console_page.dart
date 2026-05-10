@@ -33,22 +33,33 @@ class SchedulerConsolePage extends StatelessWidget {
                   ? state.schedules.first
                   : null;
 
-              return Flex(
-                direction: wide ? Axis.horizontal : Axis.vertical,
+              final detail = ScheduleDetailPanel(
+                schedule: selected,
+                canWrite: state.me?.permissions.schedulesWrite ?? false,
+                onTrigger: selected == null
+                    ? null
+                    : () => state.triggerSchedule(selected.id),
+              );
+
+              if (!wide) {
+                return ListView(
+                  children: [
+                    SizedBox(
+                      height: 330,
+                      child: ScheduleListPanel(state: state),
+                    ),
+                    const SizedBox(height: 14),
+                    SizedBox(height: 460, child: detail),
+                  ],
+                );
+              }
+
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(flex: 6, child: ScheduleListPanel(state: state)),
-                  SizedBox(width: wide ? 16 : 0, height: wide ? 0 : 16),
-                  Expanded(
-                    flex: 5,
-                    child: ScheduleDetailPanel(
-                      schedule: selected,
-                      canWrite: state.me?.permissions.schedulesWrite ?? false,
-                      onTrigger: selected == null
-                          ? null
-                          : () => state.triggerSchedule(selected.id),
-                    ),
-                  ),
+                  const SizedBox(width: 16),
+                  Expanded(flex: 5, child: detail),
                 ],
               );
             },

@@ -69,7 +69,7 @@ class AppTheme {
           : mist,
     );
 
-    final textTheme = GoogleFonts.openSansTextTheme(base.textTheme).copyWith(
+    final textTheme = GoogleFonts.montserratTextTheme(base.textTheme).copyWith(
       displayLarge: GoogleFonts.montserrat(
         fontSize: 48,
         fontWeight: FontWeight.w700,
@@ -95,19 +95,34 @@ class AppTheme {
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
       ),
-      bodyLarge: GoogleFonts.openSans(
+      bodyLarge: GoogleFonts.montserrat(
         fontSize: 15,
         fontWeight: FontWeight.w500,
         color: scheme.onSurface,
       ),
-      bodyMedium: GoogleFonts.openSans(
+      bodyMedium: GoogleFonts.montserrat(
         fontSize: 14,
         fontWeight: FontWeight.w500,
         color: scheme.onSurface.withValues(alpha: 0.88),
       ),
-      labelLarge: GoogleFonts.openSans(
+      bodySmall: GoogleFonts.montserrat(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        color: scheme.onSurface.withValues(alpha: 0.78),
+      ),
+      labelLarge: GoogleFonts.montserrat(
         fontSize: 14,
         fontWeight: FontWeight.w700,
+        color: scheme.onSurface,
+      ),
+      labelMedium: GoogleFonts.montserrat(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      labelSmall: GoogleFonts.montserrat(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
         color: scheme.onSurface,
       ),
     );

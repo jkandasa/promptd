@@ -81,7 +81,7 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
                   crossAxisCount: _columnCount(context),
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  childAspectRatio: 1.42,
+                  childAspectRatio: _cardAspectRatio(context),
                   children: [for (final tool in tools) ToolCard(tool: tool)],
                 ),
         ),
@@ -108,5 +108,13 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
     if (width >= 1000) return 3;
     if (width >= 680) return 2;
     return 1;
+  }
+
+  double _cardAspectRatio(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width >= 1400) return 1.12;
+    if (width >= 1000) return 1.04;
+    if (width >= 680) return 1.08;
+    return 1.18;
   }
 }

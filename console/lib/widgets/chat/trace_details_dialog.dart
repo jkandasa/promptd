@@ -3,6 +3,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+const _traceBlue = Color(0xff1677ff);
+const _traceGreen = Color(0xff52c41a);
+const _traceOrange = Color(0xfffa8c16);
+const _traceYellow = Color(0xfffaad14);
+const _traceMuted = Color(0xff8c8c8c);
+
 Future<void> showTraceDetailsDialog(
   BuildContext context,
   List<Map<String, dynamic>> trace,
@@ -23,75 +29,88 @@ class TraceDetailsDialog extends StatelessWidget {
     final totals = _TraceTotals.from(trace);
     final theme = Theme.of(context);
 
-    return AlertDialog(
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text('LLM Trace'),
-              const SizedBox(width: 8),
-              Chip(
-                label: Text(
-                  '${trace.length} round${trace.length == 1 ? '' : 's'}',
-                ),
-                visualDensity: VisualDensity.compact,
+    final size = MediaQuery.sizeOf(context);
+    return Dialog(
+      insetPadding: const EdgeInsets.all(18),
+      child: SizedBox(
+        width: size.width * 0.92,
+        height: size.height * 0.86,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 10, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text('LLM Trace'),
+                      const SizedBox(width: 8),
+                      Chip(
+                        label: Text(
+                          '${trace.length} round${trace.length == 1 ? '' : 's'}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 6,
+                    children: [
+                      _HeaderMetric(
+                        icon: Icons.bolt_rounded,
+                        label: 'LLM ${_fmtMs(totals.llmMs)}',
+                        color: theme.colorScheme.primary,
+                      ),
+                      if (totals.toolMs > 0)
+                        _HeaderMetric(
+                          icon: Icons.build_circle_outlined,
+                          label:
+                              'Tools ${_fmtMs(totals.toolMs)} · ${totals.toolCalls} call${totals.toolCalls == 1 ? '' : 's'}',
+                          color: theme.colorScheme.tertiary,
+                        ),
+                      if (totals.prompt + totals.completion > 0)
+                        _HeaderMetric(
+                          icon: Icons.token_rounded,
+                          label:
+                              '${totals.prompt} up ${totals.completion} down tok'
+                              '${totals.reasoning > 0 ? ' · ${totals.reasoning} reasoning' : ''}'
+                              '${totals.cached > 0 ? ' · ${totals.cached} cached' : ''}',
+                          color: theme.colorScheme.secondary,
+                        ),
+                    ],
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 14,
-            runSpacing: 6,
-            children: [
-              _HeaderMetric(
-                icon: Icons.bolt_rounded,
-                label: 'LLM ${_fmtMs(totals.llmMs)}',
-                color: theme.colorScheme.primary,
-              ),
-              if (totals.toolMs > 0)
-                _HeaderMetric(
-                  icon: Icons.build_circle_outlined,
-                  label:
-                      'Tools ${_fmtMs(totals.toolMs)} · ${totals.toolCalls} call${totals.toolCalls == 1 ? '' : 's'}',
-                  color: theme.colorScheme.tertiary,
-                ),
-              if (totals.prompt + totals.completion > 0)
-                _HeaderMetric(
-                  icon: Icons.token_rounded,
-                  label:
-                      '${totals.prompt} up ${totals.completion} down tok'
-                      '${totals.reasoning > 0 ? ' · ${totals.reasoning} reasoning' : ''}'
-                      '${totals.cached > 0 ? ' · ${totals.cached} cached' : ''}',
-                  color: theme.colorScheme.secondary,
-                ),
-            ],
-          ),
-        ],
-      ),
-      content: SizedBox(
-        width: 900,
-        height: 680,
-        child: trace.isEmpty
-            ? const Center(child: Text('No trace data available'))
-            : ListView.separated(
-                itemCount: trace.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (context, index) {
-                  return _TraceRound(
-                    index: index + 1,
-                    isLast: index == trace.length - 1,
-                    round: trace[index],
-                  );
-                },
-              ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: trace.isEmpty
+                  ? const Center(child: Text('No trace data available'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(14),
+                      itemCount: trace.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (context, index) {
+                        return _TraceRound(
+                          index: index + 1,
+                          isLast: index == trace.length - 1,
+                          round: trace[index],
+                        );
+                      },
+                    ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -114,32 +133,31 @@ class _TraceRound extends StatelessWidget {
     final availableTools = _list(round['available_tools']);
     final toolResults = _list(round['tool_results']);
     final usage = _map(round['usage']);
-    final llmMs = round['llm_duration_ms'] as int? ?? 0;
+    final prompt = _asInt(usage['prompt_tokens']);
+    final completion = _asInt(usage['completion_tokens']);
+    final llmMs = _asInt(round['llm_duration_ms']);
     final toolMs = toolResults.fold<int>(
       0,
-      (sum, item) => sum + ((_map(item)['duration_ms'] as int?) ?? 0),
+      (sum, item) => sum + _asInt(_map(item)['duration_ms']),
     );
     final hasTools = toolResults.isNotEmpty;
     final theme = Theme.of(context);
     final borderColor = hasTools
-        ? theme.colorScheme.tertiary.withValues(alpha: 0.55)
-        : theme.colorScheme.primary.withValues(alpha: 0.55);
+        ? _traceOrange.withValues(alpha: 0.55)
+        : _traceGreen.withValues(alpha: 0.55);
+    final headerColor = borderColor.withValues(alpha: 0.12);
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: borderColor),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: borderColor.withValues(alpha: 0.1),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(8),
-              ),
-            ),
+            color: headerColor,
             child: Row(
               children: [
                 Icon(
@@ -153,22 +171,21 @@ class _TraceRound extends StatelessWidget {
                 Text('Round $index', style: theme.textTheme.titleMedium),
                 const SizedBox(width: 6),
                 Text(
-                  hasTools
-                      ? '${toolResults.length} tool call${toolResults.length == 1 ? '' : 's'}'
-                      : 'final answer',
+                  '— ${hasTools ? '${toolResults.length} tool call${toolResults.length == 1 ? '' : 's'}' : 'final answer'}',
                   style: theme.textTheme.bodySmall,
                 ),
                 const Spacer(),
-                Chip(
-                  label: Text('LLM ${_fmtMs(llmMs)}'),
-                  visualDensity: VisualDensity.compact,
-                ),
+                _TraceTag(label: 'LLM ${_fmtMs(llmMs)}', color: _traceBlue),
                 if (hasTools) ...[
                   const SizedBox(width: 6),
-                  Chip(
-                    label: Text('tools ${_fmtMs(toolMs)}'),
-                    visualDensity: VisualDensity.compact,
+                  _TraceTag(
+                    label: 'tools ${_fmtMs(toolMs)}',
+                    color: _traceOrange,
                   ),
+                ],
+                if (prompt + completion > 0) ...[
+                  const SizedBox(width: 8),
+                  _TokenMiniMetric(prompt: prompt, completion: completion),
                 ],
               ],
             ),
@@ -180,22 +197,27 @@ class _TraceRound extends StatelessWidget {
                 if (availableTools.isNotEmpty)
                   _TraceSection(
                     initiallyExpanded: false,
-                    title: 'Available tools (${availableTools.length})',
+                    title: 'Available Tools',
+                    trailing: '(${availableTools.length})',
                     child: _AvailableToolsList(tools: availableTools),
                   ),
                 _TraceSection(
-                  initiallyExpanded: !isLast,
-                  title: 'Messages sent (${request.length})',
+                  initiallyExpanded: false,
+                  title: 'Messages Sent',
+                  trailing: '(${request.length})',
                   child: Column(
                     children: [
-                      for (final item in request)
-                        _TraceMessageCard(message: _map(item)),
+                      if (request.isEmpty)
+                        const _EmptyTraceText('No request messages captured')
+                      else
+                        for (final item in request)
+                          _TraceMessageCard(message: _map(item)),
                     ],
                   ),
                 ),
                 _TraceSection(
-                  initiallyExpanded: true,
-                  title: hasTools ? 'LLM decision' : 'LLM response',
+                  initiallyExpanded: false,
+                  title: hasTools ? 'LLM Decision' : 'LLM Response',
                   trailing: _fmtMs(llmMs),
                   child: Column(
                     children: [
@@ -206,9 +228,10 @@ class _TraceRound extends StatelessWidget {
                 ),
                 if (toolResults.isNotEmpty)
                   _TraceSection(
-                    initiallyExpanded: true,
-                    title: 'Tool execution (${toolResults.length})',
-                    trailing: _fmtMs(toolMs),
+                    initiallyExpanded: false,
+                    title: 'Tool Execution',
+                    trailing:
+                        '${toolResults.length} call${toolResults.length == 1 ? '' : 's'} · ${_fmtMs(toolMs)}',
                     child: Column(
                       children: [
                         for (final item in toolResults)
@@ -240,19 +263,130 @@ class _TraceSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 4),
       initiallyExpanded: initiallyExpanded,
       title: Row(
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            title,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           if (trailing != null) ...[
             const SizedBox(width: 8),
-            Text(trailing!, style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              trailing!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
+                fontSize: 11,
+              ),
+            ),
           ],
         ],
       ),
       children: [child],
+    );
+  }
+}
+
+class _TraceTag extends StatelessWidget {
+  const _TraceTag({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+class _TokenMiniMetric extends StatelessWidget {
+  const _TokenMiniMetric({required this.prompt, required this.completion});
+
+  final int prompt;
+  final int completion;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+      fontSize: 11,
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.arrow_upward_rounded, size: 13, color: _traceBlue),
+        const SizedBox(width: 2),
+        Text('$prompt', style: style),
+        const SizedBox(width: 6),
+        Icon(Icons.arrow_downward_rounded, size: 13, color: _traceGreen),
+        const SizedBox(width: 2),
+        Text('$completion tok', style: style),
+      ],
+    );
+  }
+}
+
+class _InlineExpansion extends StatefulWidget {
+  const _InlineExpansion({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  State<_InlineExpansion> createState() => _InlineExpansionState();
+}
+
+class _InlineExpansionState extends State<_InlineExpansion> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 6),
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.keyboard_arrow_right_rounded,
+                  size: 18,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                ),
+                const SizedBox(width: 4),
+                Text(widget.title, style: theme.textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ),
+        if (_expanded)
+          Padding(padding: const EdgeInsets.only(top: 4), child: widget.child),
+      ],
     );
   }
 }
@@ -273,53 +407,76 @@ class _TraceMessageCard extends StatelessWidget {
     final toolCallId = message['tool_call_id'] as String?;
     final roleColor = _roleColor(context, role);
     final theme = Theme.of(context);
+    final fillColor = theme.brightness == Brightness.dark
+        ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.72)
+        : const Color(0xfffafafa);
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: roleColor, width: 3),
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
-          right: BorderSide(color: theme.colorScheme.outlineVariant),
-          bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
-        borderRadius: const BorderRadius.horizontal(right: Radius.circular(8)),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        color: fillColor,
+        borderRadius: const BorderRadius.horizontal(right: Radius.circular(6)),
       ),
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _RoleBadge(role: role, color: roleColor),
-              if (name?.isNotEmpty == true)
-                Text(
-                  name!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              if (toolCallId?.isNotEmpty == true)
-                Text(
-                  'id:$toolCallId',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                  ),
-                ),
-            ],
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            child: ColoredBox(color: roleColor),
           ),
-          if (content?.isNotEmpty == true)
-            _ContentBlock(label: 'Content', content: content!),
-          if (reasoning?.isNotEmpty == true)
-            _ContentBlock(label: 'Reasoning', content: reasoning!),
-          if (refusal?.isNotEmpty == true)
-            _ContentBlock(label: 'Refusal', content: refusal!),
-          for (final item in toolCalls) _ToolCallCard(call: _map(item)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(13, 6, 10, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _RoleBadge(role: role, color: roleColor),
+                    if (name?.isNotEmpty == true)
+                      Text(
+                        name!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    if (toolCallId?.isNotEmpty == true)
+                      Text(
+                        'id:$toolCallId',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.55,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (content?.isNotEmpty == true)
+                  _ContentBlock(content: content!),
+                if (reasoning?.isNotEmpty == true)
+                  _ReasoningBlock(content: reasoning!),
+                if (refusal?.isNotEmpty == true)
+                  _ContentBlock(
+                    content: '[refusal] $refusal',
+                    backgroundColor: theme.colorScheme.errorContainer,
+                  ),
+                for (final item in toolCalls) _ToolCallCard(call: _map(item)),
+                if ((content == null || content.isEmpty) &&
+                    (reasoning == null || reasoning.isEmpty) &&
+                    (refusal == null || refusal.isEmpty) &&
+                    toolCalls.isEmpty)
+                  const _EmptyTraceText('No text content in this message'),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -333,39 +490,61 @@ class _ToolCallCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final args = call['args'] as String? ?? '';
+    final function = _map(call['function']);
+    final args =
+        call['args'] as String? ?? function['arguments'] as String? ?? '';
+    final name = call['name'] as String? ?? function['name'] as String?;
+    final theme = Theme.of(context);
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(top: 8),
+      margin: const EdgeInsets.only(top: 8, bottom: 0),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              border: Border(
+                bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+              ),
+            ),
             child: Row(
               children: [
-                const Icon(Icons.call_made_rounded, size: 16),
+                const _SmallTag(label: 'call', color: _traceOrange),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    call['name'] as String? ?? 'tool call',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelLarge?.copyWith(fontFamily: 'monospace'),
+                    name ?? 'tool call',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 Text(
                   'id:${call['id'] ?? ''}',
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                    fontSize: 10,
+                  ),
                 ),
               ],
             ),
           ),
-          _ContentBlock(content: _formatJsonString(args), compact: true),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: _ContentBlock(
+              content: _formatJsonString(args),
+              compact: true,
+            ),
+          ),
         ],
       ),
     );
@@ -380,7 +559,11 @@ class _ToolResultCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final output = result['result'] as String? ?? '';
-    final isError = output.toLowerCase().contains('error');
+    final lowerOutput = output.toLowerCase();
+    final isError =
+        lowerOutput.startsWith('error') ||
+        lowerOutput.contains('"error"') ||
+        lowerOutput.contains('error:');
     final theme = Theme.of(context);
     return Container(
       width: double.infinity,
@@ -393,48 +576,65 @@ class _ToolResultCard extends StatelessWidget {
               : theme.colorScheme.outlineVariant,
         ),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
-            color: isError
-                ? theme.colorScheme.errorContainer
-                : theme.colorScheme.surfaceContainerHighest,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: isError
+                  ? theme.colorScheme.errorContainer
+                  : theme.colorScheme.surfaceContainerHighest,
+              border: Border(
+                bottom: BorderSide(
+                  color: isError
+                      ? theme.colorScheme.error.withValues(alpha: 0.35)
+                      : theme.colorScheme.outlineVariant,
+                ),
+              ),
+            ),
             child: Row(
               children: [
                 Icon(
-                  Icons.build_circle_outlined,
-                  size: 16,
-                  color: isError
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.primary,
+                  Icons.build_outlined,
+                  size: 15,
+                  color: isError ? theme.colorScheme.error : _traceOrange,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     result['name'] as String? ?? 'tool',
-                    style: theme.textTheme.labelLarge?.copyWith(
+                    style: theme.textTheme.labelMedium?.copyWith(
                       fontFamily: 'monospace',
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                Chip(
-                  label: Text(_fmtMs(result['duration_ms'] as int? ?? 0)),
-                  visualDensity: VisualDensity.compact,
+                _TraceTag(
+                  label: _fmtMs(_asInt(result['duration_ms'])),
+                  color: isError ? theme.colorScheme.error : _traceMuted,
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _ContentBlock(
                   label: 'Input',
                   content: _formatJsonString(result['args'] as String? ?? ''),
                 ),
-                _ContentBlock(label: 'Output', content: output),
+                const SizedBox(height: 6),
+                _ContentBlock(
+                  label: 'Output',
+                  content: output,
+                  backgroundColor: isError
+                      ? theme.colorScheme.errorContainer
+                      : null,
+                ),
               ],
             ),
           ),
@@ -451,45 +651,317 @@ class _AvailableToolsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       children: [
         for (final item in tools)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
-            ),
-            child: Builder(
-              builder: (context) {
-                final tool = _map(item);
-                final params = _map(_map(tool['parameters'])['properties']);
-                return Column(
+          Builder(
+            builder: (context) {
+              final tool = _map(item);
+              final parameters = _map(tool['parameters']);
+              final params = _map(parameters['properties']);
+              final requiredNames = (_list(
+                parameters['required'],
+              )).whereType<String>().toSet();
+              final description = tool['description'] as String? ?? '';
+              return Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      tool['name'] as String? ?? 'tool',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelLarge?.copyWith(fontFamily: 'monospace'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _SmallTag(
+                          label: tool['name'] as String? ?? 'tool',
+                          color: _traceBlue,
+                        ),
+                        if (params.isNotEmpty)
+                          Text(
+                            '${params.length} param${params.length == 1 ? '' : 's'}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.62,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    if ((tool['description'] as String? ?? '').isNotEmpty)
-                      Text(tool['description'] as String),
-                    if (params.isNotEmpty)
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 4),
                       Text(
-                        '${params.length} param${params.length == 1 ? '' : 's'}',
-                        style: Theme.of(context).textTheme.bodySmall,
+                        description,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.7,
+                          ),
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                    if (params.isNotEmpty)
+                      _InlineExpansion(
+                        title: 'Parameters',
+                        child: _ParametersView(
+                          params: params,
+                          requiredNames: requiredNames,
+                        ),
                       ),
                   ],
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
       ],
+    );
+  }
+}
+
+class _ParametersView extends StatelessWidget {
+  const _ParametersView({required this.params, required this.requiredNames});
+
+  final Map<String, dynamic> params;
+  final Set<String> requiredNames;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final entries = params.entries.toList();
+        if (constraints.maxWidth >= 680) {
+          return _ParameterTable(
+            entries: entries,
+            requiredNames: requiredNames,
+          );
+        }
+        return Column(
+          children: [
+            for (final entry in entries)
+              _ParameterCard(
+                name: entry.key,
+                schema: _map(entry.value),
+                required: requiredNames.contains(entry.key),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ParameterTable extends StatelessWidget {
+  const _ParameterTable({required this.entries, required this.requiredNames});
+
+  final List<MapEntry<String, dynamic>> entries;
+  final Set<String> requiredNames;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Table(
+      columnWidths: const {
+        0: FixedColumnWidth(160),
+        1: FixedColumnWidth(70),
+        2: FlexColumnWidth(),
+      },
+      border: TableBorder.all(color: theme.colorScheme.outlineVariant),
+      children: [
+        TableRow(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+          ),
+          children: const [
+            _ParameterCell('Parameter', header: true),
+            _ParameterCell('Type', header: true),
+            _ParameterCell('Description', header: true),
+          ],
+        ),
+        for (final entry in entries)
+          _parameterTableRow(context, entry, requiredNames.contains(entry.key)),
+      ],
+    );
+  }
+
+  TableRow _parameterTableRow(
+    BuildContext context,
+    MapEntry<String, dynamic> entry,
+    bool required,
+  ) {
+    final schema = _map(entry.value);
+    final type = schema['type'] as String? ?? 'value';
+    final description = schema['description'] as String? ?? '';
+    return TableRow(
+      children: [
+        _ParameterNameCell(name: entry.key, required: required),
+        _ParameterTypeCell(type: type),
+        _ParameterCell(description.isEmpty ? '-' : description),
+      ],
+    );
+  }
+}
+
+class _ParameterCell extends StatelessWidget {
+  const _ParameterCell(this.text, {this.header = false});
+
+  final String text;
+  final bool header;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = header
+        ? Theme.of(context).textTheme.labelSmall
+        : Theme.of(context).textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      child: Text(text, style: style),
+    );
+  }
+}
+
+class _ParameterNameCell extends StatelessWidget {
+  const _ParameterNameCell({required this.name, required this.required});
+
+  final String name;
+  final bool required;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            name,
+            style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+          ),
+          if (required) const _RequiredTag(),
+        ],
+      ),
+    );
+  }
+}
+
+class _ParameterTypeCell extends StatelessWidget {
+  const _ParameterTypeCell({required this.type});
+
+  final String type;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      child: type.isEmpty ? const SizedBox.shrink() : _TypeTag(type),
+    );
+  }
+}
+
+class _ParameterCard extends StatelessWidget {
+  const _ParameterCard({
+    required this.name,
+    required this.schema,
+    required this.required,
+  });
+
+  final String name;
+  final Map<String, dynamic> schema;
+  final bool required;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final type = schema['type'] as String? ?? 'value';
+    final description = schema['description'] as String? ?? '';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            name,
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontFamily: 'monospace',
+            ),
+          ),
+          if (required) const _RequiredTag(),
+          if (type.isNotEmpty) _TypeTag(type),
+          if (description.isNotEmpty)
+            Text(description, style: theme.textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _RequiredTag extends StatelessWidget {
+  const _RequiredTag();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.error;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        'req',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: color,
+          fontSize: 10,
+          height: 1.35,
+        ),
+      ),
+    );
+  }
+}
+
+class _TypeTag extends StatelessWidget {
+  const _TypeTag(this.type);
+
+  final String type;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Text(
+        type,
+        style: theme.textTheme.labelSmall?.copyWith(
+          fontFamily: 'monospace',
+          fontSize: 10,
+          height: 1.2,
+        ),
+      ),
     );
   }
 }
@@ -501,15 +973,15 @@ class _TokenBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prompt = usage['prompt_tokens'] as int? ?? 0;
-    final completion = usage['completion_tokens'] as int? ?? 0;
-    final reasoning = usage['reasoning_tokens'] as int? ?? 0;
-    final cached = usage['cached_tokens'] as int? ?? 0;
+    final prompt = _asInt(usage['prompt_tokens']);
+    final completion = _asInt(usage['completion_tokens']);
+    final reasoning = _asInt(usage['reasoning_tokens']);
+    final cached = _asInt(usage['cached_tokens']);
     final total = prompt + completion;
     if (total == 0) return const SizedBox.shrink();
     final theme = Theme.of(context);
-    final promptWidth = (prompt / total).clamp(0, 1).toDouble();
-    final completionWidth = (completion / total).clamp(0, 1).toDouble();
+    final promptUncached = (prompt - cached).clamp(0, prompt);
+    final completionVisible = (completion - reasoning).clamp(0, completion);
 
     return Container(
       margin: const EdgeInsets.only(top: 8),
@@ -528,24 +1000,24 @@ class _TokenBar extends StatelessWidget {
               _TokenLegend(
                 icon: Icons.arrow_upward_rounded,
                 label: '$prompt prompt',
-                color: theme.colorScheme.primary,
+                color: _traceBlue,
               ),
               _TokenLegend(
                 icon: Icons.arrow_downward_rounded,
                 label: '$completion completion',
-                color: theme.colorScheme.secondary,
+                color: _traceGreen,
               ),
               if (reasoning > 0)
                 _TokenLegend(
                   icon: Icons.psychology_alt_outlined,
                   label: '$reasoning reasoning',
-                  color: theme.colorScheme.tertiary,
+                  color: _traceYellow,
                 ),
               if (cached > 0)
                 _TokenLegend(
                   icon: Icons.history_rounded,
                   label: '$cached cached',
-                  color: theme.colorScheme.outline,
+                  color: _traceMuted,
                 ),
             ],
           ),
@@ -554,20 +1026,38 @@ class _TokenBar extends StatelessWidget {
             borderRadius: BorderRadius.circular(4),
             child: Row(
               children: [
-                Expanded(
-                  flex: (promptWidth * 1000).round().clamp(1, 1000),
-                  child: ColoredBox(
-                    color: theme.colorScheme.primary,
-                    child: const SizedBox(height: 7),
+                if (cached > 0)
+                  Expanded(
+                    flex: cached,
+                    child: const ColoredBox(
+                      color: _traceMuted,
+                      child: SizedBox(height: 7),
+                    ),
                   ),
-                ),
-                Expanded(
-                  flex: (completionWidth * 1000).round().clamp(1, 1000),
-                  child: ColoredBox(
-                    color: theme.colorScheme.secondary,
-                    child: const SizedBox(height: 7),
+                if (promptUncached > 0)
+                  Expanded(
+                    flex: promptUncached,
+                    child: const ColoredBox(
+                      color: _traceBlue,
+                      child: SizedBox(height: 7),
+                    ),
                   ),
-                ),
+                if (completionVisible > 0)
+                  Expanded(
+                    flex: completionVisible,
+                    child: const ColoredBox(
+                      color: _traceGreen,
+                      child: SizedBox(height: 7),
+                    ),
+                  ),
+                if (reasoning > 0)
+                  Expanded(
+                    flex: reasoning,
+                    child: const ColoredBox(
+                      color: _traceYellow,
+                      child: SizedBox(height: 7),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -601,59 +1091,232 @@ class _TokenLegend extends StatelessWidget {
   }
 }
 
-class _ContentBlock extends StatelessWidget {
+class _EmptyTraceText extends StatelessWidget {
+  const _EmptyTraceText(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(text, style: Theme.of(context).textTheme.bodySmall),
+    );
+  }
+}
+
+class _ReasoningBlock extends StatelessWidget {
+  const _ReasoningBlock({required this.content});
+
+  final String content;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        initiallyExpanded: false,
+        dense: true,
+        title: Row(
+          children: [
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'reasoning · ${content.length} chars',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+              ),
+            ),
+          ],
+        ),
+        children: [
+          _ContentBlock(
+            content: content,
+            backgroundColor: _warningWellColor(theme),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContentBlock extends StatefulWidget {
   const _ContentBlock({
     required this.content,
     this.label,
     this.compact = false,
+    this.backgroundColor,
   });
 
   final String content;
   final String? label;
   final bool compact;
+  final Color? backgroundColor;
+
+  @override
+  State<_ContentBlock> createState() => _ContentBlockState();
+}
+
+class _ContentBlockState extends State<_ContentBlock> {
+  static const _previewLines = 8;
+  bool _expanded = false;
+  bool _copied = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      margin: EdgeInsets.only(top: compact ? 0 : 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: theme.colorScheme.surfaceContainerHighest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 38, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (label != null)
-                  Text(label!, style: theme.textTheme.labelSmall),
-                SelectableText(
-                  content,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                    height: 1.45,
+    final lines = widget.content.split('\n');
+    final canCollapse = lines.length > _previewLines + 2;
+    final displayed = canCollapse && !_expanded
+        ? lines.take(_previewLines).join('\n')
+        : widget.content;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (widget.label != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            widget.label!.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 2),
+        ],
+        Container(
+          width: double.infinity,
+          margin: EdgeInsets.only(
+            top: widget.compact || widget.label != null ? 2 : 6,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            color:
+                widget.backgroundColor ??
+                theme.colorScheme.surfaceContainerHighest,
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 7, 38, 7),
+                    child: SelectableText(
+                      canCollapse && !_expanded ? '$displayed …' : displayed,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        height: 1.55,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 3,
+                    right: 3,
+                    child: IconButton(
+                      tooltip: _copied ? 'Copied' : 'Copy',
+                      iconSize: 15,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _copy,
+                      icon: Icon(
+                        _copied ? Icons.check_rounded : Icons.copy_rounded,
+                        color: _copied ? theme.colorScheme.primary : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (canCollapse)
+                InkWell(
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      border: Border(
+                        top: BorderSide(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.keyboard_arrow_down_rounded,
+                          size: 14,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _expanded
+                              ? 'Show less'
+                              : '${lines.length - _previewLines} more lines',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
-          Positioned(
-            top: 4,
-            right: 4,
-            child: IconButton(
-              tooltip: 'Copy',
-              iconSize: 16,
-              visualDensity: VisualDensity.compact,
-              onPressed: () => Clipboard.setData(ClipboardData(text: content)),
-              icon: const Icon(Icons.copy_rounded),
-            ),
-          ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.content));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+}
+
+class _SmallTag extends StatelessWidget {
+  const _SmallTag({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: color,
+          fontSize: 10,
+          height: 1.2,
+        ),
       ),
     );
   }
@@ -668,15 +1331,20 @@ class _RoleBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.34)),
       ),
       child: Text(
         role.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: color,
+          fontSize: 10,
+          letterSpacing: 0.5,
+          height: 1.2,
+        ),
       ),
     );
   }
@@ -734,16 +1402,16 @@ class _TraceTotals {
     var reasoning = 0;
     var cached = 0;
     for (final round in trace) {
-      llmMs += round['llm_duration_ms'] as int? ?? 0;
+      llmMs += _asInt(round['llm_duration_ms']);
       for (final result in _list(round['tool_results'])) {
         toolCalls++;
-        toolMs += _map(result)['duration_ms'] as int? ?? 0;
+        toolMs += _asInt(_map(result)['duration_ms']);
       }
       final usage = _map(round['usage']);
-      prompt += usage['prompt_tokens'] as int? ?? 0;
-      completion += usage['completion_tokens'] as int? ?? 0;
-      reasoning += usage['reasoning_tokens'] as int? ?? 0;
-      cached += usage['cached_tokens'] as int? ?? 0;
+      prompt += _asInt(usage['prompt_tokens']);
+      completion += _asInt(usage['completion_tokens']);
+      reasoning += _asInt(usage['reasoning_tokens']);
+      cached += _asInt(usage['cached_tokens']);
     }
     return _TraceTotals(
       llmMs: llmMs,
@@ -758,14 +1426,20 @@ class _TraceTotals {
 }
 
 Color _roleColor(BuildContext context, String role) {
-  final scheme = Theme.of(context).colorScheme;
   return switch (role) {
-    'system' => scheme.outline,
-    'user' => scheme.primary,
-    'assistant' => scheme.secondary,
-    'tool' => scheme.tertiary,
-    _ => scheme.onSurface,
+    'system' => const Color(0xff8c8c8c),
+    'user' => const Color(0xff1677ff),
+    'assistant' => const Color(0xff52c41a),
+    'tool' => const Color(0xfffa8c16),
+    _ => Theme.of(context).colorScheme.onSurface,
   };
+}
+
+Color _warningWellColor(ThemeData theme) {
+  if (theme.brightness == Brightness.dark) {
+    return _traceYellow.withValues(alpha: 0.16);
+  }
+  return const Color(0xfffffbe6);
 }
 
 List<dynamic> _list(Object? value) {
@@ -773,7 +1447,17 @@ List<dynamic> _list(Object? value) {
 }
 
 Map<String, dynamic> _map(Object? value) {
-  return value is Map<String, dynamic> ? value : const {};
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) {
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+  return const {};
+}
+
+int _asInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return 0;
 }
 
 String _fmtMs(int ms) {

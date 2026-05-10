@@ -363,29 +363,6 @@ class _SectionNav extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 18, 14, 18),
       children: [
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Promptd',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(color: AppTheme.primary),
-              ),
-              const SizedBox(height: 8),
-              Text('Console', style: Theme.of(context).textTheme.bodyMedium),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
         for (final item in destinations)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),

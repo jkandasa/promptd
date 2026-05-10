@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -39,6 +40,10 @@ class PromptdApiClient {
   String _jwtToken = '';
 
   String get serverUrl => _serverUrl;
+  Map<String, String> get authHeaders => {
+    if (_jwtToken.isNotEmpty) 'Authorization': 'Bearer $_jwtToken',
+    if (_cookieHeader.isNotEmpty) 'Cookie': _cookieHeader,
+  };
 
   set session(StoredSession? session) {
     allowInsecureTls = session?.allowInsecureTls ?? false;
@@ -231,6 +236,28 @@ class PromptdApiClient {
     await _request('POST', '/api/schedules/$id/trigger');
   }
 
+  Future<Uint8List> downloadFile(String url) async {
+    final response = await _httpClient.get(
+      Uri.parse(resolveUrl(url)),
+      headers: authHeaders,
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw PromptdApiException(
+        'Failed to load file',
+        statusCode: response.statusCode,
+      );
+    }
+    return response.bodyBytes;
+  }
+
+  String resolveUrl(String value) {
+    if (value.isEmpty || _serverUrl.isEmpty) return value;
+    final uri = Uri.tryParse(value);
+    if (uri != null && uri.hasScheme) return value;
+    final base = Uri.parse(_serverUrl);
+    return base.replace(path: value).toString();
+  }
+
   Future<Map<String, dynamic>> _request(
     String method,
     String path, {
@@ -266,8 +293,7 @@ class PromptdApiClient {
     }
     final headers = <String, String>{
       'Accept': 'application/json',
-      if (_jwtToken.isNotEmpty) 'Authorization': 'Bearer $_jwtToken',
-      if (_cookieHeader.isNotEmpty) 'Cookie': _cookieHeader,
+      ...authHeaders,
       if (body != null) 'Content-Type': 'application/json',
     };
     final uri = _uri(_serverUrl, path, query);

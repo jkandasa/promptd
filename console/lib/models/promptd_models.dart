@@ -365,6 +365,7 @@ class StorageMessage {
     this.timeTakenMs,
     this.llmCalls,
     this.toolCalls,
+    this.files = const [],
     this.trace = const [],
   });
 
@@ -379,6 +380,7 @@ class StorageMessage {
   final int? timeTakenMs;
   final int? llmCalls;
   final int? toolCalls;
+  final List<UploadedFile> files;
   final List<Map<String, dynamic>> trace;
 
   factory StorageMessage.fromJson(Map<String, dynamic> json) {
@@ -394,7 +396,52 @@ class StorageMessage {
       timeTakenMs: json['time_taken_ms'] as int?,
       llmCalls: json['llm_calls'] as int?,
       toolCalls: json['tool_calls'] as int?,
+      files: _uploadedFiles(json['files']),
       trace: _mapList(json['trace']),
+    );
+  }
+}
+
+class UploadedFile {
+  const UploadedFile({
+    required this.id,
+    required this.filename,
+    required this.size,
+    required this.url,
+    this.contentType,
+  });
+
+  final String id;
+  final String filename;
+  final int size;
+  final String url;
+  final String? contentType;
+
+  bool get isImage {
+    final type = contentType?.toLowerCase() ?? '';
+    if (type.startsWith('image/')) return true;
+    final lower = filename.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp') ||
+        lower.endsWith('.svg');
+  }
+
+  bool get isSvg {
+    final type = contentType?.toLowerCase() ?? '';
+    return type == 'image/svg+xml' || filename.toLowerCase().endsWith('.svg');
+  }
+
+  factory UploadedFile.fromJson(Map<String, dynamic> json) {
+    return UploadedFile(
+      id: json['id'] as String? ?? '',
+      filename: json['filename'] as String? ?? 'file',
+      size: json['size'] as int? ?? 0,
+      url: json['url'] as String? ?? '',
+      contentType: json['content_type'] as String?,
     );
   }
 }
@@ -410,6 +457,7 @@ class ChatMessage {
     this.timeTakenMs,
     this.llmCalls,
     this.toolCalls,
+    this.files = const [],
     this.trace = const [],
     this.compactSummary = false,
     this.pending = false,
@@ -424,6 +472,7 @@ class ChatMessage {
   final int? timeTakenMs;
   final int? llmCalls;
   final int? toolCalls;
+  final List<UploadedFile> files;
   final List<Map<String, dynamic>> trace;
   final bool compactSummary;
   final bool pending;
@@ -439,6 +488,7 @@ class ChatMessage {
       timeTakenMs: message.timeTakenMs,
       llmCalls: message.llmCalls,
       toolCalls: message.toolCalls,
+      files: message.files,
       trace: message.trace,
       compactSummary: message.compactSummary,
     );
@@ -454,6 +504,7 @@ class ChatMessage {
     int? timeTakenMs,
     int? llmCalls,
     int? toolCalls,
+    List<UploadedFile>? files,
     List<Map<String, dynamic>>? trace,
     bool? compactSummary,
     bool? pending,
@@ -468,6 +519,7 @@ class ChatMessage {
       timeTakenMs: timeTakenMs ?? this.timeTakenMs,
       llmCalls: llmCalls ?? this.llmCalls,
       toolCalls: toolCalls ?? this.toolCalls,
+      files: files ?? this.files,
       trace: trace ?? this.trace,
       compactSummary: compactSummary ?? this.compactSummary,
       pending: pending ?? this.pending,
@@ -485,6 +537,7 @@ class ChatResponse {
     this.toolCalls = 0,
     this.userMessageId,
     this.assistantMessageId,
+    this.files = const [],
     this.trace = const [],
     this.compactSummary,
   });
@@ -497,6 +550,7 @@ class ChatResponse {
   final int toolCalls;
   final String? userMessageId;
   final String? assistantMessageId;
+  final List<UploadedFile> files;
   final List<Map<String, dynamic>> trace;
   final StorageMessage? compactSummary;
 
@@ -510,6 +564,7 @@ class ChatResponse {
       toolCalls: json['tool_calls'] as int? ?? 0,
       userMessageId: json['user_msg_id'] as String?,
       assistantMessageId: json['assistant_msg_id'] as String?,
+      files: _uploadedFiles(json['files']),
       trace: _mapList(json['trace']),
       compactSummary: json['compact_summary'] is Map<String, dynamic>
           ? StorageMessage.fromJson(
@@ -633,4 +688,12 @@ DateTime? _parseDate(Object? value) {
 List<Map<String, dynamic>> _mapList(Object? value) {
   if (value is! List<dynamic>) return const [];
   return value.whereType<Map<String, dynamic>>().toList(growable: false);
+}
+
+List<UploadedFile> _uploadedFiles(Object? value) {
+  if (value is! List<dynamic>) return const [];
+  return value
+      .whereType<Map<String, dynamic>>()
+      .map(UploadedFile.fromJson)
+      .toList(growable: false);
 }
