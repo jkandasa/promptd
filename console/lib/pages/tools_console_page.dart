@@ -27,11 +27,31 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final tools = _filteredTools();
+    final isNarrow = MediaQuery.sizeOf(context).width < 680;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Tools', style: theme.textTheme.headlineMedium),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text('Tools', style: theme.textTheme.headlineMedium),
+            ),
+            IconButton.outlined(
+              tooltip: 'Refresh tools',
+              onPressed: widget.state.loadingData
+                  ? null
+                  : () => widget.state.refreshAppData(),
+              icon: widget.state.loadingData
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
         const SizedBox(height: 8),
         Text(
           '${tools.length} of ${widget.state.tools.length} tools available from the connected server.',
@@ -40,21 +60,35 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
           ),
         ),
         const SizedBox(height: 18),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
+        Flex(
+          direction: isNarrow ? Axis.vertical : Axis.horizontal,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: isNarrow
+              ? CrossAxisAlignment.stretch
+              : CrossAxisAlignment.center,
           children: [
             SizedBox(
-              width: 320,
+              width: isNarrow ? double.infinity : 320,
               child: TextField(
                 controller: _searchController,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   hintText: 'Search tools',
-                  prefixIcon: Icon(Icons.search_rounded),
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
                 ),
                 onChanged: (_) => setState(() {}),
               ),
             ),
+            SizedBox(width: isNarrow ? 0 : 10, height: isNarrow ? 10 : 0),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'all', label: Text('All')),
@@ -73,16 +107,36 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
         ),
         const SizedBox(height: 18),
         Expanded(
-          child: widget.state.tools.isEmpty
+          child: widget.state.loadingData && widget.state.tools.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : widget.state.tools.isEmpty
               ? const Center(child: Text('No tools registered'))
               : tools.isEmpty
-              ? const Center(child: Text('No matching tools'))
-              : GridView.count(
-                  crossAxisCount: _columnCount(context),
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: _cardAspectRatio(context),
-                  children: [for (final tool in tools) ToolCard(tool: tool)],
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('No matching tools'),
+                      const SizedBox(height: 10),
+                      TextButton(
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _filter = 'all');
+                        },
+                        child: const Text('Clear filters'),
+                      ),
+                    ],
+                  ),
+                )
+              : GridView.builder(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: _columnCount(context),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    mainAxisExtent: _cardExtent(context),
+                  ),
+                  itemCount: tools.length,
+                  itemBuilder: (context, index) => ToolCard(tool: tools[index]),
                 ),
         ),
       ],
@@ -96,9 +150,10 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
       if (_filter == 'configurable' && !configurable) return false;
       if (_filter == 'simple' && configurable) return false;
       if (query.isEmpty) return true;
+      final required = tool.requiredNames.join(' ').toLowerCase();
       return tool.name.toLowerCase().contains(query) ||
           tool.description.toLowerCase().contains(query) ||
-          tool.parameterNames.join(' ').toLowerCase().contains(query);
+          required.contains(query);
     }).toList()..sort((a, b) => a.name.compareTo(b.name));
   }
 
@@ -110,11 +165,11 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
     return 1;
   }
 
-  double _cardAspectRatio(BuildContext context) {
+  double _cardExtent(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
-    if (width >= 1400) return 1.12;
-    if (width >= 1000) return 1.04;
-    if (width >= 680) return 1.08;
-    return 1.18;
+    if (width >= 1400) return 312;
+    if (width >= 1000) return 326;
+    if (width >= 680) return 300;
+    return 280;
   }
 }

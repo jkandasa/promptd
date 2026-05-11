@@ -1,6 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../models/promptd_models.dart';
@@ -51,15 +53,20 @@ class _MessageBubbleState extends State<MessageBubble> {
     final color = _editing
         ? theme.colorScheme.surfaceContainerLowest
         : isCompact
-        ? theme.colorScheme.primaryContainer
+        ? _compactBubbleColor(theme)
         : isError
-        ? theme.colorScheme.errorContainer
+        ? _softErrorColor(theme)
         : isUser
-        ? theme.colorScheme.primary
+        ? _userBubbleColor(theme)
         : theme.colorScheme.surfaceContainerLowest;
-    final foreground = isUser && !isCompact && !_editing
-        ? Colors.white
-        : theme.colorScheme.onSurface;
+    final foreground = theme.colorScheme.onSurface;
+    final borderColor = isError
+        ? _softErrorBorderColor(theme)
+        : isCompact
+        ? _compactBorderColor(theme)
+        : isUser && !_editing
+        ? _userBorderColor(theme)
+        : theme.colorScheme.outlineVariant;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -74,15 +81,33 @@ class _MessageBubbleState extends State<MessageBubble> {
               decoration: BoxDecoration(
                 color: color,
                 borderRadius: BorderRadius.circular(8),
-                border: isUser && !isCompact && !_editing
-                    ? null
-                    : Border.all(color: theme.colorScheme.outlineVariant),
+                border: Border.all(color: borderColor),
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: _editing
-                    ? _editForm(context)
-                    : _content(context, foreground),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isCompact && !_editing)
+                      Container(
+                        width: 5,
+                        decoration: BoxDecoration(
+                          color: _compactAccentColor(theme),
+                          borderRadius: const BorderRadius.horizontal(
+                            left: Radius.circular(8),
+                          ),
+                        ),
+                      ),
+                    Flexible(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: _editing
+                            ? _editForm(context)
+                            : _content(context, foreground),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             if (!_editing && message.files.isNotEmpty) ...[
@@ -114,6 +139,11 @@ class _MessageBubbleState extends State<MessageBubble> {
     final message = widget.message;
     final theme = Theme.of(context);
     final isError = message.role == 'error';
+    final isCompact = message.compactSummary;
+    final isUser = message.role == 'user';
+    final errorAccent = _softErrorAccentColor(theme);
+    final compactAccent = _compactAccentColor(theme);
+    final userAccent = _userAccentColor(theme);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -124,17 +154,45 @@ class _MessageBubbleState extends State<MessageBubble> {
             Icon(
               _roleIcon(message.role),
               size: 16,
-              color: isError ? theme.colorScheme.error : foreground,
+              color: isError
+                  ? errorAccent
+                  : isCompact
+                  ? compactAccent
+                  : isUser
+                  ? userAccent
+                  : foreground,
             ),
             const SizedBox(width: 6),
-            Text(
-              message.compactSummary
-                  ? 'Compacted summary'
-                  : _roleLabel(message.role),
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: isError ? theme.colorScheme.error : foreground,
+            if (isCompact)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: compactAccent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: compactAccent.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Text(
+                  'Compacted summary',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: compactAccent,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              )
+            else
+              Text(
+                _roleLabel(message.role),
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: isError
+                      ? errorAccent
+                      : isUser
+                      ? userAccent
+                      : foreground,
+                ),
               ),
-            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -173,7 +231,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           SelectableText(
             message.content,
             style: theme.textTheme.bodyLarge?.copyWith(
-              color: isError ? theme.colorScheme.onErrorContainer : foreground,
+              color: foreground,
               height: 1.55,
             ),
           ),
@@ -279,6 +337,74 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 }
 
+Color _softErrorColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.surface,
+    theme.colorScheme.error,
+    theme.brightness == Brightness.dark ? 0.16 : 0.08,
+  )!;
+}
+
+Color _softErrorBorderColor(ThemeData theme) {
+  return theme.colorScheme.error.withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
+  );
+}
+
+Color _softErrorAccentColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.error,
+    theme.colorScheme.onSurface,
+    theme.brightness == Brightness.dark ? 0.18 : 0.08,
+  )!;
+}
+
+Color _userBubbleColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.surface,
+    theme.colorScheme.primary,
+    theme.brightness == Brightness.dark ? 0.22 : 0.1,
+  )!;
+}
+
+Color _userBorderColor(ThemeData theme) {
+  return theme.colorScheme.primary.withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.38 : 0.2,
+  );
+}
+
+Color _userAccentColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.primary,
+    theme.colorScheme.onSurface,
+    theme.brightness == Brightness.dark ? 0.14 : 0.04,
+  )!;
+}
+
+Color _compactBubbleColor(ThemeData theme) {
+  if (theme.brightness == Brightness.dark) {
+    return Color.lerp(
+      theme.colorScheme.surface,
+      const Color(0xfffaad14),
+      0.22,
+    )!;
+  }
+  return const Color(0xfffff7e6);
+}
+
+Color _compactBorderColor(ThemeData theme) {
+  if (theme.brightness == Brightness.dark) {
+    return const Color(0xfffaad14).withValues(alpha: 0.48);
+  }
+  return const Color(0xffffd591);
+}
+
+Color _compactAccentColor(ThemeData theme) {
+  return theme.brightness == Brightness.dark
+      ? const Color(0xffffc53d)
+      : const Color(0xffad6800);
+}
+
 class _MessageActions extends StatelessWidget {
   const _MessageActions({
     required this.message,
@@ -334,7 +460,6 @@ class _MessageFiles extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -342,31 +467,192 @@ class _MessageFiles extends StatelessWidget {
         for (final file in files)
           file.isImage
               ? _ImageAttachment(file: file, loadFileBytes: loadFileBytes)
-              : Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.insert_drive_file_outlined, size: 16),
-                      const SizedBox(width: 6),
-                      Text(
-                        file.filename,
-                        style: theme.textTheme.bodySmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
+              : _FileAttachment(file: file, loadFileBytes: loadFileBytes),
       ],
     );
+  }
+}
+
+class _FileAttachment extends StatefulWidget {
+  const _FileAttachment({required this.file, required this.loadFileBytes});
+
+  final UploadedFile file;
+  final Future<Uint8List> Function(String url) loadFileBytes;
+
+  @override
+  State<_FileAttachment> createState() => _FileAttachmentState();
+}
+
+class _FileAttachmentState extends State<_FileAttachment> {
+  Future<Uint8List>? _bytesFuture;
+
+  Future<Uint8List> _bytes() {
+    return _bytesFuture ??= widget.loadFileBytes(widget.file.url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final previewable = _canPreviewFile(widget.file);
+    return Container(
+      width: 320,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(_fileIcon(widget.file), size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.file.filename,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall,
+                ),
+                Text(
+                  _fmtFileSize(widget.file.size),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (previewable)
+            IconButton(
+              tooltip: 'Preview file',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _showPreview(context),
+              icon: const Icon(Icons.visibility_outlined, size: 18),
+            ),
+          IconButton(
+            tooltip: 'Download file',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _download(context),
+            icon: const Icon(Icons.download_rounded, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPreview(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920, maxHeight: 760),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.file.filename,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Download file',
+                      onPressed: () => _download(context),
+                      icon: const Icon(Icons.download_rounded),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                Flexible(
+                  child: FutureBuilder<Uint8List>(
+                    future: _bytes(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError || snapshot.data == null) {
+                        return _FilePreviewMessage(
+                          message: 'Unable to load preview',
+                          filename: widget.file.filename,
+                        );
+                      }
+                      if (_isPdfFile(widget.file)) {
+                        return _FilePreviewMessage(
+                          message:
+                              'PDF preview is not embedded yet. Use download to open it with your system PDF viewer.',
+                          filename: widget.file.filename,
+                        );
+                      }
+                      final text = _decodePreviewText(snapshot.data!);
+                      if (text == null) {
+                        return _FilePreviewMessage(
+                          message: 'Preview is not available for this file',
+                          filename: widget.file.filename,
+                        );
+                      }
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SingleChildScrollView(
+                          child: SelectableText(
+                            text,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  fontFamily: 'monospace',
+                                  height: 1.45,
+                                ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _download(BuildContext context) async {
+    try {
+      final bytes = await _bytes();
+      final savedTo = await saveDownloadedFile(
+        bytes: bytes,
+        filename: widget.file.filename,
+        contentType: widget.file.contentType,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Downloaded $savedTo')));
+    } catch (err) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Download failed: $err')));
+    }
   }
 }
 
@@ -598,6 +884,114 @@ class _ImageError extends StatelessWidget {
   }
 }
 
+class _FilePreviewMessage extends StatelessWidget {
+  const _FilePreviewMessage({required this.message, required this.filename});
+
+  final String message;
+  final String filename;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 420),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_fileIconName(filename), size: 34),
+            const SizedBox(height: 10),
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 6),
+            Text(
+              filename,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+bool _canPreviewFile(UploadedFile file) {
+  return _isPdfFile(file) || _isTextFile(file);
+}
+
+bool _isPdfFile(UploadedFile file) {
+  final type = file.contentType?.toLowerCase() ?? '';
+  return type == 'application/pdf' ||
+      file.filename.toLowerCase().endsWith('.pdf');
+}
+
+bool _isTextFile(UploadedFile file) {
+  final type = file.contentType?.toLowerCase() ?? '';
+  if (type.startsWith('text/')) return true;
+  const extensions = [
+    '.txt',
+    '.md',
+    '.json',
+    '.csv',
+    '.log',
+    '.yaml',
+    '.yml',
+    '.xml',
+    '.html',
+    '.css',
+    '.js',
+    '.ts',
+    '.dart',
+    '.go',
+    '.py',
+    '.rs',
+    '.java',
+    '.kt',
+    '.sh',
+  ];
+  final name = file.filename.toLowerCase();
+  return extensions.any(name.endsWith);
+}
+
+String? _decodePreviewText(Uint8List bytes) {
+  if (bytes.length > 1024 * 1024) {
+    return 'Preview is limited to files up to 1 MB. Use download for this file.';
+  }
+  try {
+    return utf8.decode(bytes, allowMalformed: true);
+  } catch (_) {
+    return null;
+  }
+}
+
+IconData _fileIcon(UploadedFile file) => _fileIconName(file.filename);
+
+IconData _fileIconName(String filename) {
+  final lower = filename.toLowerCase();
+  if (lower.endsWith('.pdf')) return Icons.picture_as_pdf_outlined;
+  if (lower.endsWith('.csv')) return Icons.table_chart_outlined;
+  if (lower.endsWith('.zip') ||
+      lower.endsWith('.tar') ||
+      lower.endsWith('.gz')) {
+    return Icons.folder_zip_outlined;
+  }
+  return Icons.insert_drive_file_outlined;
+}
+
+String _fmtFileSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 class _MessageMeta extends StatelessWidget {
   const _MessageMeta({required this.message});
 
@@ -611,10 +1005,13 @@ class _MessageMeta extends StatelessWidget {
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Text(
-          _formatTime(message.sentAt),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
+        Tooltip(
+          message: _formatDateTime(message.sentAt),
+          child: Text(
+            _formatTime(message.sentAt),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
+            ),
           ),
         ),
         if (message.provider?.isNotEmpty == true ||
@@ -670,6 +1067,12 @@ class _MessageMeta extends StatelessWidget {
   String _formatTime(DateTime date) {
     final local = date.toLocal();
     return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDateTime(DateTime date) {
+    final local = date.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}:${local.second.toString().padLeft(2, '0')}';
   }
 }
 

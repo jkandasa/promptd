@@ -63,6 +63,12 @@ class PromptdApiClient {
     }
   }
 
+  void cancelActiveRequests() {
+    if (!_ownsClient) return;
+    _httpClient.close();
+    _httpClient = createPromptdHttpClient(allowInsecureTls: _allowInsecureTls);
+  }
+
   Future<LoginResult> login({
     required String serverUrl,
     required String userId,
@@ -174,6 +180,7 @@ class PromptdApiClient {
     required String sessionId,
     required String message,
     required String mode,
+    List<UploadedFile> files = const [],
     String? provider,
     String? model,
     String? systemPrompt,
@@ -186,6 +193,8 @@ class PromptdApiClient {
         'session_id': sessionId,
         'message': message,
         'mode': mode,
+        if (files.isNotEmpty)
+          'files': [for (final file in files) file.toJson()],
         if (provider != null && provider.isNotEmpty) 'provider': provider,
         if (model != null && model.isNotEmpty) 'model': model,
         if (systemPrompt != null && systemPrompt.isNotEmpty)
@@ -194,6 +203,33 @@ class PromptdApiClient {
       },
     );
     return ChatResponse.fromJson(body);
+  }
+
+  Future<UploadedFile> uploadFile({
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    if (_serverUrl.isEmpty) {
+      throw const PromptdApiException('Server URL is not configured');
+    }
+    final request = http.MultipartRequest(
+      'POST',
+      _uri(_serverUrl, '/api/upload'),
+    );
+    request.headers.addAll(authHeaders);
+    request.files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+    final streamed = await _httpClient.send(request);
+    final response = await http.Response.fromStream(streamed);
+    final body = _decodeBody(response);
+    _throwIfFailed(response, body, 'Upload failed');
+    return UploadedFile.fromJson(body);
+  }
+
+  Future<void> deleteFile(String fileId) async {
+    if (fileId.isEmpty) return;
+    await _request('DELETE', '/api/files/$fileId');
   }
 
   Future<StorageMessage> compactConversation({

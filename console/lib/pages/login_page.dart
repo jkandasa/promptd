@@ -231,19 +231,23 @@ class _LoginError extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer,
+        color: _softErrorColor(theme),
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _softErrorBorderColor(theme)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline_rounded, color: theme.colorScheme.error),
+          Icon(
+            Icons.error_outline_rounded,
+            color: _softErrorAccentColor(theme),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onErrorContainer,
+                color: theme.colorScheme.onSurface,
               ),
             ),
           ),
@@ -251,4 +255,26 @@ class _LoginError extends StatelessWidget {
       ),
     );
   }
+}
+
+Color _softErrorColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.surface,
+    theme.colorScheme.error,
+    theme.brightness == Brightness.dark ? 0.16 : 0.08,
+  )!;
+}
+
+Color _softErrorBorderColor(ThemeData theme) {
+  return theme.colorScheme.error.withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
+  );
+}
+
+Color _softErrorAccentColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.error,
+    theme.colorScheme.onSurface,
+    theme.brightness == Brightness.dark ? 0.18 : 0.08,
+  )!;
 }

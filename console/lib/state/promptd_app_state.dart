@@ -16,6 +16,7 @@ class PromptdAppState extends ChangeNotifier {
   final PromptdApiClient _api;
   final SessionStore _sessionStore;
   final Uuid _uuid = const Uuid();
+  bool _stopRequested = false;
 
   bool initializing = true;
   bool signingIn = false;
@@ -228,15 +229,24 @@ class PromptdAppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendMessage(String content) async {
+  Future<void> sendMessage(
+    String content, {
+    List<UploadedFile> files = const [],
+  }) async {
     final trimmed = content.trim();
-    if (trimmed.isEmpty || sending) return;
+    if ((trimmed.isEmpty && files.isEmpty) || sending) return;
     final conversationId = selectedConversationId ?? _uuid.v4();
     selectedConversationId = conversationId;
     final now = DateTime.now();
     messages = [
       ...messages,
-      ChatMessage(id: _uuid.v4(), role: 'user', content: trimmed, sentAt: now),
+      ChatMessage(
+        id: _uuid.v4(),
+        role: 'user',
+        content: trimmed,
+        sentAt: now,
+        files: files,
+      ),
       ChatMessage(
         id: 'pending-${now.microsecondsSinceEpoch}',
         role: 'assistant',
@@ -246,6 +256,7 @@ class PromptdAppState extends ChangeNotifier {
       ),
     ];
     sending = true;
+    _stopRequested = false;
     error = null;
     notifyListeners();
     try {
@@ -253,6 +264,7 @@ class PromptdAppState extends ChangeNotifier {
         sessionId: conversationId,
         message: trimmed,
         mode: chatMode,
+        files: files,
         provider: selectedProvider,
         model: selectedModel,
         systemPrompt: selectedSystemPrompt,
@@ -294,6 +306,14 @@ class PromptdAppState extends ChangeNotifier {
       }
       await _refreshConversationsOnly();
     } catch (err) {
+      if (_stopRequested) {
+        messages = [
+          for (final message in messages)
+            if (!message.pending) message,
+        ];
+        error = null;
+        return;
+      }
       messages = [
         for (final message in messages)
           if (!message.pending) message,
@@ -307,8 +327,22 @@ class PromptdAppState extends ChangeNotifier {
       error = err.toString();
     } finally {
       sending = false;
+      _stopRequested = false;
       notifyListeners();
     }
+  }
+
+  void stopProcessing() {
+    if (!sending) return;
+    _stopRequested = true;
+    _api.cancelActiveRequests();
+    messages = [
+      for (final message in messages)
+        if (!message.pending) message,
+    ];
+    sending = false;
+    error = null;
+    notifyListeners();
   }
 
   Future<void> deleteConversation(String id) async {

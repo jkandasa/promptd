@@ -15,80 +15,92 @@ class ToolCard extends StatelessWidget {
     final parameterCount = parameters.length;
     final requiredCount = requiredNames.length;
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: theme.colorScheme.primary.withValues(
-                    alpha: 0.1,
-                  ),
-                  child: Icon(
-                    parameterCount > 0
-                        ? Icons.tune_rounded
-                        : Icons.check_circle_outline_rounded,
-                    color: theme.colorScheme.primary,
-                  ),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    tool.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              tool.description,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Chip(
-                  label: Text('$parameterCount params'),
-                  visualDensity: VisualDensity.compact,
-                ),
-                if (requiredCount > 0)
-                  Chip(
-                    label: Text('$requiredCount required'),
-                    visualDensity: VisualDensity.compact,
-                  ),
-              ],
-            ),
-            if (parameters.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: parameters.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 6),
-                  itemBuilder: (context, index) {
-                    final entry = parameters[index];
-                    return _ToolParameter(
-                      name: entry.name,
-                      schema: entry.schema,
-                      required: requiredNames.contains(entry.name),
-                    );
-                  },
+                child: Icon(
+                  parameterCount > 0
+                      ? Icons.tune_rounded
+                      : Icons.check_circle_rounded,
+                  color: theme.colorScheme.primary,
+                  size: 20,
                 ),
               ),
-            ] else
-              const Spacer(),
-          ],
-        ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  tool.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            tool.description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              height: 1.45,
+              fontSize: 13,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.68),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ToolChip(label: '$parameterCount params'),
+              if (requiredCount > 0)
+                _ToolChip(
+                  label: '$requiredCount required',
+                  color: theme.colorScheme.error,
+                  background: theme.colorScheme.error.withValues(alpha: 0.1),
+                ),
+            ],
+          ),
+          if (parameters.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView.separated(
+                padding: EdgeInsets.zero,
+                itemCount: parameters.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 6),
+                itemBuilder: (context, index) {
+                  final entry = parameters[index];
+                  return _ToolParameter(
+                    name: entry.name,
+                    schema: entry.schema,
+                    required: requiredNames.contains(entry.name),
+                  );
+                },
+              ),
+            ),
+          ] else
+            const Spacer(),
+        ],
       ),
     );
   }
@@ -110,6 +122,34 @@ class ToolCard extends StatelessWidget {
       return value.map((key, value) => MapEntry(key.toString(), value));
     }
     return const {};
+  }
+}
+
+class _ToolChip extends StatelessWidget {
+  const _ToolChip({required this.label, this.color, this.background});
+
+  final String label;
+  final Color? color;
+  final Color? background;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: background ?? theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: color,
+          fontSize: 11,
+          height: 1.2,
+        ),
+      ),
+    );
   }
 }
 
@@ -148,9 +188,13 @@ class _ToolParameter extends StatelessWidget {
                 name,
                 style: theme.textTheme.labelMedium?.copyWith(
                   fontFamily: 'monospace',
+                  fontSize: 12,
                 ),
               ),
-              Text(type, style: theme.textTheme.bodySmall),
+              Text(
+                type,
+                style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+              ),
               if (required)
                 Icon(
                   Icons.error_outline_rounded,

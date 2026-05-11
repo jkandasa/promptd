@@ -444,6 +444,16 @@ class UploadedFile {
       contentType: json['content_type'] as String?,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'filename': filename,
+      'size': size,
+      'url': url,
+      if (contentType != null) 'content_type': contentType,
+    };
+  }
 }
 
 class ChatMessage {

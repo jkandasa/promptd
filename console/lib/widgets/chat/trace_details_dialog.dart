@@ -324,17 +324,17 @@ class _DurationTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = error ? theme.colorScheme.error : theme.colorScheme.onSurface;
+    final color = error
+        ? _softErrorAccentColor(theme)
+        : theme.colorScheme.onSurface;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: error
-            ? theme.colorScheme.errorContainer
-            : theme.colorScheme.surface,
+        color: error ? _softErrorColor(theme) : theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(5),
         border: Border.all(
           color: error
-              ? theme.colorScheme.error.withValues(alpha: 0.32)
+              ? _softErrorBorderColor(theme)
               : theme.colorScheme.outlineVariant,
         ),
       ),
@@ -503,7 +503,7 @@ class _TraceMessageCard extends StatelessWidget {
                 if (refusal?.isNotEmpty == true)
                   _ContentBlock(
                     content: '[refusal] $refusal',
-                    backgroundColor: theme.colorScheme.errorContainer,
+                    backgroundColor: _softErrorColor(theme),
                   ),
                 for (final item in toolCalls) _ToolCallCard(call: _map(item)),
                 if ((content == null || content.isEmpty) &&
@@ -610,7 +610,7 @@ class _ToolResultCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isError
-              ? theme.colorScheme.error.withValues(alpha: 0.45)
+              ? _softErrorBorderColor(theme)
               : theme.colorScheme.outlineVariant,
         ),
       ),
@@ -622,12 +622,12 @@ class _ToolResultCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: isError
-                  ? theme.colorScheme.errorContainer
+                  ? _softErrorColor(theme)
                   : theme.colorScheme.surfaceContainerHighest,
               border: Border(
                 bottom: BorderSide(
                   color: isError
-                      ? theme.colorScheme.error.withValues(alpha: 0.35)
+                      ? _softErrorBorderColor(theme)
                       : theme.colorScheme.outlineVariant,
                 ),
               ),
@@ -637,7 +637,7 @@ class _ToolResultCard extends StatelessWidget {
                 Icon(
                   Icons.build_outlined,
                   size: 15,
-                  color: isError ? theme.colorScheme.error : _traceOrange,
+                  color: isError ? _softErrorAccentColor(theme) : _traceOrange,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -670,9 +670,7 @@ class _ToolResultCard extends StatelessWidget {
                 _ContentBlock(
                   label: 'Output',
                   content: output,
-                  backgroundColor: isError
-                      ? theme.colorScheme.errorContainer
-                      : null,
+                  backgroundColor: isError ? _softErrorColor(theme) : null,
                 ),
               ],
             ),
@@ -683,84 +681,147 @@ class _ToolResultCard extends StatelessWidget {
   }
 }
 
-class _AvailableToolsList extends StatelessWidget {
+class _AvailableToolsList extends StatefulWidget {
   const _AvailableToolsList({required this.tools});
 
   final List<dynamic> tools;
 
   @override
+  State<_AvailableToolsList> createState() => _AvailableToolsListState();
+}
+
+class _AvailableToolsListState extends State<_AvailableToolsList> {
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final query = _searchController.text.trim().toLowerCase();
+    final tools = widget.tools.where((item) {
+      if (query.isEmpty) return true;
+      final tool = _map(item);
+      final name = (tool['name'] as String? ?? '').toLowerCase();
+      final description = (tool['description'] as String? ?? '').toLowerCase();
+      return name.contains(query) || description.contains(query);
+    }).toList();
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final item in tools)
-          Builder(
-            builder: (context) {
-              final tool = _map(item);
-              final parameters = _map(tool['parameters']);
-              final params = _map(parameters['properties']);
-              final requiredNames = (_list(
-                parameters['required'],
-              )).whereType<String>().toSet();
-              final description = tool['description'] as String? ?? '';
-              return Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: theme.colorScheme.outlineVariant),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        _SmallTag(
-                          label: tool['name'] as String? ?? 'tool',
-                          color: _traceBlue,
-                        ),
-                        if (params.isNotEmpty)
-                          Text(
-                            '${params.length} param${params.length == 1 ? '' : 's'}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withValues(
-                                alpha: 0.62,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    if (description.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        description,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.7,
-                          ),
-                          height: 1.45,
-                        ),
+        if (widget.tools.length > 5) ...[
+          SizedBox(
+            height: 36,
+            child: TextField(
+              controller: _searchController,
+              style: Theme.of(context).textTheme.bodySmall,
+              decoration: InputDecoration(
+                hintText: 'Filter tools...',
+                prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear filter',
+                        iconSize: 16,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.close_rounded),
                       ),
-                    ],
-                    if (params.isNotEmpty)
-                      _InlineExpansion(
-                        title: 'Parameters',
-                        child: _ParametersView(
-                          params: params,
-                          requiredNames: requiredNames,
-                        ),
-                      ),
-                  ],
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
                 ),
-              );
-            },
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        if (tools.isEmpty)
+          const _EmptyTraceText('No matching tools')
+        else
+          Column(
+            children: [
+              for (final item in tools) _AvailableToolCard(tool: _map(item)),
+            ],
           ),
       ],
+    );
+  }
+}
+
+class _AvailableToolCard extends StatelessWidget {
+  const _AvailableToolCard({required this.tool});
+
+  final Map<String, dynamic> tool;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final parameters = _map(tool['parameters']);
+    final params = _map(parameters['properties']);
+    final requiredNames = (_list(
+      parameters['required'],
+    )).whereType<String>().toSet();
+    final description = tool['description'] as String? ?? '';
+    final name = tool['name'] as String? ?? 'tool';
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _SmallTag(label: name, color: _traceBlue, code: true),
+              if (params.isNotEmpty)
+                Text(
+                  '${params.length} param${params.length == 1 ? '' : 's'}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          ),
+          if (description.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              description,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.68),
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+          ],
+          if (params.isNotEmpty)
+            _InlineExpansion(
+              title: 'Parameters',
+              child: _ParametersView(
+                params: params,
+                requiredNames: requiredNames,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -1337,10 +1398,15 @@ class _ContentBlockState extends State<_ContentBlock> {
 }
 
 class _SmallTag extends StatelessWidget {
-  const _SmallTag({required this.label, required this.color});
+  const _SmallTag({
+    required this.label,
+    required this.color,
+    this.code = false,
+  });
 
   final String label;
   final Color color;
+  final bool code;
 
   @override
   Widget build(BuildContext context) {
@@ -1355,7 +1421,8 @@ class _SmallTag extends StatelessWidget {
         label,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: color,
-          fontSize: 10,
+          fontFamily: code ? 'monospace' : null,
+          fontSize: code ? 12 : 10,
           height: 1.2,
         ),
       ),
@@ -1524,6 +1591,28 @@ Color _warningWellColor(ThemeData theme) {
     return _traceYellow.withValues(alpha: 0.16);
   }
   return const Color(0xfffffbe6);
+}
+
+Color _softErrorColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.surface,
+    theme.colorScheme.error,
+    theme.brightness == Brightness.dark ? 0.16 : 0.08,
+  )!;
+}
+
+Color _softErrorBorderColor(ThemeData theme) {
+  return theme.colorScheme.error.withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
+  );
+}
+
+Color _softErrorAccentColor(ThemeData theme) {
+  return Color.lerp(
+    theme.colorScheme.error,
+    theme.colorScheme.onSurface,
+    theme.brightness == Brightness.dark ? 0.18 : 0.08,
+  )!;
 }
 
 List<dynamic> _list(Object? value) {
