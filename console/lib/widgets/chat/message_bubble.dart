@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -217,42 +217,46 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: CircularProgressIndicator(strokeWidth: 2),
           )
         else if (message.role == 'assistant')
-          MarkdownBody(
-            data: message.content,
-            selectable: true,
-            onTapLink: (text, href, title) => _openLink(href),
-            styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-              a: theme.textTheme.bodyLarge?.copyWith(
-                color: theme.colorScheme.primary,
-                decoration: TextDecoration.underline,
-                height: 1.55,
-              ),
-              p: theme.textTheme.bodyLarge?.copyWith(
-                color: foreground,
-                height: 1.55,
-              ),
-              code: theme.textTheme.bodyMedium?.copyWith(
-                fontFamily: 'monospace',
-                backgroundColor: theme.colorScheme.surfaceContainerHighest,
-              ),
-              codeblockDecoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              blockquoteDecoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(color: theme.colorScheme.primary, width: 3),
+          RepaintBoundary(
+            child: MarkdownBody(
+              data: message.content,
+              selectable: true,
+              onTapLink: (text, href, title) => _openLink(href),
+              styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                a: theme.textTheme.bodyLarge?.copyWith(
+                  color: theme.colorScheme.primary,
+                  decoration: TextDecoration.underline,
+                  height: 1.55,
+                ),
+                p: theme.textTheme.bodyLarge?.copyWith(
+                  color: foreground,
+                  height: 1.55,
+                ),
+                code: theme.textTheme.bodyMedium?.copyWith(
+                  fontFamily: 'monospace',
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                ),
+                codeblockDecoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                blockquoteDecoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: theme.colorScheme.primary, width: 3),
+                  ),
                 ),
               ),
             ),
           )
         else
-          SelectableText(
-            message.content,
-            style: theme.textTheme.bodyLarge?.copyWith(
-              color: foreground,
-              height: 1.55,
+          RepaintBoundary(
+            child: SelectableText(
+              message.content,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: foreground,
+                height: 1.55,
+              ),
             ),
           ),
       ],
@@ -750,19 +754,23 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
           return _ImageError(filename: widget.file.filename);
         }
         return widget.file.isSvg
-            ? SvgPicture.memory(
-                snapshot.data!,
-                width: imageWidth,
-                height: 260,
-                fit: BoxFit.contain,
+            ? RepaintBoundary(
+                child: SvgPicture.memory(
+                  snapshot.data!,
+                  width: imageWidth,
+                  height: 260,
+                  fit: BoxFit.contain,
+                ),
               )
-            : Image.memory(
-                snapshot.data!,
-                width: imageWidth,
-                height: 260,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) =>
-                    _ImageError(filename: widget.file.filename),
+            : RepaintBoundary(
+                child: Image.memory(
+                  snapshot.data!,
+                  width: imageWidth,
+                  height: 260,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) =>
+                      _ImageError(filename: widget.file.filename),
+                ),
               );
       },
     );

@@ -49,7 +49,8 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
         (state.uiConfig.compactConversation?.enabled ?? false) &&
         (state.me?.permissions.compactConversationWrite ?? false) &&
         (state.selectedConversationId != null || state.messages.isNotEmpty);
-    _scheduleScrollIfNeeded(state);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleScrollIfNeeded(state));
 
     if (!state.me!.permissions.chat) {
       return const Card(
@@ -72,7 +73,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
                 ? _EmptyChat(state: state, onPrompt: _send)
                 : ListView.separated(
                     controller: _scrollController,
-                    cacheExtent: 1200,
+                    cacheExtent: 3000,
                     keyboardDismissBehavior:
                         ScrollViewKeyboardDismissBehavior.onDrag,
                     padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
@@ -326,7 +327,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
       _showMessage('You can attach at most $_maxUploadFiles files');
       return;
     }
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       allowMultiple: true,
       withData: true,
     );

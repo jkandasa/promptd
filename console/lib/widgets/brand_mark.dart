@@ -9,10 +9,12 @@ class BrandMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final logo = SizedBox(
-      width: size,
-      height: size,
-      child: SvgPicture.asset('promptd-logo.svg', fit: BoxFit.contain),
+    final logo = RepaintBoundary(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: SvgPicture.asset('promptd-logo.svg', fit: BoxFit.contain),
+      ),
     );
     if (!glow) return logo;
     return Container(
