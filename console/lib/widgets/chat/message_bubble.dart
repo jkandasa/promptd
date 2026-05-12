@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/promptd_models.dart';
 import '../../services/file_downloader.dart';
@@ -219,7 +220,13 @@ class _MessageBubbleState extends State<MessageBubble> {
           MarkdownBody(
             data: message.content,
             selectable: true,
+            onTapLink: (text, href, title) => _openLink(href),
             styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+              a: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.colorScheme.primary,
+                decoration: TextDecoration.underline,
+                height: 1.55,
+              ),
               p: theme.textTheme.bodyLarge?.copyWith(
                 color: foreground,
                 height: 1.55,
@@ -311,15 +318,17 @@ class _MessageBubbleState extends State<MessageBubble> {
   Future<void> _submitEdit() async {
     final content = _editController.text.trim();
     if (content.isEmpty) return;
-    if (content == widget.message.content.trim()) {
-      setState(() => _editing = false);
-      return;
+    setState(() => _submittingEdit = true);
+    try {
+      await widget.onEdit(widget.message, content);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _editing = false;
+          _submittingEdit = false;
+        });
+      }
     }
-    setState(() {
-      _editing = false;
-      _submittingEdit = false;
-    });
-    widget.onEdit(widget.message, content);
   }
 
   Future<void> _copyMessage() async {
@@ -328,6 +337,15 @@ class _MessageBubbleState extends State<MessageBubble> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Copied')));
+  }
+
+  Future<void> _openLink(String? href) async {
+    if (href == null || href.isEmpty) return;
+    final uri = Uri.tryParse(href);
+    if (uri == null) return;
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Future<void> _confirmDelete(BuildContext context) async {

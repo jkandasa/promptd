@@ -1,3 +1,15 @@
+import 'dart:math';
+
+String _randomId() {
+  const chars = 'abcdef0123456789';
+  final rand = Random();
+  final sb = StringBuffer();
+  for (var i = 0; i < 32; i++) {
+    sb.write(chars[rand.nextInt(chars.length)]);
+  }
+  return sb.toString();
+}
+
 class AuthMe {
   const AuthMe({
     required this.userId,
@@ -459,6 +471,7 @@ class UploadedFile {
 class ChatMessage {
   const ChatMessage({
     required this.id,
+    this.msgId,
     required this.role,
     required this.content,
     required this.sentAt,
@@ -473,7 +486,12 @@ class ChatMessage {
     this.pending = false,
   });
 
+  /// Stable local UI identifier (never changes after creation).
   final String id;
+
+  /// Backend message identifier, set after the message is persisted.
+  final String? msgId;
+
   final String role;
   final String content;
   final DateTime sentAt;
@@ -489,7 +507,8 @@ class ChatMessage {
 
   factory ChatMessage.fromStorage(StorageMessage message) {
     return ChatMessage(
-      id: message.id,
+      id: _randomId(),
+      msgId: message.id,
       role: message.role,
       content: message.content,
       sentAt: message.sentAt ?? DateTime.now(),
@@ -506,6 +525,7 @@ class ChatMessage {
 
   ChatMessage copyWith({
     String? id,
+    String? msgId,
     String? role,
     String? content,
     DateTime? sentAt,
@@ -521,6 +541,7 @@ class ChatMessage {
   }) {
     return ChatMessage(
       id: id ?? this.id,
+      msgId: msgId ?? this.msgId,
       role: role ?? this.role,
       content: content ?? this.content,
       sentAt: sentAt ?? this.sentAt,

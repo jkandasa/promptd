@@ -272,6 +272,7 @@ class PromptdAppState extends ChangeNotifier {
         systemPrompt: selectedSystemPrompt,
       );
       final userMessageId = response.userMessageId;
+      final assistantMessageId = response.assistantMessageId;
       final sentMessages = messages
           .where((message) => !message.pending)
           .toList();
@@ -281,14 +282,15 @@ class PromptdAppState extends ChangeNotifier {
         );
         if (lastIndex >= 0) {
           sentMessages[lastIndex] = sentMessages[lastIndex].copyWith(
-            id: userMessageId,
+            msgId: userMessageId,
           );
         }
       }
       messages = [
         ...sentMessages,
         ChatMessage(
-          id: response.assistantMessageId ?? _uuid.v4(),
+          id: _uuid.v4(),
+          msgId: assistantMessageId,
           role: 'assistant',
           content: response.reply,
           sentAt: DateTime.now(),
@@ -358,9 +360,10 @@ class PromptdAppState extends ChangeNotifier {
     messages = messages.where((item) => item.id != message.id).toList();
     notifyListeners();
     if (conversationId == null || message.pending) return;
+    final backendMsgId = message.msgId ?? message.id;
     await _api.deleteMessage(
       conversationId: conversationId,
-      messageId: message.id,
+      messageId: backendMsgId,
     );
     await _refreshConversationsOnly();
   }
@@ -368,25 +371,22 @@ class PromptdAppState extends ChangeNotifier {
   Future<void> editMessage(ChatMessage message, String newContent) async {
     final conversationId = selectedConversationId;
     final trimmed = newContent.trim();
-    if (conversationId == null ||
-        message.role != 'user' ||
-        trimmed.isEmpty ||
-        sending) {
+    if (conversationId == null || message.role != 'user' || trimmed.isEmpty) {
       return;
     }
     final index = messages.indexWhere((item) => item.id == message.id);
     if (index < 0) return;
+    final backendMsgId = message.msgId ?? message.id;
     unawaited(
-      _api
-          .deleteMessagesFrom(
-            conversationId: conversationId,
-            messageId: message.id,
-          )
-          .catchError((Object _) {}),
+      _api.deleteMessagesFrom(
+        conversationId: conversationId,
+        messageId: backendMsgId,
+      ).catchError((Object _) {}),
     );
     messages = messages.take(index).toList();
     notifyListeners();
-    await sendMessage(trimmed);
+    // Do not await; match web behavior where send runs independently.
+    unawaited(sendMessage(trimmed));
   }
 
   Future<void> compactConversation({String? prompt, String? model}) async {
