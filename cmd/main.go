@@ -169,7 +169,7 @@ func runServe(configPath string) error {
 	}
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,
-		Handler:      mux,
+		Handler:      appcore.WithCORS(mux),
 		ErrorLog:     log.New(&filteredHTTPErrorLogWriter{logger: logger.Named("http")}, "", 0),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,

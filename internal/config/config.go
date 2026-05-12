@@ -161,7 +161,7 @@ type Config struct {
 			Enabled *bool    `yaml:"enabled"`
 		} `yaml:"trace"`
 	} `yaml:"llm"`
-	Log   LogConfig         `yaml:"log"`
+	Log LogConfig `yaml:"log"`
 	MCP struct {
 		HealthMaxFailures       int               `yaml:"health_max_failures"`
 		HealthInterval          time.Duration     `yaml:"health_interval"`
