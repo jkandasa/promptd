@@ -72,15 +72,21 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
                 ? _EmptyChat(state: state, onPrompt: _send)
                 : ListView.separated(
                     controller: _scrollController,
+                    cacheExtent: 1200,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
                     padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
                     itemCount: state.messages.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (context, index) {
-                      return MessageBubble(
-                        message: state.messages[index],
-                        onDelete: state.deleteMessage,
-                        onEdit: state.editMessage,
-                        loadFileBytes: state.api.downloadFile,
+                      return RepaintBoundary(
+                        child: MessageBubble(
+                          key: ValueKey(state.messages[index].id),
+                          message: state.messages[index],
+                          onDelete: state.deleteMessage,
+                          onEdit: state.editMessage,
+                          loadFileBytes: state.api.downloadFile,
+                        ),
                       );
                     },
                   ),

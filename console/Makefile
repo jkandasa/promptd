@@ -1,6 +1,6 @@
 FLUTTER ?= flutter
 
-.PHONY: pub run-web run-android run-linux build-web build-android build-linux
+.PHONY: pub run-web run-android run-linux run-linux-debug run-linux-release build-web build-android build-linux
 
 pub:
 	$(FLUTTER) pub get
@@ -12,7 +12,13 @@ run-android: pub
 	$(FLUTTER) run -d android
 
 run-linux: pub
+	$(FLUTTER) run -d linux --profile
+
+run-linux-debug: pub
 	$(FLUTTER) run -d linux
+
+run-linux-release: pub
+	$(FLUTTER) run -d linux --release
 
 build-web: pub
 	$(FLUTTER) build web

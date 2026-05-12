@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
@@ -365,16 +367,26 @@ class PromptdAppState extends ChangeNotifier {
 
   Future<void> editMessage(ChatMessage message, String newContent) async {
     final conversationId = selectedConversationId;
-    if (conversationId == null || message.role != 'user') return;
+    final trimmed = newContent.trim();
+    if (conversationId == null ||
+        message.role != 'user' ||
+        trimmed.isEmpty ||
+        sending) {
+      return;
+    }
     final index = messages.indexWhere((item) => item.id == message.id);
     if (index < 0) return;
+    unawaited(
+      _api
+          .deleteMessagesFrom(
+            conversationId: conversationId,
+            messageId: message.id,
+          )
+          .catchError((Object _) {}),
+    );
     messages = messages.take(index).toList();
     notifyListeners();
-    await _api.deleteMessagesFrom(
-      conversationId: conversationId,
-      messageId: message.id,
-    );
-    await sendMessage(newContent);
+    await sendMessage(trimmed);
   }
 
   Future<void> compactConversation({String? prompt, String? model}) async {

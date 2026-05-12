@@ -29,6 +29,7 @@ class MessageBubble extends StatefulWidget {
 
 class _MessageBubbleState extends State<MessageBubble> {
   bool _editing = false;
+  bool _submittingEdit = false;
   late final TextEditingController _editController;
 
   @override
@@ -41,6 +42,14 @@ class _MessageBubbleState extends State<MessageBubble> {
   void dispose() {
     _editController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant MessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_editing && oldWidget.message.content != widget.message.content) {
+      _editController.text = widget.message.content;
+    }
   }
 
   @override
@@ -83,13 +92,14 @@ class _MessageBubbleState extends State<MessageBubble> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: borderColor),
               ),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isCompact && !_editing)
-                      Container(
+              child: Stack(
+                children: [
+                  if (isCompact && !_editing)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: Container(
                         width: 5,
                         decoration: BoxDecoration(
                           color: _compactAccentColor(theme),
@@ -98,16 +108,19 @@ class _MessageBubbleState extends State<MessageBubble> {
                           ),
                         ),
                       ),
-                    Flexible(
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: _editing
-                            ? _editForm(context)
-                            : _content(context, foreground),
-                      ),
                     ),
-                  ],
-                ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      isCompact && !_editing ? 19 : 14,
+                      14,
+                      14,
+                      14,
+                    ),
+                    child: _editing
+                        ? _editForm(context)
+                        : _content(context, foreground),
+                  ),
+                ],
               ),
             ),
             if (!_editing && message.files.isNotEmpty) ...[
@@ -123,7 +136,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                 message: message,
                 onCopy: _copyMessage,
                 onEdit: message.role == 'user' && !message.compactSummary
-                    ? () => setState(() => _editing = true)
+                    ? _startEdit
                     : null,
                 onDelete: () => _confirmDelete(context),
               ),
@@ -249,6 +262,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           TextField(
             controller: _editController,
             autofocus: true,
+            enabled: !_submittingEdit,
             minLines: 4,
             maxLines: 12,
             decoration: const InputDecoration(
@@ -263,13 +277,18 @@ class _MessageBubbleState extends State<MessageBubble> {
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: () => setState(() => _editing = false),
+                onPressed: _submittingEdit ? null : _cancelEdit,
                 icon: const Icon(Icons.close_rounded),
                 label: const Text('Cancel'),
               ),
               FilledButton.icon(
-                onPressed: _submitEdit,
-                icon: const Icon(Icons.send_rounded),
+                onPressed: _submittingEdit ? null : _submitEdit,
+                icon: _submittingEdit
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_rounded),
                 label: const Text('Send'),
               ),
             ],
@@ -279,11 +298,28 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
+  void _startEdit() {
+    _editController.text = widget.message.content;
+    setState(() => _editing = true);
+  }
+
+  void _cancelEdit() {
+    _editController.text = widget.message.content;
+    setState(() => _editing = false);
+  }
+
   Future<void> _submitEdit() async {
     final content = _editController.text.trim();
     if (content.isEmpty) return;
-    setState(() => _editing = false);
-    await widget.onEdit(widget.message, content);
+    if (content == widget.message.content.trim()) {
+      setState(() => _editing = false);
+      return;
+    }
+    setState(() {
+      _editing = false;
+      _submittingEdit = false;
+    });
+    widget.onEdit(widget.message, content);
   }
 
   Future<void> _copyMessage() async {

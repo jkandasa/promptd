@@ -237,7 +237,7 @@ class AppShell extends StatelessWidget {
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
-                            child: child,
+                            child: RepaintBoundary(child: child),
                           ),
                         ),
                       ],

@@ -12,8 +12,7 @@ class ConversationPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pinned = state.conversations.where((item) => item.pinned).toList();
-    final recent = state.conversations.where((item) => !item.pinned).toList();
+    final rows = _conversationRows(state.conversations);
 
     return Card(
       child: Column(
@@ -37,34 +36,59 @@ class ConversationPanel extends StatelessWidget {
           Expanded(
             child: state.conversations.isEmpty
                 ? const _EmptyConversations()
-                : ListView(
+                : ListView.builder(
+                    cacheExtent: 900,
                     padding: const EdgeInsets.all(10),
-                    children: [
-                      if (pinned.isNotEmpty) ...[
-                        _SectionLabel(label: 'Pinned'),
-                        for (final item in pinned)
-                          _ConversationTile(
-                            state: state,
-                            conversation: item,
-                            onSelected: onSelected,
-                          ),
-                      ],
-                      if (recent.isNotEmpty) ...[
-                        _SectionLabel(label: 'Recent'),
-                        for (final item in recent)
-                          _ConversationTile(
-                            state: state,
-                            conversation: item,
-                            onSelected: onSelected,
-                          ),
-                      ],
-                    ],
+                    itemCount: rows.length,
+                    itemBuilder: (context, index) {
+                      final row = rows[index];
+                      final label = row.label;
+                      if (label != null) return _SectionLabel(label: label);
+                      return RepaintBoundary(
+                        child: _ConversationTile(
+                          state: state,
+                          conversation: row.conversation!,
+                          onSelected: onSelected,
+                        ),
+                      );
+                    },
                   ),
           ),
         ],
       ),
     );
   }
+}
+
+List<_ConversationRow> _conversationRows(List<ConversationMeta> conversations) {
+  final rows = <_ConversationRow>[];
+  final pinned = conversations.where((item) => item.pinned);
+  final recent = conversations.where((item) => !item.pinned);
+  var hasPinned = false;
+  for (final item in pinned) {
+    if (!hasPinned) {
+      rows.add(const _ConversationRow.label('Pinned'));
+      hasPinned = true;
+    }
+    rows.add(_ConversationRow.conversation(item));
+  }
+  var hasRecent = false;
+  for (final item in recent) {
+    if (!hasRecent) {
+      rows.add(const _ConversationRow.label('Recent'));
+      hasRecent = true;
+    }
+    rows.add(_ConversationRow.conversation(item));
+  }
+  return rows;
+}
+
+class _ConversationRow {
+  const _ConversationRow.label(this.label) : conversation = null;
+  const _ConversationRow.conversation(this.conversation) : label = null;
+
+  final String? label;
+  final ConversationMeta? conversation;
 }
 
 class _ConversationTile extends StatelessWidget {
@@ -211,8 +235,18 @@ class _ConversationTile extends StatelessWidget {
 
   String _monthName(int month) {
     const names = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return names[month - 1];
   }

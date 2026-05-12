@@ -94,14 +94,17 @@ class TraceDetailsDialog extends StatelessWidget {
               child: trace.isEmpty
                   ? const Center(child: Text('No trace data available'))
                   : ListView.separated(
+                      cacheExtent: 900,
                       padding: const EdgeInsets.all(14),
                       itemCount: trace.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
-                        return _TraceRound(
-                          index: index + 1,
-                          isLast: index == trace.length - 1,
-                          round: trace[index],
+                        return RepaintBoundary(
+                          child: _TraceRound(
+                            index: index + 1,
+                            isLast: index == trace.length - 1,
+                            round: trace[index],
+                          ),
                         );
                       },
                     ),
@@ -197,19 +200,21 @@ class _TraceRound extends StatelessWidget {
                     initiallyExpanded: false,
                     title: 'Available Tools',
                     trailing: '(${availableTools.length})',
-                    child: _AvailableToolsList(tools: availableTools),
+                    builder: (_) => _AvailableToolsList(tools: availableTools),
                   ),
                 _TraceSection(
                   initiallyExpanded: false,
                   title: 'Messages Sent',
                   trailing: '(${request.length})',
-                  child: Column(
+                  builder: (_) => Column(
                     children: [
                       if (request.isEmpty)
                         const _EmptyTraceText('No request messages captured')
                       else
                         for (final item in request)
-                          _TraceMessageCard(message: _map(item)),
+                          RepaintBoundary(
+                            child: _TraceMessageCard(message: _map(item)),
+                          ),
                     ],
                   ),
                 ),
@@ -217,7 +222,7 @@ class _TraceRound extends StatelessWidget {
                   initiallyExpanded: false,
                   title: hasTools ? 'LLM Decision' : 'LLM Response',
                   trailing: _fmtMs(llmMs),
-                  child: Column(
+                  builder: (_) => Column(
                     children: [
                       _TraceMessageCard(message: response),
                       if (usage.isNotEmpty) _TokenBar(usage: usage),
@@ -230,10 +235,12 @@ class _TraceRound extends StatelessWidget {
                     title: 'Tool Execution',
                     trailing:
                         '${toolResults.length} call${toolResults.length == 1 ? '' : 's'} · ${_fmtMs(toolMs)}',
-                    child: Column(
+                    builder: (_) => Column(
                       children: [
                         for (final item in toolResults)
-                          _ToolResultCard(result: _map(item)),
+                          RepaintBoundary(
+                            child: _ToolResultCard(result: _map(item)),
+                          ),
                       ],
                     ),
                   ),
@@ -246,10 +253,10 @@ class _TraceRound extends StatelessWidget {
   }
 }
 
-class _TraceSection extends StatelessWidget {
+class _TraceSection extends StatefulWidget {
   const _TraceSection({
     required this.title,
-    required this.child,
+    required this.builder,
     this.trailing,
     this.initiallyExpanded = false,
   });
@@ -257,37 +264,65 @@ class _TraceSection extends StatelessWidget {
   final String title;
   final String? trailing;
   final bool initiallyExpanded;
-  final Widget child;
+  final WidgetBuilder builder;
+
+  @override
+  State<_TraceSection> createState() => _TraceSectionState();
+}
+
+class _TraceSectionState extends State<_TraceSection> {
+  late bool _expanded = widget.initiallyExpanded;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return ExpansionTile(
-      tilePadding: EdgeInsets.zero,
-      childrenPadding: const EdgeInsets.only(bottom: 4),
-      initiallyExpanded: initiallyExpanded,
-      title: Row(
-        children: [
-          Text(
-            title,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 9),
+            child: Row(
+              children: [
+                Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.keyboard_arrow_right_rounded,
+                  size: 19,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  widget.title,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (widget.trailing != null) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.trailing!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.58,
+                      ),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          if (trailing != null) ...[
-            const SizedBox(width: 8),
-            Text(
-              trailing!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
-                fontSize: 11,
-              ),
-            ),
-          ],
-        ],
-      ),
-      children: [child],
+        ),
+        if (_expanded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: RepaintBoundary(child: widget.builder(context)),
+          ),
+      ],
     );
   }
 }
@@ -498,14 +533,14 @@ class _TraceMessageCard extends StatelessWidget {
                 ),
                 if (content?.isNotEmpty == true)
                   _ContentBlock(content: content!),
-                if (reasoning?.isNotEmpty == true)
-                  _ReasoningBlock(content: reasoning!),
                 if (refusal?.isNotEmpty == true)
                   _ContentBlock(
                     content: '[refusal] $refusal',
                     backgroundColor: _softErrorColor(theme),
                   ),
                 for (final item in toolCalls) _ToolCallCard(call: _map(item)),
+                if (reasoning?.isNotEmpty == true)
+                  _ReasoningBlock(content: reasoning!),
                 if ((content == null || content.isEmpty) &&
                     (reasoning == null || reasoning.isEmpty) &&
                     (refusal == null || refusal.isEmpty) &&
@@ -746,11 +781,28 @@ class _AvailableToolsListState extends State<_AvailableToolsList> {
         ],
         if (tools.isEmpty)
           const _EmptyTraceText('No matching tools')
-        else
+        else if (tools.length <= 4)
           Column(
             children: [
-              for (final item in tools) _AvailableToolCard(tool: _map(item)),
+              for (final item in tools)
+                RepaintBoundary(child: _AvailableToolCard(tool: _map(item))),
             ],
+          )
+        else
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.48,
+            ),
+            child: ListView.separated(
+              cacheExtent: 700,
+              itemCount: tools.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 6),
+              itemBuilder: (context, index) {
+                return RepaintBoundary(
+                  child: _AvailableToolCard(tool: _map(tools[index])),
+                );
+              },
+            ),
           ),
       ],
     );
@@ -1219,35 +1271,11 @@ class _ReasoningBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: EdgeInsets.zero,
-        initiallyExpanded: false,
-        dense: true,
-        title: Row(
-          children: [
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              'reasoning · ${content.length} chars',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
-              ),
-            ),
-          ],
-        ),
-        children: [
-          _ContentBlock(
-            content: content,
-            backgroundColor: _warningWellColor(theme),
-          ),
-        ],
+    return _InlineExpansion(
+      title: 'reasoning · ${content.length} chars',
+      child: _ContentBlock(
+        content: content,
+        backgroundColor: _warningWellColor(theme),
       ),
     );
   }
@@ -1274,14 +1302,23 @@ class _ContentBlockState extends State<_ContentBlock> {
   static const _previewLines = 8;
   bool _expanded = false;
   bool _copied = false;
+  late _ContentPreview _preview = _ContentPreview.from(widget.content);
+
+  @override
+  void didUpdateWidget(covariant _ContentBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.content != widget.content) {
+      _expanded = false;
+      _preview = _ContentPreview.from(widget.content);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final lines = widget.content.split('\n');
-    final canCollapse = lines.length > _previewLines + 2;
+    final canCollapse = _preview.lineCount > _previewLines + 2;
     final displayed = canCollapse && !_expanded
-        ? lines.take(_previewLines).join('\n')
+        ? '${_preview.preview} …'
         : widget.content;
 
     return Column(
@@ -1318,8 +1355,8 @@ class _ContentBlockState extends State<_ContentBlock> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(10, 7, 38, 7),
-                    child: SelectableText(
-                      canCollapse && !_expanded ? '$displayed …' : displayed,
+                    child: Text(
+                      displayed,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontFamily: 'monospace',
                         fontSize: 13,
@@ -1370,7 +1407,7 @@ class _ContentBlockState extends State<_ContentBlock> {
                         Text(
                           _expanded
                               ? 'Show less'
-                              : '${lines.length - _previewLines} more lines',
+                              : '${_preview.lineCount - _previewLines} more lines',
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontSize: 13,
                             color: theme.colorScheme.primary,
@@ -1394,6 +1431,40 @@ class _ContentBlockState extends State<_ContentBlock> {
     Future<void>.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _copied = false);
     });
+  }
+}
+
+class _ContentPreview {
+  const _ContentPreview({required this.preview, required this.lineCount});
+
+  final String preview;
+  final int lineCount;
+
+  static _ContentPreview from(String content) {
+    const maxLines = _ContentBlockState._previewLines;
+    final buffer = StringBuffer();
+    var lineCount = 1;
+    var copiedLines = 1;
+
+    for (var i = 0; i < content.length; i++) {
+      final char = content.codeUnitAt(i);
+      if (char == 10) {
+        lineCount++;
+        if (copiedLines < maxLines) {
+          buffer.writeCharCode(char);
+          copiedLines++;
+        }
+        continue;
+      }
+      if (copiedLines <= maxLines) {
+        buffer.writeCharCode(char);
+      }
+    }
+
+    return _ContentPreview(
+      preview: buffer.toString(),
+      lineCount: content.isEmpty ? 0 : lineCount,
+    );
   }
 }
 
@@ -1638,6 +1709,7 @@ String _fmtMs(int ms) {
 }
 
 String _formatJsonString(String raw) {
+  if (raw.length > 24000) return raw;
   try {
     return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
   } catch (_) {

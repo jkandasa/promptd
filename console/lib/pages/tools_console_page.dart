@@ -24,6 +24,14 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
   String _filter = 'all';
   _ToolSortColumn _sortColumn = _ToolSortColumn.name;
   bool _sortAscending = true;
+  List<ToolInfo>? _cachedSource;
+  String? _cachedFilter;
+  String? _cachedQuery;
+  _ToolSortColumn? _cachedSortColumn;
+  bool? _cachedSortAscending;
+  List<ToolInfo>? _cachedTools;
+  int _cachedToolsWithParams = 0;
+  int _cachedSimpleTools = 0;
 
   @override
   void dispose() {
@@ -35,10 +43,8 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final tools = _filteredTools();
-    final toolsWithParams = widget.state.tools
-        .where((t) => t.parameterNames.isNotEmpty)
-        .length;
-    final simpleTools = widget.state.tools.length - toolsWithParams;
+    final toolsWithParams = _cachedToolsWithParams;
+    final simpleTools = _cachedSimpleTools;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -137,23 +143,20 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
       );
     }
 
-    return KeyedSubtree(
-      key: ValueKey(isSmall),
-      child: isSmall
-          ? _ToolsCardList(
-              tools: tools,
-              onToggle: _toggleRow,
-              expandedRows: _expandedRows,
-            )
-          : _ToolsTableDesktop(
-              tools: tools,
-              sortColumn: _sortColumn,
-              sortAscending: _sortAscending,
-              onSort: _sortBy,
-              onToggle: _toggleRow,
-              expandedRows: _expandedRows,
-            ),
-    );
+    return isSmall
+        ? _ToolsCardList(
+            tools: tools,
+            onToggle: _toggleRow,
+            expandedRows: _expandedRows,
+          )
+        : _ToolsTableDesktop(
+            tools: tools,
+            sortColumn: _sortColumn,
+            sortAscending: _sortAscending,
+            onSort: _sortBy,
+            onToggle: _toggleRow,
+            expandedRows: _expandedRows,
+          );
   }
 
   void _toggleRow(String name) {
@@ -174,8 +177,21 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
   }
 
   List<ToolInfo> _filteredTools() {
+    final source = widget.state.tools;
     final query = _searchController.text.trim().toLowerCase();
-    final filtered = widget.state.tools.where((tool) {
+    if (identical(_cachedSource, source) &&
+        _cachedFilter == _filter &&
+        _cachedQuery == query &&
+        _cachedSortColumn == _sortColumn &&
+        _cachedSortAscending == _sortAscending &&
+        _cachedTools != null) {
+      return _cachedTools!;
+    }
+
+    final toolsWithParams = source
+        .where((tool) => tool.parameterNames.isNotEmpty)
+        .length;
+    final filtered = source.where((tool) {
       final configurable = tool.parameterNames.isNotEmpty;
       if (_filter == 'configurable' && !configurable) return false;
       if (_filter == 'simple' && configurable) return false;
@@ -201,6 +217,14 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
       return _sortAscending ? result : -result;
     });
 
+    _cachedSource = source;
+    _cachedFilter = _filter;
+    _cachedQuery = query;
+    _cachedSortColumn = _sortColumn;
+    _cachedSortAscending = _sortAscending;
+    _cachedTools = filtered;
+    _cachedToolsWithParams = toolsWithParams;
+    _cachedSimpleTools = source.length - toolsWithParams;
     return filtered;
   }
 }
@@ -559,15 +583,18 @@ class _ToolsCardList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView.separated(
+      cacheExtent: 1000,
       itemCount: tools.length,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         final tool = tools[index];
         final expanded = expandedRows[tool.name] ?? false;
-        return _ToolCard(
-          tool: tool,
-          expanded: expanded,
-          onToggle: () => onToggle(tool.name),
+        return RepaintBoundary(
+          child: _ToolCard(
+            tool: tool,
+            expanded: expanded,
+            onToggle: () => onToggle(tool.name),
+          ),
         );
       },
     );
@@ -797,15 +824,18 @@ class _ToolsTableDesktop extends StatelessWidget {
         const SizedBox(height: 4),
         Expanded(
           child: ListView.separated(
+            cacheExtent: 1200,
             itemCount: tools.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, index) {
               final tool = tools[index];
               final expanded = expandedRows[tool.name] ?? false;
-              return _ToolRowItem(
-                tool: tool,
-                expanded: expanded,
-                onToggle: () => onToggle(tool.name),
+              return RepaintBoundary(
+                child: _ToolRowItem(
+                  tool: tool,
+                  expanded: expanded,
+                  onToggle: () => onToggle(tool.name),
+                ),
               );
             },
           ),
