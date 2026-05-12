@@ -78,6 +78,32 @@ Primary capabilities:
 - `web/src/types/`
   Shared frontend data contracts.
 
+### Console (Flutter)
+
+- `console/lib/pages/chat_console_page.dart`
+  Top-level chat console page with responsive layout (sidebar + workspace).
+
+- `console/lib/widgets/chat/chat_workspace.dart`
+  Chat workspace: toolbar, message list, input area, file uploads, settings dialog.
+
+- `console/lib/widgets/chat/message_bubble.dart`
+  Message bubble widget with markdown rendering, image/SVG attachments, edit flow, and link opening.
+
+- `console/lib/widgets/chat/conversation_panel.dart`
+  Conversation sidebar panel with list, search, pin, rename, and delete.
+
+- `console/lib/widgets/chat/trace_details_dialog.dart`
+  Trace viewer for LLM call details, tool calls/results, token usage.
+
+- `console/lib/state/promptd_app_state.dart`
+  Central `ChangeNotifier` for app state: auth, conversations, messages, models, tools, scheduler.
+
+- `console/lib/models/promptd_models.dart`
+  Data models: `ChatMessage`, `Conversation`, `Trace`, `UploadedFile`, etc.
+
+- `console/lib/services/`
+  API client, file downloader, storage helpers.
+
 ## Runtime Model
 
 Startup sequence in broad terms:
@@ -154,6 +180,19 @@ Current permission flags:
 - Markdown rendering is customized in `web/src/components/markdown/`.
 - Trace rendering is shared between chat bubbles and scheduler executions.
 
+## Current Console (Flutter) Behavior
+
+- Cross-platform desktop/mobile app built with Flutter 3.41+ (Dart 3.11+).
+- Uses `ChangeNotifier`-based state management via `PromptdAppState`.
+- Authentication: login screen collects server URL, user ID, password; JWT persisted locally.
+- Chat workspace mirrors web app: provider/model selection, system prompt, file uploads, compaction.
+- Message bubbles render markdown via `flutter_markdown_plus`; links open in external browser.
+- Performance optimizations for 4K/Wayland: `RepaintBoundary` isolation, increased list cache extent, scroll scheduling off build path.
+- Conversation panel: list, search, pin, rename, delete with relative timestamps.
+- Trace details dialog: LLM call inspection, tool call/result cards, token usage visualization.
+- Scheduler: list, create/edit forms, execution history.
+- Settings: compact conversation toggle, model/provider selection via `SearchSelectField`.
+
 ## Current Data Layout
 
 Data is stored under:
@@ -205,6 +244,18 @@ make ui
 make build
 ```
 
+Console (Flutter):
+
+```bash
+cd console
+flutter pub get
+flutter analyze
+flutter run -d linux        # run on Linux desktop
+flutter run -d chrome       # run on web
+flutter build linux --release
+flutter build web --release
+```
+
 ## Documentation Expectations
 
 When changing behavior, update docs if the change affects:
@@ -214,7 +265,10 @@ When changing behavior, update docs if the change affects:
 - auth/RBAC behavior
 - API routes or request/response expectations
 - user-visible chat, compaction, scheduler, or TLS behavior
+- console (Flutter) dependencies, performance, or platform support
 
 `README.md` should stay user-facing.
 
 `AGENT.md` should stay implementation-facing.
+
+`console/README.md` should cover Flutter requirements, run targets, and platform-specific notes.
