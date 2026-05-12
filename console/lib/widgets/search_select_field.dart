@@ -41,6 +41,9 @@ class SearchSelectField<T> extends StatelessWidget {
       width: width,
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
+        mouseCursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         onTap: enabled ? () => _openPicker(context) : null,
         child: InputDecorator(
           decoration: InputDecoration(
@@ -127,6 +130,7 @@ class _SearchSelectDialogState<T> extends State<_SearchSelectDialog<T>> {
           children: [
             TextField(
               controller: _queryController,
+              style: Theme.of(context).textTheme.bodyLarge,
               autofocus: true,
               decoration: const InputDecoration(
                 hintText: 'Search',
@@ -144,6 +148,7 @@ class _SearchSelectDialogState<T> extends State<_SearchSelectDialog<T>> {
                       itemBuilder: (context, index) {
                         final option = filtered[index];
                         return ListTile(
+                          mouseCursor: SystemMouseCursors.click,
                           title: Text(option.label),
                           subtitle: option.subtitle == null
                               ? null

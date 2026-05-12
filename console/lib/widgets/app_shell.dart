@@ -135,6 +135,11 @@ class AppShell extends StatelessWidget {
                         PopupMenuButton<ThemeMode>(
                           tooltip: 'Theme',
                           icon: Icon(_themeIcon(themeMode)),
+                          style: const ButtonStyle(
+                            mouseCursor: WidgetStatePropertyAll(
+                              WidgetStateMouseCursor.clickable,
+                            ),
+                          ),
                           onSelected: onThemeModeChanged,
                           itemBuilder: (context) => [
                             _themeMenuItem(
@@ -163,6 +168,11 @@ class AppShell extends StatelessWidget {
                         const SizedBox(width: 12),
                         PopupMenuButton<String>(
                           tooltip: me.userId,
+                          style: const ButtonStyle(
+                            mouseCursor: WidgetStatePropertyAll(
+                              WidgetStateMouseCursor.clickable,
+                            ),
+                          ),
                           onSelected: (value) {
                             if (value == 'logout') onLogout();
                           },
@@ -187,6 +197,7 @@ class AppShell extends StatelessWidget {
                             const PopupMenuDivider(),
                             const PopupMenuItem(
                               value: 'logout',
+                              mouseCursor: WidgetStateMouseCursor.clickable,
                               child: Row(
                                 children: [
                                   Icon(Icons.logout_rounded),
@@ -293,6 +304,7 @@ class AppShell extends StatelessWidget {
   }) {
     return PopupMenuItem(
       value: mode,
+      mouseCursor: WidgetStateMouseCursor.clickable,
       child: Row(
         children: [
           Icon(icon),
@@ -401,17 +413,24 @@ class _SectionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final selectedForeground = theme.brightness == Brightness.dark
+        ? Colors.white
+        : theme.colorScheme.primary;
     final foreground = selected
-        ? theme.colorScheme.primary
-        : theme.colorScheme.onSurface.withValues(alpha: 0.8);
+        ? selectedForeground
+        : theme.colorScheme.onSurface.withValues(
+            alpha: theme.brightness == Brightness.dark ? 0.86 : 0.8,
+          );
+    final selectedBackground = theme.brightness == Brightness.dark
+        ? const Color(0xFF5B21B6)
+        : theme.colorScheme.primary.withValues(alpha: 0.10);
 
     return Material(
-      color: selected
-          ? theme.colorScheme.primary.withValues(alpha: 0.08)
-          : Colors.transparent,
+      color: selected ? selectedBackground : Colors.transparent,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
+        mouseCursor: SystemMouseCursors.click,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),

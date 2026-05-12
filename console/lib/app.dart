@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -69,30 +70,43 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
         animation: _state,
         builder: (context, _) {
           if (_state.initializing) {
-            return const _LoadingScreen();
+            return const _WebSelectable(child: _LoadingScreen());
           }
           if (!_state.isAuthenticated) {
-            return LoginPage(state: _state);
+            return _WebSelectable(child: LoginPage(state: _state));
           }
-          return AppShell(
-            section: _state.section,
-            themeMode: _themeMode,
-            me: _state.me!,
-            serverUrl: _state.serverUrl,
-            loading: _state.loadingData,
-            onSectionSelected: _state.selectSection,
-            onRefresh: _state.refreshAppData,
-            onLogout: _state.logout,
-            onThemeModeChanged: _setThemeMode,
-            child: switch (_state.section) {
-              ConsoleSection.chat => ChatConsolePage(state: _state),
-              ConsoleSection.scheduler => SchedulerConsolePage(state: _state),
-              ConsoleSection.tools => ToolsConsolePage(state: _state),
-            },
+          return _WebSelectable(
+            child: AppShell(
+              section: _state.section,
+              themeMode: _themeMode,
+              me: _state.me!,
+              serverUrl: _state.serverUrl,
+              loading: _state.loadingData,
+              onSectionSelected: _state.selectSection,
+              onRefresh: _state.refreshAppData,
+              onLogout: _state.logout,
+              onThemeModeChanged: _setThemeMode,
+              child: switch (_state.section) {
+                ConsoleSection.chat => ChatConsolePage(state: _state),
+                ConsoleSection.scheduler => SchedulerConsolePage(state: _state),
+                ConsoleSection.tools => ToolsConsolePage(state: _state),
+              },
+            ),
           );
         },
       ),
     );
+  }
+}
+
+class _WebSelectable extends StatelessWidget {
+  const _WebSelectable({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return kIsWeb ? SelectionArea(child: child) : child;
   }
 }
 

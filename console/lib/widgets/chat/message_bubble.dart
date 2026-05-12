@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/promptd_models.dart';
 import '../../services/file_downloader.dart';
+import '../../theme/app_theme.dart';
 import 'trace_details_dialog.dart';
 
 class MessageBubble extends StatefulWidget {
@@ -81,7 +82,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 860),
+        constraints: BoxConstraints(maxWidth: isUser ? 860 : double.infinity),
         child: Column(
           crossAxisAlignment: isUser
               ? CrossAxisAlignment.end
@@ -233,7 +234,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                   height: 1.55,
                 ),
                 code: theme.textTheme.bodyMedium?.copyWith(
-                  fontFamily: 'monospace',
+                  fontFamily: AppTheme.codeFontFamily,
                   backgroundColor: theme.colorScheme.surfaceContainerHighest,
                 ),
                 codeblockDecoration: BoxDecoration(
@@ -243,7 +244,10 @@ class _MessageBubbleState extends State<MessageBubble> {
                 ),
                 blockquoteDecoration: BoxDecoration(
                   border: Border(
-                    left: BorderSide(color: theme.colorScheme.primary, width: 3),
+                    left: BorderSide(
+                      color: theme.colorScheme.primary,
+                      width: 3,
+                    ),
                   ),
                 ),
               ),
@@ -272,6 +276,7 @@ class _MessageBubbleState extends State<MessageBubble> {
         children: [
           TextField(
             controller: _editController,
+            style: Theme.of(context).textTheme.bodyLarge,
             autofocus: true,
             enabled: !_submittingEdit,
             minLines: 4,
@@ -676,7 +681,7 @@ class _FileAttachmentState extends State<_FileAttachment> {
                             text,
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(
-                                  fontFamily: 'monospace',
+                                  fontFamily: AppTheme.codeFontFamily,
                                   height: 1.45,
                                 ),
                           ),
@@ -776,6 +781,7 @@ class _ImageAttachmentState extends State<_ImageAttachment> {
     );
 
     return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       borderRadius: BorderRadius.circular(8),
       onTap: () => _showImagePreview(context),
       child: Container(
@@ -1123,6 +1129,10 @@ class _MessageMeta extends StatelessWidget {
       padding: EdgeInsets.zero,
       minimumSize: Size.zero,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ).copyWith(
+      mouseCursor: const WidgetStatePropertyAll(
+        WidgetStateMouseCursor.clickable,
+      ),
     );
   }
 

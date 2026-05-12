@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 const _traceBlue = Color(0xff1677ff);
 const _traceGreen = Color(0xff52c41a);
@@ -15,18 +16,26 @@ Future<void> showTraceDetailsDialog(
 ) {
   return showDialog<void>(
     context: context,
-    builder: (context) => TraceDetailsDialog(trace: trace),
+    builder: (context) =>
+        SelectionArea(child: TraceDetailsDialog(trace: trace)),
   );
 }
 
-class TraceDetailsDialog extends StatelessWidget {
+class TraceDetailsDialog extends StatefulWidget {
   const TraceDetailsDialog({super.key, required this.trace});
 
   final List<Map<String, dynamic>> trace;
 
   @override
+  State<TraceDetailsDialog> createState() => _TraceDetailsDialogState();
+}
+
+class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
+  bool _markdownEnabled = false;
+
+  @override
   Widget build(BuildContext context) {
-    final totals = _TraceTotals.from(trace);
+    final totals = _TraceTotals.from(widget.trace);
     final theme = Theme.of(context);
 
     final size = MediaQuery.sizeOf(context);
@@ -48,11 +57,34 @@ class TraceDetailsDialog extends StatelessWidget {
                       const SizedBox(width: 8),
                       Chip(
                         label: Text(
-                          '${trace.length} round${trace.length == 1 ? '' : 's'}',
+                          '${widget.trace.length} round${widget.trace.length == 1 ? '' : 's'}',
                         ),
                         visualDensity: VisualDensity.compact,
                       ),
                       const Spacer(),
+                      Tooltip(
+                        message: _markdownEnabled
+                            ? 'Show trace messages as plain text'
+                            : 'Render trace messages as Markdown',
+                        child: FilterChip(
+                          avatar: Icon(
+                            Icons.text_snippet_outlined,
+                            size: 16,
+                            color: _markdownEnabled
+                                ? theme.colorScheme.onPrimary
+                                : theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.72,
+                                  ),
+                          ),
+                          label: const Text('Markdown'),
+                          selected: _markdownEnabled,
+                          onSelected: (value) {
+                            setState(() => _markdownEnabled = value);
+                          },
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       IconButton(
                         tooltip: 'Close',
                         onPressed: () => Navigator.of(context).pop(),
@@ -91,19 +123,20 @@ class TraceDetailsDialog extends StatelessWidget {
             ),
             const Divider(height: 1),
             Expanded(
-              child: trace.isEmpty
+              child: widget.trace.isEmpty
                   ? const Center(child: Text('No trace data available'))
                   : ListView.separated(
                       cacheExtent: 900,
                       padding: const EdgeInsets.all(14),
-                      itemCount: trace.length,
+                      itemCount: widget.trace.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
                         return RepaintBoundary(
                           child: _TraceRound(
                             index: index + 1,
-                            isLast: index == trace.length - 1,
-                            round: trace[index],
+                            isLast: index == widget.trace.length - 1,
+                            round: widget.trace[index],
+                            markdownEnabled: _markdownEnabled,
                           ),
                         );
                       },
@@ -121,11 +154,13 @@ class _TraceRound extends StatelessWidget {
     required this.index,
     required this.isLast,
     required this.round,
+    required this.markdownEnabled,
   });
 
   final int index;
   final bool isLast;
   final Map<String, dynamic> round;
+  final bool markdownEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -213,7 +248,10 @@ class _TraceRound extends StatelessWidget {
                       else
                         for (final item in request)
                           RepaintBoundary(
-                            child: _TraceMessageCard(message: _map(item)),
+                            child: _TraceMessageCard(
+                              message: _map(item),
+                              markdownEnabled: markdownEnabled,
+                            ),
                           ),
                     ],
                   ),
@@ -224,7 +262,10 @@ class _TraceRound extends StatelessWidget {
                   trailing: _fmtMs(llmMs),
                   builder: (_) => Column(
                     children: [
-                      _TraceMessageCard(message: response),
+                      _TraceMessageCard(
+                        message: response,
+                        markdownEnabled: markdownEnabled,
+                      ),
                       if (usage.isNotEmpty) _TokenBar(usage: usage),
                     ],
                   ),
@@ -281,6 +322,7 @@ class _TraceSectionState extends State<_TraceSection> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(6),
+          mouseCursor: SystemMouseCursors.click,
           onTap: () => setState(() => _expanded = !_expanded),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 9),
@@ -435,6 +477,7 @@ class _InlineExpansionState extends State<_InlineExpansion> {
         const SizedBox(height: 6),
         InkWell(
           borderRadius: BorderRadius.circular(6),
+          mouseCursor: SystemMouseCursors.click,
           onTap: () => setState(() => _expanded = !_expanded),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
@@ -464,9 +507,13 @@ class _InlineExpansionState extends State<_InlineExpansion> {
 }
 
 class _TraceMessageCard extends StatelessWidget {
-  const _TraceMessageCard({required this.message});
+  const _TraceMessageCard({
+    required this.message,
+    required this.markdownEnabled,
+  });
 
   final Map<String, dynamic> message;
+  final bool markdownEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -513,17 +560,11 @@ class _TraceMessageCard extends StatelessWidget {
                   children: [
                     _RoleBadge(role: role, color: roleColor),
                     if (name?.isNotEmpty == true)
-                      Text(
-                        name!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                        ),
-                      ),
+                      Text(name!, style: theme.textTheme.bodySmall),
                     if (toolCallId?.isNotEmpty == true)
                       Text(
                         'id:$toolCallId',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
                           color: theme.colorScheme.onSurface.withValues(
                             alpha: 0.55,
                           ),
@@ -532,15 +573,22 @@ class _TraceMessageCard extends StatelessWidget {
                   ],
                 ),
                 if (content?.isNotEmpty == true)
-                  _ContentBlock(content: content!),
+                  _ContentBlock(
+                    content: content!,
+                    markdownEnabled: markdownEnabled,
+                  ),
                 if (refusal?.isNotEmpty == true)
                   _ContentBlock(
                     content: '[refusal] $refusal',
                     backgroundColor: _softErrorColor(theme),
+                    markdownEnabled: markdownEnabled,
                   ),
                 for (final item in toolCalls) _ToolCallCard(call: _map(item)),
                 if (reasoning?.isNotEmpty == true)
-                  _ReasoningBlock(content: reasoning!),
+                  _ReasoningBlock(
+                    content: reasoning!,
+                    markdownEnabled: markdownEnabled,
+                  ),
                 if ((content == null || content.isEmpty) &&
                     (reasoning == null || reasoning.isEmpty) &&
                     (refusal == null || refusal.isEmpty) &&
@@ -594,7 +642,6 @@ class _ToolCallCard extends StatelessWidget {
                   child: Text(
                     name ?? 'tool call',
                     style: theme.textTheme.labelMedium?.copyWith(
-                      fontFamily: 'monospace',
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -603,7 +650,6 @@ class _ToolCallCard extends StatelessWidget {
                 Text(
                   'id:${call['id'] ?? ''}',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                     fontSize: 10,
                   ),
@@ -679,7 +725,6 @@ class _ToolResultCard extends StatelessWidget {
                   child: Text(
                     result['name'] as String? ?? 'tool',
                     style: theme.textTheme.labelMedium?.copyWith(
-                      fontFamily: 'monospace',
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
@@ -995,10 +1040,7 @@ class _ParameterNameCell extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Text(
-            name,
-            style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-          ),
+          Text(name, style: theme.textTheme.bodySmall),
           if (required) const _RequiredTag(),
         ],
       ),
@@ -1050,12 +1092,7 @@ class _ParameterCard extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Text(
-            name,
-            style: theme.textTheme.labelMedium?.copyWith(
-              fontFamily: 'monospace',
-            ),
-          ),
+          Text(name, style: theme.textTheme.labelMedium),
           if (required) const _RequiredTag(),
           if (type.isNotEmpty) _TypeTag(type),
           if (description.isNotEmpty)
@@ -1108,11 +1145,7 @@ class _TypeTag extends StatelessWidget {
       ),
       child: Text(
         type,
-        style: theme.textTheme.labelSmall?.copyWith(
-          fontFamily: 'monospace',
-          fontSize: 10,
-          height: 1.2,
-        ),
+        style: theme.textTheme.labelSmall?.copyWith(fontSize: 10, height: 1.2),
       ),
     );
   }
@@ -1264,9 +1297,10 @@ class _EmptyTraceText extends StatelessWidget {
 }
 
 class _ReasoningBlock extends StatelessWidget {
-  const _ReasoningBlock({required this.content});
+  const _ReasoningBlock({required this.content, required this.markdownEnabled});
 
   final String content;
+  final bool markdownEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -1276,6 +1310,7 @@ class _ReasoningBlock extends StatelessWidget {
       child: _ContentBlock(
         content: content,
         backgroundColor: _warningWellColor(theme),
+        markdownEnabled: markdownEnabled,
       ),
     );
   }
@@ -1287,12 +1322,14 @@ class _ContentBlock extends StatefulWidget {
     this.label,
     this.compact = false,
     this.backgroundColor,
+    this.markdownEnabled = false,
   });
 
   final String content;
   final String? label;
   final bool compact;
   final Color? backgroundColor;
+  final bool markdownEnabled;
 
   @override
   State<_ContentBlock> createState() => _ContentBlockState();
@@ -1318,8 +1355,12 @@ class _ContentBlockState extends State<_ContentBlock> {
     final theme = Theme.of(context);
     final canCollapse = _preview.lineCount > _previewLines + 2;
     final displayed = canCollapse && !_expanded
-        ? '${_preview.preview} …'
+        ? _preview.preview
         : widget.content;
+    final textStyle = theme.textTheme.bodySmall?.copyWith(
+      fontSize: 13,
+      height: 1.55,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1355,14 +1396,43 @@ class _ContentBlockState extends State<_ContentBlock> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(10, 7, 38, 7),
-                    child: Text(
-                      displayed,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        height: 1.55,
-                      ),
-                    ),
+                    child: widget.markdownEnabled
+                        ? MarkdownBody(
+                            data: displayed,
+                            selectable: true,
+                            styleSheet: MarkdownStyleSheet.fromTheme(theme)
+                                .copyWith(
+                                  p: textStyle,
+                                  h1: theme.textTheme.titleLarge,
+                                  h2: theme.textTheme.titleMedium,
+                                  h3: theme.textTheme.titleSmall,
+                                  listBullet: textStyle,
+                                  blockSpacing: 8,
+                                  code: textStyle?.copyWith(
+                                    backgroundColor: theme
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                  ),
+                                  codeblockDecoration: BoxDecoration(
+                                    color: theme
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: theme.colorScheme.outlineVariant,
+                                    ),
+                                  ),
+                                  blockquoteDecoration: BoxDecoration(
+                                    border: Border(
+                                      left: BorderSide(
+                                        color: theme.colorScheme.primary,
+                                        width: 3,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                          )
+                        : SelectableText(displayed, style: textStyle),
                   ),
                   Positioned(
                     top: 3,
@@ -1382,6 +1452,7 @@ class _ContentBlockState extends State<_ContentBlock> {
               ),
               if (canCollapse)
                 InkWell(
+                  mouseCursor: SystemMouseCursors.click,
                   onTap: () => setState(() => _expanded = !_expanded),
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1492,7 +1563,6 @@ class _SmallTag extends StatelessWidget {
         label,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: color,
-          fontFamily: code ? 'monospace' : null,
           fontSize: code ? 12 : 10,
           height: 1.2,
         ),

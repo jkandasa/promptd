@@ -50,7 +50,9 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
         (state.me?.permissions.compactConversationWrite ?? false) &&
         (state.selectedConversationId != null || state.messages.isNotEmpty);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleScrollIfNeeded(state));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _scheduleScrollIfNeeded(state),
+    );
 
     if (!state.me!.permissions.chat) {
       return const Card(
@@ -167,6 +169,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
                           ),
                           child: TextField(
                             controller: _inputController,
+                            style: theme.textTheme.bodyLarge,
                             minLines: inputLines,
                             maxLines: inputLines,
                             enabled: !_uploading,
@@ -454,6 +457,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
               children: [
                 TextField(
                   controller: promptController,
+                  style: Theme.of(context).textTheme.bodyLarge,
                   minLines: 4,
                   maxLines: 8,
                   decoration: const InputDecoration(labelText: 'Prompt'),
@@ -637,10 +641,15 @@ class _ExpandedChatToolbar extends StatelessWidget {
           SearchSelectField<String>(
             label: 'Provider',
             width: 190,
-            value: state.selectedProvider,
+            value: state.selectedProvider ?? '',
             enabled: providers.isNotEmpty,
             emptyText: 'No providers',
             options: [
+              const SearchSelectOption(
+                value: '',
+                label: 'Auto',
+                subtitle: 'Server selects provider',
+              ),
               for (final provider in providers)
                 SearchSelectOption(
                   value: provider.name,
@@ -657,10 +666,15 @@ class _ExpandedChatToolbar extends StatelessWidget {
             width: 300,
             value: models.any((model) => model.id == state.selectedModel)
                 ? state.selectedModel
-                : null,
+                : '',
             enabled: models.isNotEmpty,
             emptyText: 'No models',
             options: [
+              const SearchSelectOption(
+                value: '',
+                label: 'Auto',
+                subtitle: 'Use server/model default',
+              ),
               for (final model in models)
                 SearchSelectOption(
                   value: model.id,
@@ -733,6 +747,7 @@ class _CompactChatToolbar extends StatelessWidget {
           Expanded(
             child: InkWell(
               borderRadius: BorderRadius.circular(10),
+              mouseCursor: SystemMouseCursors.click,
               onTap: () => _openSettingsSheet(context),
               child: Container(
                 padding: const EdgeInsets.symmetric(
@@ -888,10 +903,15 @@ class _CompactChatToolbar extends StatelessWidget {
                     SearchSelectField<String>(
                       label: 'Provider',
                       width: double.infinity,
-                      value: state.selectedProvider,
+                      value: state.selectedProvider ?? '',
                       enabled: providers.isNotEmpty,
                       emptyText: 'No providers',
                       options: [
+                        const SearchSelectOption(
+                          value: '',
+                          label: 'Auto',
+                          subtitle: 'Server selects provider',
+                        ),
                         for (final provider in providers)
                           SearchSelectOption(
                             value: provider.name,
@@ -913,10 +933,15 @@ class _CompactChatToolbar extends StatelessWidget {
                       value:
                           models.any((model) => model.id == state.selectedModel)
                           ? state.selectedModel
-                          : null,
+                          : '',
                       enabled: models.isNotEmpty,
                       emptyText: 'No models',
                       options: [
+                        const SearchSelectOption(
+                          value: '',
+                          label: 'Auto',
+                          subtitle: 'Use server/model default',
+                        ),
                         for (final model in models)
                           SearchSelectOption(
                             value: model.id,

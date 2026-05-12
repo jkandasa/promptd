@@ -1,55 +1,133 @@
 import 'package:flutter/material.dart';
 
+import '../models/promptd_models.dart';
 import '../state/promptd_app_state.dart';
 import '../widgets/scheduler/schedule_detail_panel.dart';
+import '../widgets/scheduler/schedule_form_panel.dart';
 import '../widgets/scheduler/schedule_list_panel.dart';
 
-class SchedulerConsolePage extends StatelessWidget {
+class SchedulerConsolePage extends StatefulWidget {
   const SchedulerConsolePage({super.key, required this.state});
 
   final PromptdAppState state;
 
   @override
+  State<SchedulerConsolePage> createState() => _SchedulerConsolePageState();
+}
+
+class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
+  String? _selectedId;
+  Schedule? _editing;
+  bool _creating = false;
+
+  @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     final theme = Theme.of(context);
+    final selected = _selectedSchedule(state.schedules);
+    final showForm = _creating || _editing != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Scheduler', style: theme.textTheme.headlineMedium),
-        const SizedBox(height: 8),
-        Text(
-          'Scheduled prompts from the connected Promptd server.',
-          style: theme.textTheme.bodyLarge?.copyWith(
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Scheduler', style: theme.textTheme.headlineMedium),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Scheduled prompts from the connected Promptd server.',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (state.me?.permissions.schedulesWrite ?? false)
+              FilledButton.icon(
+                onPressed: () => setState(() {
+                  _creating = true;
+                  _editing = null;
+                }),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('New schedule'),
+              ),
+          ],
         ),
         const SizedBox(height: 18),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 900;
-              final selected = state.schedules.isNotEmpty
-                  ? state.schedules.first
-                  : null;
-
-              final detail = ScheduleDetailPanel(
-                schedule: selected,
-                canWrite: state.me?.permissions.schedulesWrite ?? false,
-                onTrigger: selected == null
-                    ? null
-                    : () => state.triggerSchedule(selected.id),
+              final wide = constraints.maxWidth >= 980;
+              final list = ScheduleListPanel(
+                state: state,
+                selectedId: selected?.id,
+                onSelected: (schedule) => setState(() {
+                  _selectedId = schedule.id;
+                  _creating = false;
+                  _editing = null;
+                }),
+                onOpen: (schedule) => setState(() {
+                  _selectedId = schedule.id;
+                  _creating = false;
+                  _editing = null;
+                }),
+                onCreate: () => setState(() {
+                  _creating = true;
+                  _editing = null;
+                }),
               );
+              final detail = showForm
+                  ? ScheduleFormPanel(
+                      state: state,
+                      initial: _editing,
+                      onSaved: (schedule) {
+                        setState(() {
+                          _selectedId = schedule.id;
+                          _creating = false;
+                          _editing = null;
+                        });
+                      },
+                      onCancel: () => setState(() {
+                        _creating = false;
+                        _editing = null;
+                      }),
+                    )
+                  : ScheduleDetailPanel(
+                      state: state,
+                      schedule: selected,
+                      canWrite: state.me?.permissions.schedulesWrite ?? false,
+                      onTrigger: selected == null
+                          ? null
+                          : () => state.triggerSchedule(selected.id),
+                      onEdit: selected == null
+                          ? null
+                          : () => setState(() {
+                              _editing = selected;
+                              _creating = false;
+                            }),
+                      onDelete: selected == null
+                          ? null
+                          : () async {
+                              await state.deleteSchedule(selected.id);
+                              setState(() {
+                                _selectedId = null;
+                                _editing = null;
+                                _creating = false;
+                              });
+                            },
+                    );
 
               if (!wide) {
-                return ListView(
+                return Column(
                   children: [
-                    SizedBox(
-                      height: 330,
-                      child: ScheduleListPanel(state: state),
-                    ),
+                    SizedBox(height: 260, child: list),
                     const SizedBox(height: 14),
-                    SizedBox(height: 460, child: detail),
+                    Expanded(child: detail),
                   ],
                 );
               }
@@ -57,9 +135,9 @@ class SchedulerConsolePage extends StatelessWidget {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(flex: 6, child: ScheduleListPanel(state: state)),
+                  Expanded(flex: 5, child: list),
                   const SizedBox(width: 16),
-                  Expanded(flex: 5, child: detail),
+                  Expanded(flex: 7, child: detail),
                 ],
               );
             },
@@ -67,5 +145,15 @@ class SchedulerConsolePage extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Schedule? _selectedSchedule(List<Schedule> schedules) {
+    if (schedules.isEmpty) return null;
+    if (_selectedId != null) {
+      for (final schedule in schedules) {
+        if (schedule.id == _selectedId) return schedule;
+      }
+    }
+    return schedules.first;
   }
 }

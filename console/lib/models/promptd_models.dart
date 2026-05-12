@@ -705,6 +705,56 @@ class Schedule {
   }
 }
 
+class ScheduleExecution {
+  const ScheduleExecution({
+    required this.id,
+    required this.scheduleId,
+    required this.triggeredAt,
+    required this.status,
+    this.completedAt,
+    this.error,
+    this.response,
+    this.trace = const [],
+    this.modelUsed,
+    this.providerUsed,
+    this.llmCalls,
+    this.toolCalls,
+    this.durationMs,
+  });
+
+  final String id;
+  final String scheduleId;
+  final DateTime? triggeredAt;
+  final DateTime? completedAt;
+  final String status;
+  final String? error;
+  final String? response;
+  final List<Map<String, dynamic>> trace;
+  final String? modelUsed;
+  final String? providerUsed;
+  final int? llmCalls;
+  final int? toolCalls;
+  final int? durationMs;
+
+  factory ScheduleExecution.fromJson(Map<String, dynamic> json) {
+    return ScheduleExecution(
+      id: json['id'] as String? ?? '',
+      scheduleId: json['scheduleId'] as String? ?? '',
+      triggeredAt: _parseDate(json['triggeredAt']),
+      completedAt: _parseDate(json['completedAt']),
+      status: json['status'] as String? ?? 'running',
+      error: json['error'] as String?,
+      response: json['response'] as String?,
+      trace: _mapList(json['trace']),
+      modelUsed: json['modelUsed'] as String?,
+      providerUsed: json['providerUsed'] as String?,
+      llmCalls: json['llmCalls'] as int?,
+      toolCalls: json['toolCalls'] as int?,
+      durationMs: json['durationMs'] as int?,
+    );
+  }
+}
+
 double? _asDouble(Object? value) {
   if (value is double) return value;
   if (value is int) return value.toDouble();

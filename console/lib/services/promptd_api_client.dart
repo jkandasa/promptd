@@ -268,8 +268,45 @@ class PromptdApiClient {
         .toList();
   }
 
+  Future<Schedule> createSchedule(Map<String, dynamic> schedule) async {
+    final body = await _request('POST', '/api/schedules', body: schedule);
+    return Schedule.fromJson(body);
+  }
+
+  Future<Schedule> updateSchedule({
+    required String id,
+    required Map<String, dynamic> schedule,
+  }) async {
+    final body = await _request('PUT', '/api/schedules/$id', body: schedule);
+    return Schedule.fromJson(body);
+  }
+
+  Future<void> deleteSchedule(String id) async {
+    await _request('DELETE', '/api/schedules/$id');
+  }
+
   Future<void> triggerSchedule(String id) async {
     await _request('POST', '/api/schedules/$id/trigger');
+  }
+
+  Future<List<ScheduleExecution>> scheduleExecutions(String id) async {
+    final body = await _request('GET', '/api/schedules/$id/executions');
+    final executions = body['executions'];
+    if (executions is! List<dynamic>) return const [];
+    return executions
+        .whereType<Map<String, dynamic>>()
+        .map(ScheduleExecution.fromJson)
+        .toList();
+  }
+
+  Future<void> deleteScheduleExecution({
+    required String scheduleId,
+    required String executionId,
+  }) async {
+    await _request(
+      'DELETE',
+      '/api/schedules/$scheduleId/executions/$executionId',
+    );
   }
 
   Future<Uint8List> downloadFile(String url) async {

@@ -115,6 +115,7 @@ class _ConversationTile extends StatelessWidget {
             : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
+          mouseCursor: SystemMouseCursors.click,
           borderRadius: BorderRadius.circular(8),
           onTap: () async {
             await state.loadConversation(conversation.id);
@@ -160,6 +161,11 @@ class _ConversationTile extends StatelessWidget {
                 ),
                 PopupMenuButton<String>(
                   tooltip: 'Conversation actions',
+                  style: const ButtonStyle(
+                    mouseCursor: WidgetStatePropertyAll(
+                      WidgetStateMouseCursor.clickable,
+                    ),
+                  ),
                   onSelected: (value) {
                     if (value == 'pin') {
                       state.togglePinConversation(conversation.id);
@@ -171,6 +177,7 @@ class _ConversationTile extends StatelessWidget {
                   itemBuilder: (context) => [
                     PopupMenuItem(
                       value: 'pin',
+                      mouseCursor: WidgetStateMouseCursor.clickable,
                       child: Row(
                         children: [
                           Icon(
@@ -185,6 +192,7 @@ class _ConversationTile extends StatelessWidget {
                     ),
                     const PopupMenuItem(
                       value: 'delete',
+                      mouseCursor: WidgetStateMouseCursor.clickable,
                       child: Row(
                         children: [
                           Icon(Icons.delete_outline_rounded),

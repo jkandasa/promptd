@@ -362,6 +362,7 @@ class _ToolsPanelControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final filterControl = LayoutBuilder(
       builder: (context, constraints) {
         final useWrappedChips = stacked && constraints.maxWidth < 520;
@@ -411,6 +412,7 @@ class _ToolsPanelControls extends StatelessWidget {
     );
     final search = TextField(
       controller: searchController,
+      style: theme.textTheme.bodyLarge,
       spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
       decoration: InputDecoration(
         hintText: 'Search tools',
@@ -692,6 +694,7 @@ class _ToolCard extends StatelessWidget {
               const SizedBox(height: 10),
               InkWell(
                 borderRadius: BorderRadius.circular(8),
+                mouseCursor: SystemMouseCursors.click,
                 onTap: onToggle,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -866,6 +869,9 @@ class _ToolRowItem extends StatelessWidget {
     final isInbuilt = tool.name == 'get_current_datetime';
 
     return InkWell(
+      mouseCursor: parameterCount > 0
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
       onTap: parameterCount > 0 ? onToggle : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -992,6 +998,7 @@ class _SortableHeader extends StatelessWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(6),
+      mouseCursor: SystemMouseCursors.click,
       onTap: () => onSort(column),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),

@@ -7,6 +7,7 @@ class AppTheme {
   static const Color ink = Color(0xFF0F172A);
   static const Color mist = Color(0xFFF8FAFC);
   static const Color outline = Color(0xFFDDE3EC);
+  static const String codeFontFamily = 'monospace';
 
   static ThemeData light() {
     const scheme = ColorScheme(
@@ -64,6 +65,7 @@ class AppTheme {
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      fontFamily: GoogleFonts.montserrat().fontFamily,
       scaffoldBackgroundColor: scheme.brightness == Brightness.dark
           ? const Color(0xFF020617)
           : mist,
@@ -129,6 +131,7 @@ class AppTheme {
 
     return base.copyWith(
       textTheme: textTheme,
+      primaryTextTheme: textTheme,
       appBarTheme: AppBarTheme(
         elevation: 0,
         centerTitle: false,
@@ -150,8 +153,59 @@ class AppTheme {
         unselectedLabelTextStyle: textTheme.bodyMedium,
       ),
       chipTheme: base.chipTheme.copyWith(
+        selectedColor: scheme.primary,
+        secondarySelectedColor: scheme.primary,
+        checkmarkColor: scheme.onPrimary,
+        labelStyle: textTheme.labelMedium?.copyWith(color: scheme.onSurface),
+        secondaryLabelStyle: textTheme.labelMedium?.copyWith(
+          color: scheme.onPrimary,
+        ),
         side: BorderSide(color: scheme.outline),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+      ),
+      dialogTheme: DialogThemeData(
+        titleTextStyle: textTheme.titleLarge,
+        contentTextStyle: textTheme.bodyMedium,
+        backgroundColor: scheme.surface,
+        surfaceTintColor: Colors.transparent,
+      ),
+      listTileTheme: ListTileThemeData(
+        titleTextStyle: textTheme.bodyMedium?.copyWith(
+          color: scheme.onSurface,
+          fontWeight: FontWeight.w600,
+        ),
+        subtitleTextStyle: textTheme.bodySmall?.copyWith(
+          color: scheme.onSurface.withValues(alpha: 0.68),
+        ),
+        leadingAndTrailingTextStyle: textTheme.labelMedium,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        textStyle: textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
+        labelTextStyle: WidgetStatePropertyAll(
+          textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
+        ),
+        iconColor: scheme.onSurface.withValues(alpha: 0.78),
+        mouseCursor: WidgetStateMouseCursor.clickable,
+        color: scheme.surface,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: scheme.shadow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          backgroundColor: WidgetStatePropertyAll(scheme.surface),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        ),
+      ),
+      dataTableTheme: DataTableThemeData(
+        headingTextStyle: textTheme.labelMedium?.copyWith(
+          color: scheme.onSurface,
+          fontWeight: FontWeight.w700,
+        ),
+        dataTextStyle: textTheme.bodySmall?.copyWith(color: scheme.onSurface),
       ),
       cardTheme: CardThemeData(
         elevation: 0,
@@ -167,12 +221,69 @@ class AppTheme {
         color: scheme.outlineVariant,
         thickness: 1,
       ),
+      tooltipTheme: TooltipThemeData(
+        textStyle: textTheme.bodySmall?.copyWith(color: scheme.surface),
+        decoration: BoxDecoration(
+          color: scheme.onSurface.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(6),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        contentTextStyle: textTheme.bodyMedium?.copyWith(color: scheme.surface),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: const ButtonStyle(
+          mouseCursor: WidgetStatePropertyAll(WidgetStateMouseCursor.clickable),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: ButtonStyle(
+          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          mouseCursor: const WidgetStatePropertyAll(
+            WidgetStateMouseCursor.clickable,
+          ),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: ButtonStyle(
+          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          mouseCursor: const WidgetStatePropertyAll(
+            WidgetStateMouseCursor.clickable,
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          mouseCursor: const WidgetStatePropertyAll(
+            WidgetStateMouseCursor.clickable,
+          ),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          textStyle: WidgetStatePropertyAll(textTheme.labelMedium),
+          mouseCursor: const WidgetStatePropertyAll(
+            WidgetStateMouseCursor.clickable,
+          ),
+        ),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: scheme.surface,
+        labelStyle: textTheme.bodyMedium?.copyWith(
+          color: scheme.onSurface.withValues(alpha: 0.68),
+        ),
+        floatingLabelStyle: textTheme.bodyMedium?.copyWith(
+          color: scheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
         hintStyle: textTheme.bodyMedium?.copyWith(
           color: scheme.onSurface.withValues(alpha: 0.55),
         ),
+        helperStyle: textTheme.bodySmall,
+        errorStyle: textTheme.bodySmall?.copyWith(color: scheme.error),
+        counterStyle: textTheme.bodySmall,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
           vertical: 16,

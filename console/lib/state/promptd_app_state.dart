@@ -210,14 +210,14 @@ class PromptdAppState extends ChangeNotifier {
   }
 
   void selectProvider(String? provider) {
-    selectedProvider = provider;
+    selectedProvider = provider?.isEmpty == true ? null : provider;
     selectedModel = null;
     _selectDefaults();
     notifyListeners();
   }
 
   void selectModel(String? model) {
-    selectedModel = model;
+    selectedModel = model?.isEmpty == true ? null : model;
     notifyListeners();
   }
 
@@ -378,10 +378,12 @@ class PromptdAppState extends ChangeNotifier {
     if (index < 0) return;
     final backendMsgId = message.msgId ?? message.id;
     unawaited(
-      _api.deleteMessagesFrom(
-        conversationId: conversationId,
-        messageId: backendMsgId,
-      ).catchError((Object _) {}),
+      _api
+          .deleteMessagesFrom(
+            conversationId: conversationId,
+            messageId: backendMsgId,
+          )
+          .catchError((Object _) {}),
     );
     messages = messages.take(index).toList();
     notifyListeners();
@@ -422,6 +424,38 @@ class PromptdAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<Schedule> saveSchedule({
+    String? id,
+    required Map<String, dynamic> schedule,
+  }) async {
+    final saved = id == null || id.isEmpty
+        ? await _api.createSchedule(schedule)
+        : await _api.updateSchedule(id: id, schedule: schedule);
+    schedules = await _api.schedules();
+    notifyListeners();
+    return saved;
+  }
+
+  Future<void> deleteSchedule(String id) async {
+    await _api.deleteSchedule(id);
+    schedules = await _api.schedules();
+    notifyListeners();
+  }
+
+  Future<List<ScheduleExecution>> scheduleExecutions(String id) {
+    return _api.scheduleExecutions(id);
+  }
+
+  Future<void> deleteScheduleExecution({
+    required String scheduleId,
+    required String executionId,
+  }) {
+    return _api.deleteScheduleExecution(
+      scheduleId: scheduleId,
+      executionId: executionId,
+    );
+  }
+
   Future<void> _refreshConversationsOnly() async {
     conversations = await _api.conversations();
     notifyListeners();
@@ -435,14 +469,6 @@ class PromptdAppState extends ChangeNotifier {
   }
 
   void _selectDefaults() {
-    if (selectedProvider == null && modelData.providers.isNotEmpty) {
-      selectedProvider = modelData.providers.first.name;
-    }
-    final models = availableModels;
-    if ((selectedModel == null || selectedModel!.isEmpty) &&
-        models.isNotEmpty) {
-      selectedModel = models.first.id;
-    }
     if ((selectedSystemPrompt == null || selectedSystemPrompt!.isEmpty) &&
         uiConfig.systemPrompts.isNotEmpty) {
       selectedSystemPrompt = uiConfig.systemPrompts.first.name;

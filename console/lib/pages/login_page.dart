@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../state/promptd_app_state.dart';
@@ -28,7 +29,7 @@ class _LoginPageState extends State<LoginPage> {
           ? widget.state.serverUrl
           : _defaultServerUrl(),
     );
-    _allowInsecureTls = widget.state.allowInsecureTls;
+    _allowInsecureTls = kIsWeb ? false : widget.state.allowInsecureTls;
   }
 
   @override
@@ -80,6 +81,7 @@ class _LoginPageState extends State<LoginPage> {
                               const SizedBox(height: 24),
                               TextFormField(
                                 controller: _serverUrlController,
+                                style: theme.textTheme.bodyLarge,
                                 keyboardType: TextInputType.url,
                                 autofillHints: const [AutofillHints.url],
                                 decoration: const InputDecoration(
@@ -97,6 +99,7 @@ class _LoginPageState extends State<LoginPage> {
                               const SizedBox(height: 14),
                               TextFormField(
                                 controller: _userIdController,
+                                style: theme.textTheme.bodyLarge,
                                 autofillHints: const [AutofillHints.username],
                                 decoration: const InputDecoration(
                                   labelText: 'User ID',
@@ -114,6 +117,7 @@ class _LoginPageState extends State<LoginPage> {
                               const SizedBox(height: 14),
                               TextFormField(
                                 controller: _passwordController,
+                                style: theme.textTheme.bodyLarge,
                                 obscureText: true,
                                 autofillHints: const [AutofillHints.password],
                                 decoration: const InputDecoration(
@@ -128,18 +132,20 @@ class _LoginPageState extends State<LoginPage> {
                                 },
                                 onFieldSubmitted: (_) => _submit(),
                               ),
-                              const SizedBox(height: 8),
-                              SwitchListTile(
-                                contentPadding: EdgeInsets.zero,
-                                value: _allowInsecureTls,
-                                title: const Text('Allow insecure TLS'),
-                                subtitle: const Text(
-                                  'For self-signed server certificates',
+                              if (!kIsWeb) ...[
+                                const SizedBox(height: 8),
+                                SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  value: _allowInsecureTls,
+                                  title: const Text('Allow insecure TLS'),
+                                  subtitle: const Text(
+                                    'For self-signed server certificates',
+                                  ),
+                                  onChanged: (value) {
+                                    setState(() => _allowInsecureTls = value);
+                                  },
                                 ),
-                                onChanged: (value) {
-                                  setState(() => _allowInsecureTls = value);
-                                },
-                              ),
+                              ],
                               if (_error != null) ...[
                                 const SizedBox(height: 16),
                                 _LoginError(message: _error!),
@@ -201,7 +207,7 @@ class _LoginPageState extends State<LoginPage> {
         serverUrl: _serverUrlController.text,
         userId: _userIdController.text.trim(),
         password: _passwordController.text,
-        allowInsecureTls: _allowInsecureTls,
+        allowInsecureTls: kIsWeb ? false : _allowInsecureTls,
       );
     } catch (err) {
       setState(() => _error = err.toString());
