@@ -112,13 +112,23 @@ class _ConversationTile extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _conversationMeta(conversation),
+                        _conversationProviderModel(conversation),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurface.withValues(
                             alpha: 0.58,
                           ),
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        _conversationTime(conversation),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.45,
+                          ),
+                          fontSize: 11,
                         ),
                       ),
                     ],
@@ -169,21 +179,42 @@ class _ConversationTile extends StatelessWidget {
     );
   }
 
-  String _conversationMeta(ConversationMeta conversation) {
+  String _conversationProviderModel(ConversationMeta conversation) {
     final provider = conversation.provider ?? '';
     final model = conversation.model ?? '';
-    final date = conversation.updatedAt ?? conversation.createdAt;
     final parts = [
       if (provider.isNotEmpty) provider,
       if (model.isNotEmpty) model,
-      if (date != null) _compactDate(date),
     ];
     return parts.join(' · ');
   }
 
-  String _compactDate(DateTime date) {
+  String _conversationTime(ConversationMeta conversation) {
+    final date = conversation.updatedAt ?? conversation.createdAt;
+    if (date == null) return '';
+    return _relativeTime(date);
+  }
+
+  String _relativeTime(DateTime date) {
+    final diff = DateTime.now().difference(date);
+    final mins = diff.inMinutes;
+    if (mins < 1) return 'just now';
+    if (mins < 60) return '${mins}m ago';
+    final hours = diff.inHours;
+    if (hours < 24) return '${hours}h ago';
+    final days = diff.inDays;
+    if (days == 1) return 'yesterday';
+    if (days < 7) return '${days}d ago';
     final local = date.toLocal();
-    return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    return '${_monthName(local.month)} ${local.day}';
+  }
+
+  String _monthName(int month) {
+    const names = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return names[month - 1];
   }
 }
 

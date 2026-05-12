@@ -40,6 +40,7 @@ class AppShell extends StatelessWidget {
       builder: (context, constraints) {
         final useRail = constraints.maxWidth >= 960;
         final useExtendedRail = constraints.maxWidth >= 1280;
+        final showBrandText = constraints.maxWidth >= 420;
 
         return Scaffold(
           drawer: useRail
@@ -91,27 +92,33 @@ class AppShell extends StatelessWidget {
                             },
                           ),
                         const BrandMark(),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Promptd',
-                                style: theme.textTheme.titleMedium,
-                              ),
-                              Text(
-                                'AI Assistant Console',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurface.withValues(
-                                    alpha: 0.65,
+                        if (showBrandText) ...[
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Promptd',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                                Text(
+                                  'AI Assistant Console',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.65),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
+                        ] else
+                          const Spacer(),
                         IconButton(
                           tooltip: 'Refresh',
                           onPressed: loading ? null : onRefresh,

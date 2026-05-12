@@ -166,7 +166,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
                             autocorrect: true,
                             enableSuggestions: true,
                             spellCheckConfiguration:
-                                const SpellCheckConfiguration(),
+                                const SpellCheckConfiguration.disabled(),
                             keyboardType: TextInputType.multiline,
                             textInputAction: TextInputAction.send,
                             onSubmitted: state.sending || _uploading
