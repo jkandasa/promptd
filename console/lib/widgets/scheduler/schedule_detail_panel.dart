@@ -14,6 +14,7 @@ class ScheduleDetailPanel extends StatefulWidget {
     required this.onTrigger,
     required this.onEdit,
     required this.onDelete,
+    required this.onRefresh,
   });
 
   final PromptdAppState state;
@@ -22,6 +23,7 @@ class ScheduleDetailPanel extends StatefulWidget {
   final VoidCallback? onTrigger;
   final VoidCallback? onEdit;
   final Future<void> Function()? onDelete;
+  final Future<void> Function() onRefresh;
 
   @override
   State<ScheduleDetailPanel> createState() => _ScheduleDetailPanelState();
@@ -65,6 +67,13 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                   onTrigger: widget.onTrigger,
                   onEdit: widget.onEdit,
                   onDelete: () => _confirmDelete(context),
+                  onRefresh: () async {
+                    await widget.onRefresh();
+                    if (!mounted) return;
+                    setState(() {
+                      _executionsFuture = _loadExecutions();
+                    });
+                  },
                 ),
                 const Divider(height: 1),
                 Expanded(
@@ -81,6 +90,34 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                           _executionsFuture = _loadExecutions();
                         }),
                         onDelete: (execution) async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Delete execution?'),
+                              content: Text(
+                                'Delete execution from ${_date(execution.triggeredAt)}?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  style: const ButtonStyle(
+                                    mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                                  ),
+                                  child: const Text('Cancel'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.of(context).pop(true),
+                                  style: ButtonStyle(
+                                    backgroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
+                                    foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.onError),
+                                    mouseCursor: const WidgetStatePropertyAll(SystemMouseCursors.click),
+                                  ),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed != true || !mounted) return;
                           await widget.state.deleteScheduleExecution(
                             scheduleId: current.id,
                             executionId: execution.id,
@@ -105,13 +142,17 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
+            style: const ButtonStyle(
+              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+            ),
             child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-              foregroundColor: Theme.of(context).colorScheme.onError,
+            style: ButtonStyle(
+              backgroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
+              foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.onError),
+              mouseCursor: const WidgetStatePropertyAll(SystemMouseCursors.click),
             ),
             child: const Text('Delete'),
           ),
@@ -120,6 +161,9 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
     );
     if (confirmed == true) await widget.onDelete?.call();
   }
+
+  String _date(DateTime? date) =>
+      date == null ? '-' : date.toLocal().toString();
 }
 
 class _ScheduleHeader extends StatelessWidget {
@@ -129,6 +173,7 @@ class _ScheduleHeader extends StatelessWidget {
     required this.onTrigger,
     required this.onEdit,
     required this.onDelete,
+    required this.onRefresh,
   });
 
   final Schedule schedule;
@@ -136,6 +181,7 @@ class _ScheduleHeader extends StatelessWidget {
   final VoidCallback? onTrigger;
   final VoidCallback? onEdit;
   final VoidCallback onDelete;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -166,19 +212,28 @@ class _ScheduleHeader extends StatelessWidget {
               ],
             ),
           ),
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: onRefresh,
+            mouseCursor: SystemMouseCursors.click,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
           IconButton.filledTonal(
             tooltip: 'Run now',
             onPressed: canWrite ? onTrigger : null,
+            mouseCursor: SystemMouseCursors.click,
             icon: const Icon(Icons.play_arrow_rounded),
           ),
           IconButton(
             tooltip: 'Edit',
             onPressed: canWrite ? onEdit : null,
+            mouseCursor: SystemMouseCursors.click,
             icon: const Icon(Icons.edit_outlined),
           ),
           IconButton(
             tooltip: 'Delete',
             onPressed: canWrite ? onDelete : null,
+            mouseCursor: SystemMouseCursors.click,
             color: theme.colorScheme.error,
             icon: const Icon(Icons.delete_outline_rounded),
           ),
@@ -333,6 +388,7 @@ class _ExecutionHistory extends StatelessWidget {
             IconButton(
               tooltip: 'Refresh executions',
               onPressed: onRefresh,
+              mouseCursor: SystemMouseCursors.click,
               icon: const Icon(Icons.refresh_rounded),
             ),
           ],
@@ -380,16 +436,23 @@ class _ExecutionHistory extends StatelessWidget {
   }
 }
 
-class _ExecutionCard extends StatelessWidget {
+class _ExecutionCard extends StatefulWidget {
   const _ExecutionCard({required this.execution, required this.onDelete});
 
   final ScheduleExecution execution;
   final Future<void> Function() onDelete;
 
   @override
+  State<_ExecutionCard> createState() => _ExecutionCardState();
+}
+
+class _ExecutionCardState extends State<_ExecutionCard> {
+  bool _responseExpanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final statusColor = switch (execution.status) {
+    final statusColor = switch (widget.execution.status) {
       'success' => Colors.green,
       'error' => theme.colorScheme.error,
       _ => theme.colorScheme.primary,
@@ -409,25 +472,32 @@ class _ExecutionCard extends StatelessWidget {
               children: [
                 Icon(Icons.circle, size: 9, color: statusColor),
                 const SizedBox(width: 7),
-                Text(execution.status, style: theme.textTheme.labelLarge),
+                Text(widget.execution.status, style: theme.textTheme.labelLarge),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    _date(execution.triggeredAt),
-                    style: theme.textTheme.bodySmall,
-                    overflow: TextOverflow.ellipsis,
+                  child: Tooltip(
+                    message: _date(widget.execution.triggeredAt),
+                    child: Text(
+                      _relativeTime(widget.execution.triggeredAt),
+                      style: theme.textTheme.bodySmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-                if (execution.trace.isNotEmpty)
+                if (widget.execution.trace.isNotEmpty)
                   TextButton.icon(
                     onPressed: () =>
-                        showTraceDetailsDialog(context, execution.trace),
+                        showTraceDetailsDialog(context, widget.execution.trace),
                     icon: const Icon(Icons.bolt_rounded, size: 16),
                     label: const Text('LLM Trace'),
+                    style: const ButtonStyle(
+                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                    ),
                   ),
                 IconButton(
                   tooltip: 'Delete execution',
-                  onPressed: onDelete,
+                  onPressed: widget.onDelete,
+                  mouseCursor: SystemMouseCursors.click,
                   color: theme.colorScheme.error,
                   icon: const Icon(Icons.delete_outline_rounded),
                 ),
@@ -438,51 +508,112 @@ class _ExecutionCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                if (execution.providerUsed?.isNotEmpty == true ||
-                    execution.modelUsed?.isNotEmpty == true)
+                if (widget.execution.providerUsed?.isNotEmpty == true ||
+                    widget.execution.modelUsed?.isNotEmpty == true)
                   _MiniMeta(
                     [
-                      execution.providerUsed,
-                      execution.modelUsed,
+                      widget.execution.providerUsed,
+                      widget.execution.modelUsed,
                     ].where((value) => value?.isNotEmpty == true).join(' · '),
                   ),
-                if (execution.durationMs != null)
-                  _MiniMeta(_duration(execution.durationMs!)),
-                if (execution.llmCalls != null)
-                  _MiniMeta('${execution.llmCalls} LLM calls'),
-                if (execution.toolCalls != null)
-                  _MiniMeta('${execution.toolCalls} tool calls'),
+                if (widget.execution.durationMs != null)
+                  _MiniMeta(_duration(widget.execution.durationMs!)),
+                if (widget.execution.llmCalls != null)
+                  _MiniMeta('${widget.execution.llmCalls} LLM calls'),
+                if (widget.execution.toolCalls != null)
+                  _MiniMeta('${widget.execution.toolCalls} tool calls'),
               ],
             ),
-            if (execution.error?.isNotEmpty == true) ...[
+            if (widget.execution.error?.isNotEmpty == true) ...[
               const SizedBox(height: 8),
               Text(
-                execution.error!,
+                widget.execution.error!,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.error,
                 ),
               ),
             ],
-            if (execution.response?.isNotEmpty == true) ...[
+            if (widget.execution.response?.isNotEmpty == true) ...[
               const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border(
-                    left: BorderSide(
-                      color: theme.colorScheme.primary,
-                      width: 3,
+              InkWell(
+                onTap: () => setState(() => _responseExpanded = !_responseExpanded),
+                mouseCursor: SystemMouseCursors.click,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border(
+                      left: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 3,
+                      ),
                     ),
                   ),
-                ),
-                child: MarkdownBody(
-                  data: execution.response!,
-                  selectable: true,
-                  styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                    p: theme.textTheme.bodySmall?.copyWith(height: 1.55),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            _responseExpanded
+                                ? Icons.keyboard_arrow_down_rounded
+                                : Icons.keyboard_arrow_right_rounded,
+                            size: 18,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Response',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_responseExpanded) ...[
+                        const SizedBox(height: 10),
+                        MarkdownBody(
+                          data: widget.execution.response!,
+                          selectable: true,
+                          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                            p: theme.textTheme.bodySmall?.copyWith(
+                              height: 1.55,
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                            h1: theme.textTheme.titleLarge?.copyWith(
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                            h2: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                            h3: theme.textTheme.titleSmall?.copyWith(
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                            listBullet: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                            code: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.brightness == Brightness.dark
+                                  ? Colors.white
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
@@ -495,6 +626,20 @@ class _ExecutionCard extends StatelessWidget {
 
   String _date(DateTime? date) =>
       date == null ? '-' : date.toLocal().toString();
+
+  String _relativeTime(DateTime? date) {
+    if (date == null) return '';
+    final diffMs = date.difference(DateTime.now()).inMilliseconds;
+    final future = diffMs > 0;
+    final seconds = (diffMs.abs() / 1000).floor();
+    if (seconds < 60) return future ? 'in ${seconds}s' : '${seconds}s ago';
+    final minutes = (seconds / 60).floor();
+    if (minutes < 60) return future ? 'in ${minutes}m' : '${minutes}m ago';
+    final hours = (minutes / 60).floor();
+    if (hours < 24) return future ? 'in ${hours}h' : '${hours}h ago';
+    final days = (hours / 24).floor();
+    return future ? 'in ${days}d' : '${days}d ago';
+  }
 
   String _duration(int ms) =>
       ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';

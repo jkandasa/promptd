@@ -39,26 +39,26 @@ class SearchSelectField<T> extends StatelessWidget {
 
     return SizedBox(
       width: width,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        mouseCursor: enabled
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.basic,
-        onTap: enabled ? () => _openPicker(context) : null,
-        child: InputDecorator(
-          decoration: InputDecoration(
-            labelText: label,
-            suffixIcon: const Icon(Icons.search_rounded),
-            enabled: enabled,
-          ),
-          child: Text(
-            selected?.label ?? emptyText,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: enabled
-                  ? theme.colorScheme.onSurface
-                  : theme.colorScheme.onSurface.withValues(alpha: 0.42),
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: enabled ? () => _openPicker(context) : null,
+          child: InputDecorator(
+            decoration: InputDecoration(
+              labelText: label,
+              suffixIcon: const Icon(Icons.search_rounded),
+              enabled: enabled,
+            ),
+            child: Text(
+              selected?.label ?? emptyText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: enabled
+                    ? theme.colorScheme.onSurface
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.42),
+              ),
             ),
           ),
         ),
@@ -121,11 +121,15 @@ class _SearchSelectDialogState<T> extends State<_SearchSelectDialog<T>> {
           (option.subtitle?.toLowerCase().contains(query) ?? false);
     }).toList();
 
+    final screenSize = MediaQuery.sizeOf(context);
+    final dialogWidth = screenSize.width < 560 ? screenSize.width * 0.92 : 520.0;
+    final dialogHeight = screenSize.height < 500 ? screenSize.height * 0.85 : 460.0;
+
     return AlertDialog(
       title: Text(widget.title),
       content: SizedBox(
-        width: 520,
-        height: 460,
+        width: dialogWidth,
+        height: dialogHeight,
         child: Column(
           children: [
             TextField(

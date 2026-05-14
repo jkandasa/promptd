@@ -45,6 +45,7 @@ class ScheduleListPanel extends StatelessWidget {
                   IconButton.filledTonal(
                     tooltip: 'Create schedule',
                     onPressed: onCreate,
+                    mouseCursor: SystemMouseCursors.click,
                     icon: const Icon(Icons.add_rounded),
                   ),
                 const SizedBox(width: 8),

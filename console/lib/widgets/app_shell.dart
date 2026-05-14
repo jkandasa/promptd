@@ -87,6 +87,7 @@ class AppShell extends StatelessWidget {
                               return IconButton(
                                 onPressed: () =>
                                     Scaffold.of(context).openDrawer(),
+                                mouseCursor: SystemMouseCursors.click,
                                 icon: const Icon(Icons.menu_rounded),
                               );
                             },
@@ -122,6 +123,7 @@ class AppShell extends StatelessWidget {
                         IconButton(
                           tooltip: 'Refresh',
                           onPressed: loading ? null : onRefresh,
+                          mouseCursor: SystemMouseCursors.click,
                           icon: loading
                               ? const SizedBox.square(
                                   dimension: 18,
@@ -373,7 +375,10 @@ class _SectionNav extends StatelessWidget {
             NavigationRailDestination(
               icon: Icon(item.icon),
               selectedIcon: Icon(item.icon),
-              label: Text(item.label),
+              label: Text(
+                item.label,
+                style: const TextStyle(fontWeight: FontWeight.normal),
+              ),
             ),
         ],
       );
@@ -440,7 +445,10 @@ class _SectionButton extends StatelessWidget {
               const SizedBox(width: 12),
               Text(
                 label,
-                style: theme.textTheme.labelLarge?.copyWith(color: foreground),
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: foreground,
+                  fontWeight: FontWeight.normal,
+                ),
               ),
             ],
           ),

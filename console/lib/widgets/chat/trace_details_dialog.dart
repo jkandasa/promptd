@@ -39,11 +39,12 @@ class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
     final theme = Theme.of(context);
 
     final size = MediaQuery.sizeOf(context);
+    final isSmallScreen = size.width < 400;
     return Dialog(
-      insetPadding: const EdgeInsets.all(18),
+      insetPadding: EdgeInsets.all(isSmallScreen ? 8 : 18),
       child: SizedBox(
-        width: size.width * 0.92,
-        height: size.height * 0.86,
+        width: isSmallScreen ? size.width * 0.96 : size.width * 0.92,
+        height: isSmallScreen ? size.height * 0.92 : size.height * 0.86,
         child: Column(
           children: [
             Padding(
@@ -82,12 +83,14 @@ class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
                             setState(() => _markdownEnabled = value);
                           },
                           visualDensity: VisualDensity.compact,
+                          mouseCursor: SystemMouseCursors.click,
                         ),
                       ),
                       const SizedBox(width: 6),
                       IconButton(
                         tooltip: 'Close',
                         onPressed: () => Navigator.of(context).pop(),
+                        mouseCursor: SystemMouseCursors.click,
                         icon: const Icon(Icons.close_rounded),
                       ),
                     ],
@@ -808,6 +811,7 @@ class _AvailableToolsListState extends State<_AvailableToolsList> {
                         tooltip: 'Clear filter',
                         iconSize: 16,
                         visualDensity: VisualDensity.compact,
+                        mouseCursor: SystemMouseCursors.click,
                         onPressed: () {
                           _searchController.clear();
                           setState(() {});
@@ -1402,13 +1406,36 @@ class _ContentBlockState extends State<_ContentBlock> {
                             selectable: true,
                             styleSheet: MarkdownStyleSheet.fromTheme(theme)
                                 .copyWith(
-                                  p: textStyle,
-                                  h1: theme.textTheme.titleLarge,
-                                  h2: theme.textTheme.titleMedium,
-                                  h3: theme.textTheme.titleSmall,
-                                  listBullet: textStyle,
+                                  p: textStyle?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
+                                  ),
+                                  h1: theme.textTheme.titleLarge?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
+                                  ),
+                                  h2: theme.textTheme.titleMedium?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
+                                  ),
+                                  h3: theme.textTheme.titleSmall?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
+                                  ),
+                                  listBullet: textStyle?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
+                                  ),
                                   blockSpacing: 8,
                                   code: textStyle?.copyWith(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.white
+                                        : null,
                                     backgroundColor: theme
                                         .colorScheme
                                         .surfaceContainerHighest,
@@ -1441,6 +1468,7 @@ class _ContentBlockState extends State<_ContentBlock> {
                       tooltip: _copied ? 'Copied' : 'Copy',
                       iconSize: 15,
                       visualDensity: VisualDensity.compact,
+                      mouseCursor: SystemMouseCursors.click,
                       onPressed: _copy,
                       icon: Icon(
                         _copied ? Icons.check_rounded : Icons.copy_rounded,

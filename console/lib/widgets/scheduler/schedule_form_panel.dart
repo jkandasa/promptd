@@ -138,9 +138,12 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                       style: theme.textTheme.titleLarge,
                     ),
                   ),
-                  Switch(
-                    value: _enabled,
-                    onChanged: (value) => setState(() => _enabled = value),
+                  MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Switch(
+                      value: _enabled,
+                      onChanged: (value) => setState(() => _enabled = value),
+                    ),
                   ),
                   const SizedBox(width: 4),
                   Text('Enabled', style: theme.textTheme.bodySmall),
@@ -179,16 +182,19 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                     validator: _required('Prompt is required'),
                   ),
                   const SizedBox(height: 12),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'cron', label: Text('Recurring')),
-                      ButtonSegment(value: 'once', label: Text('One-time')),
-                    ],
-                    selected: {_type},
-                    onSelectionChanged: (value) {
-                      setState(() => _type = value.first);
-                    },
-                  ),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'cron', label: Text('Recurring')),
+              ButtonSegment(value: 'once', label: Text('One-time')),
+            ],
+            selected: {_type},
+            onSelectionChanged: (value) {
+              setState(() => _type = value.first);
+            },
+            style: const ButtonStyle(
+              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+            ),
+          ),
                   const SizedBox(height: 12),
                   if (_type == 'cron')
                     _cronField(theme)
@@ -333,11 +339,17 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                 children: [
                   TextButton(
                     onPressed: _saving ? null : widget.onCancel,
+                    style: const ButtonStyle(
+                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                    ),
                     child: const Text('Cancel'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
                     onPressed: _saving ? null : _save,
+                    style: const ButtonStyle(
+                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                    ),
                     icon: _saving
                         ? const SizedBox.square(
                             dimension: 16,
@@ -385,6 +397,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                   setState(() => _cronController.text = preset.value);
                 },
                 visualDensity: VisualDensity.compact,
+                mouseCursor: SystemMouseCursors.click,
               ),
           ],
         ),
@@ -418,6 +431,9 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
           ),
           OutlinedButton.icon(
             onPressed: _pickRunAt,
+            style: const ButtonStyle(
+              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+            ),
             icon: const Icon(Icons.calendar_month_rounded),
             label: const Text('Select'),
           ),
@@ -458,6 +474,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                   setState(() => _retainController.text = '$preset');
                 },
                 visualDensity: VisualDensity.compact,
+                mouseCursor: SystemMouseCursors.click,
               ),
           ],
         ),
@@ -481,6 +498,9 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
           onSelectionChanged: (value) {
             setState(() => _traceMode = value.first);
           },
+          style: const ButtonStyle(
+            mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+          ),
         ),
         const SizedBox(height: 6),
         Text(
@@ -513,6 +533,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
               label: const Text('All tools'),
               selected: _allowedTools.isEmpty,
               onSelected: (_) => setState(() => _allowedTools.clear()),
+              mouseCursor: SystemMouseCursors.click,
             ),
             for (final tool in [
               ...widget.state.tools,
@@ -530,6 +551,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                     }
                   });
                 },
+                mouseCursor: SystemMouseCursors.click,
               ),
           ],
         ),

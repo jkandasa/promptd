@@ -374,6 +374,7 @@ class PromptdApiClient {
     return switch (method) {
       'GET' => _httpClient.get(uri, headers: headers),
       'POST' => _httpClient.post(uri, headers: headers, body: encodedBody),
+      'PUT' => _httpClient.put(uri, headers: headers, body: encodedBody),
       'PATCH' => _httpClient.patch(uri, headers: headers, body: encodedBody),
       'DELETE' => _httpClient.delete(uri, headers: headers),
       _ => throw PromptdApiException('Unsupported method $method'),

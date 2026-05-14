@@ -424,6 +424,11 @@ class PromptdAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshSchedules() async {
+    schedules = await _api.schedules();
+    notifyListeners();
+  }
+
   Future<Schedule> saveSchedule({
     String? id,
     required Map<String, dynamic> schedule,
