@@ -33,7 +33,10 @@ build-web-wasm: pub
 	$(FLUTTER) build web --wasm --release -O4 --no-source-maps
 
 build-android: pub
-	$(FLUTTER) build apk
+	$(FLUTTER) build apk --release
+	@VERSION=$$(grep '^version:' pubspec.yaml | awk '{print $$2}' | cut -d+ -f1); \
+	mv -f build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/promptd-v$$VERSION.apk; \
+	echo "✓ Built build/app/outputs/flutter-apk/promptd-v$$VERSION.apk"
 
 build-linux: pub
 	$(FLUTTER) build linux
