@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
@@ -15,15 +17,17 @@ class ScheduleDetailPanel extends StatefulWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onRefresh,
+    this.onBack,
   });
 
   final PromptdAppState state;
   final Schedule? schedule;
   final bool canWrite;
-  final VoidCallback? onTrigger;
+  final FutureOr<void> Function()? onTrigger;
   final VoidCallback? onEdit;
   final Future<void> Function()? onDelete;
   final Future<void> Function() onRefresh;
+  final VoidCallback? onBack;
 
   @override
   State<ScheduleDetailPanel> createState() => _ScheduleDetailPanelState();
@@ -64,7 +68,8 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                 _ScheduleHeader(
                   schedule: current,
                   canWrite: widget.canWrite,
-                  onTrigger: widget.onTrigger,
+                  onBack: widget.onBack,
+                  onTrigger: _triggerNow,
                   onEdit: widget.onEdit,
                   onDelete: () => _confirmDelete(context),
                   onRefresh: () async {
@@ -99,18 +104,28 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                               ),
                               actions: [
                                 TextButton(
-                                  onPressed: () => Navigator.of(context).pop(false),
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(false),
                                   style: const ButtonStyle(
-                                    mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                                    mouseCursor: WidgetStatePropertyAll(
+                                      SystemMouseCursors.click,
+                                    ),
                                   ),
                                   child: const Text('Cancel'),
                                 ),
                                 FilledButton(
-                                  onPressed: () => Navigator.of(context).pop(true),
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(true),
                                   style: ButtonStyle(
-                                    backgroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
-                                    foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.onError),
-                                    mouseCursor: const WidgetStatePropertyAll(SystemMouseCursors.click),
+                                    backgroundColor: WidgetStatePropertyAll(
+                                      Theme.of(context).colorScheme.error,
+                                    ),
+                                    foregroundColor: WidgetStatePropertyAll(
+                                      Theme.of(context).colorScheme.onError,
+                                    ),
+                                    mouseCursor: const WidgetStatePropertyAll(
+                                      SystemMouseCursors.click,
+                                    ),
                                   ),
                                   child: const Text('Delete'),
                                 ),
@@ -122,7 +137,7 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                             scheduleId: current.id,
                             executionId: execution.id,
                           );
-                          setState(() => _executionsFuture = _loadExecutions());
+                          await _refreshAfterMutation();
                         },
                       ),
                     ],
@@ -150,9 +165,15 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ButtonStyle(
-              backgroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
-              foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.onError),
-              mouseCursor: const WidgetStatePropertyAll(SystemMouseCursors.click),
+              backgroundColor: WidgetStatePropertyAll(
+                Theme.of(context).colorScheme.error,
+              ),
+              foregroundColor: WidgetStatePropertyAll(
+                Theme.of(context).colorScheme.onError,
+              ),
+              mouseCursor: const WidgetStatePropertyAll(
+                SystemMouseCursors.click,
+              ),
             ),
             child: const Text('Delete'),
           ),
@@ -164,12 +185,31 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
 
   String _date(DateTime? date) =>
       date == null ? '-' : date.toLocal().toString();
+
+  Future<void> _triggerNow() async {
+    await widget.onTrigger?.call();
+    if (!mounted) return;
+    setState(() => _executionsFuture = _loadExecutions());
+    unawaited(
+      Future<void>.delayed(const Duration(seconds: 2)).then((_) {
+        if (!mounted) return;
+        setState(() => _executionsFuture = _loadExecutions());
+      }),
+    );
+  }
+
+  Future<void> _refreshAfterMutation() async {
+    await widget.onRefresh();
+    if (!mounted) return;
+    setState(() => _executionsFuture = _loadExecutions());
+  }
 }
 
 class _ScheduleHeader extends StatelessWidget {
   const _ScheduleHeader({
     required this.schedule,
     required this.canWrite,
+    required this.onBack,
     required this.onTrigger,
     required this.onEdit,
     required this.onDelete,
@@ -178,7 +218,8 @@ class _ScheduleHeader extends StatelessWidget {
 
   final Schedule schedule;
   final bool canWrite;
-  final VoidCallback? onTrigger;
+  final VoidCallback? onBack;
+  final Future<void> Function()? onTrigger;
   final VoidCallback? onEdit;
   final VoidCallback onDelete;
   final Future<void> Function() onRefresh;
@@ -186,59 +227,113 @@ class _ScheduleHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 10, 12),
-      child: Row(
-        children: [
-          Icon(
-            schedule.enabled
-                ? Icons.event_available_outlined
-                : Icons.event_busy_outlined,
-            color: schedule.enabled
-                ? theme.colorScheme.primary
-                : theme.colorScheme.onSurface.withValues(alpha: 0.48),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(schedule.name, style: theme.textTheme.titleLarge),
-                const SizedBox(height: 3),
-                Text(
-                  schedule.enabled ? 'Enabled' : 'Disabled',
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
+    final statusColor = schedule.enabled
+        ? theme.colorScheme.primary
+        : Colors.orange;
+    final title = Row(
+      children: [
+        if (onBack != null) ...[
           IconButton(
-            tooltip: 'Refresh',
-            onPressed: onRefresh,
+            tooltip: 'Back to schedules',
+            onPressed: onBack,
             mouseCursor: SystemMouseCursors.click,
-            icon: const Icon(Icons.refresh_rounded),
+            icon: const Icon(Icons.arrow_back_rounded),
           ),
-          IconButton.filledTonal(
-            tooltip: 'Run now',
-            onPressed: canWrite ? onTrigger : null,
-            mouseCursor: SystemMouseCursors.click,
-            icon: const Icon(Icons.play_arrow_rounded),
-          ),
-          IconButton(
-            tooltip: 'Edit',
-            onPressed: canWrite ? onEdit : null,
-            mouseCursor: SystemMouseCursors.click,
-            icon: const Icon(Icons.edit_outlined),
-          ),
-          IconButton(
-            tooltip: 'Delete',
-            onPressed: canWrite ? onDelete : null,
-            mouseCursor: SystemMouseCursors.click,
-            color: theme.colorScheme.error,
-            icon: const Icon(Icons.delete_outline_rounded),
-          ),
+          const SizedBox(width: 4),
         ],
-      ),
+        Icon(
+          schedule.enabled
+              ? Icons.event_available_outlined
+              : Icons.event_busy_outlined,
+          color: statusColor,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                schedule.name,
+                style: theme.textTheme.titleLarge,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                schedule.enabled ? 'Enabled' : 'Disabled',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: statusColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final actions = Wrap(
+      spacing: 2,
+      runSpacing: 2,
+      alignment: WrapAlignment.end,
+      children: [
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: onRefresh,
+          mouseCursor: SystemMouseCursors.click,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+        IconButton.filledTonal(
+          tooltip: 'Run now',
+          onPressed: canWrite && onTrigger != null
+              ? () => unawaited(onTrigger!())
+              : null,
+          mouseCursor: SystemMouseCursors.click,
+          icon: const Icon(Icons.play_arrow_rounded),
+        ),
+        IconButton(
+          tooltip: 'Edit',
+          onPressed: canWrite ? onEdit : null,
+          mouseCursor: SystemMouseCursors.click,
+          icon: const Icon(Icons.edit_outlined),
+        ),
+        IconButton(
+          tooltip: 'Delete',
+          onPressed: canWrite ? onDelete : null,
+          mouseCursor: SystemMouseCursors.click,
+          color: theme.colorScheme.error,
+          icon: const Icon(Icons.delete_outline_rounded),
+        ),
+      ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 620;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 8 : 16,
+            compact ? 10 : 14,
+            compact ? 8 : 10,
+            compact ? 10 : 12,
+          ),
+          child: compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    title,
+                    const SizedBox(height: 8),
+                    Align(alignment: Alignment.centerRight, child: actions),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: title),
+                    const SizedBox(width: 10),
+                    actions,
+                  ],
+                ),
+        );
+      },
     );
   }
 }
@@ -326,7 +421,16 @@ class _InfoChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: theme.colorScheme.primary),
           const SizedBox(width: 5),
-          Text(label, style: theme.textTheme.bodySmall),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width * 0.68,
+            ),
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -468,40 +572,79 @@ class _ExecutionCardState extends State<_ExecutionCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.circle, size: 9, color: statusColor),
-                const SizedBox(width: 7),
-                Text(widget.execution.status, style: theme.textTheme.labelLarge),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Tooltip(
-                    message: _date(widget.execution.triggeredAt),
-                    child: Text(
-                      _relativeTime(widget.execution.triggeredAt),
-                      style: theme.textTheme.bodySmall,
-                      overflow: TextOverflow.ellipsis,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 360;
+                final statusLine = Row(
+                  mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, size: 9, color: statusColor),
+                    const SizedBox(width: 7),
+                    Text(
+                      widget.execution.status,
+                      style: theme.textTheme.labelLarge,
                     ),
-                  ),
-                ),
-                if (widget.execution.trace.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () =>
-                        showTraceDetailsDialog(context, widget.execution.trace),
-                    icon: const Icon(Icons.bolt_rounded, size: 16),
-                    label: const Text('LLM Trace'),
-                    style: const ButtonStyle(
-                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Tooltip(
+                        message: _date(widget.execution.triggeredAt),
+                        child: Text(
+                          _relativeTime(widget.execution.triggeredAt),
+                          style: theme.textTheme.bodySmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ),
-                  ),
-                IconButton(
-                  tooltip: 'Delete execution',
-                  onPressed: widget.onDelete,
-                  mouseCursor: SystemMouseCursors.click,
-                  color: theme.colorScheme.error,
-                  icon: const Icon(Icons.delete_outline_rounded),
-                ),
-              ],
+                  ],
+                );
+                final actions = Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (widget.execution.trace.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () => showTraceDetailsDialog(
+                          context,
+                          widget.execution.trace,
+                        ),
+                        icon: const Icon(Icons.bolt_rounded, size: 16),
+                        label: const Text('LLM Trace'),
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          mouseCursor: WidgetStatePropertyAll(
+                            SystemMouseCursors.click,
+                          ),
+                        ),
+                      ),
+                    IconButton(
+                      tooltip: 'Delete execution',
+                      onPressed: widget.onDelete,
+                      visualDensity: VisualDensity.compact,
+                      mouseCursor: SystemMouseCursors.click,
+                      color: theme.colorScheme.error,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
+                );
+
+                if (compact) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      statusLine,
+                      Align(alignment: Alignment.centerRight, child: actions),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: statusLine),
+                    const SizedBox(width: 6),
+                    actions,
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 6),
             Wrap(
@@ -536,7 +679,8 @@ class _ExecutionCardState extends State<_ExecutionCard> {
             if (widget.execution.response?.isNotEmpty == true) ...[
               const SizedBox(height: 10),
               InkWell(
-                onTap: () => setState(() => _responseExpanded = !_responseExpanded),
+                onTap: () =>
+                    setState(() => _responseExpanded = !_responseExpanded),
                 mouseCursor: SystemMouseCursors.click,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
@@ -562,7 +706,9 @@ class _ExecutionCardState extends State<_ExecutionCard> {
                                 ? Icons.keyboard_arrow_down_rounded
                                 : Icons.keyboard_arrow_right_rounded,
                             size: 18,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.62,
+                            ),
                           ),
                           const SizedBox(width: 4),
                           Text(
@@ -578,39 +724,40 @@ class _ExecutionCardState extends State<_ExecutionCard> {
                         MarkdownBody(
                           data: widget.execution.response!,
                           selectable: true,
-                          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                            p: theme.textTheme.bodySmall?.copyWith(
-                              height: 1.55,
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                            h1: theme.textTheme.titleLarge?.copyWith(
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                            h2: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                            h3: theme.textTheme.titleSmall?.copyWith(
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                            listBullet: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                            code: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.brightness == Brightness.dark
-                                  ? Colors.white
-                                  : null,
-                            ),
-                          ),
+                          styleSheet: MarkdownStyleSheet.fromTheme(theme)
+                              .copyWith(
+                                p: theme.textTheme.bodySmall?.copyWith(
+                                  height: 1.55,
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                                h1: theme.textTheme.titleLarge?.copyWith(
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                                h2: theme.textTheme.titleMedium?.copyWith(
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                                h3: theme.textTheme.titleSmall?.copyWith(
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                                listBullet: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                                code: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.brightness == Brightness.dark
+                                      ? Colors.white
+                                      : null,
+                                ),
+                              ),
                         ),
                       ],
                     ],

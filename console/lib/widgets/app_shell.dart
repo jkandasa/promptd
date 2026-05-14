@@ -50,7 +50,10 @@ class AppShell extends StatelessWidget {
                     child: _SectionNav(
                       section: section,
                       extended: true,
-                      onSectionSelected: onSectionSelected,
+                      onSectionSelected: (selected) {
+                        Navigator.of(context).pop();
+                        onSectionSelected(selected);
+                      },
                     ),
                   ),
                 ),
@@ -366,6 +369,12 @@ class _SectionNav extends StatelessWidget {
         selectedIndex: destinations.indexWhere(
           (item) => item.section == section,
         ),
+        selectedLabelTextStyle: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.normal),
+        unselectedLabelTextStyle: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.normal),
         onDestinationSelected: (index) {
           onSectionSelected(destinations[index].section);
         },
@@ -445,7 +454,7 @@ class _SectionButton extends StatelessWidget {
               const SizedBox(width: 12),
               Text(
                 label,
-                style: theme.textTheme.labelLarge?.copyWith(
+                style: theme.textTheme.bodyMedium?.copyWith(
                   color: foreground,
                   fontWeight: FontWeight.normal,
                 ),

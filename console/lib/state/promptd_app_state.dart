@@ -454,11 +454,13 @@ class PromptdAppState extends ChangeNotifier {
   Future<void> deleteScheduleExecution({
     required String scheduleId,
     required String executionId,
-  }) {
-    return _api.deleteScheduleExecution(
+  }) async {
+    await _api.deleteScheduleExecution(
       scheduleId: scheduleId,
       executionId: executionId,
     );
+    schedules = await _api.schedules();
+    notifyListeners();
   }
 
   Future<void> _refreshConversationsOnly() async {

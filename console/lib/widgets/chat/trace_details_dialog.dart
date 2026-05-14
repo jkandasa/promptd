@@ -49,20 +49,28 @@ class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 14, 10, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 520;
+                  final title = Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       const Text('LLM Trace'),
-                      const SizedBox(width: 8),
                       Chip(
                         label: Text(
                           '${widget.trace.length} round${widget.trace.length == 1 ? '' : 's'}',
                         ),
                         visualDensity: VisualDensity.compact,
                       ),
-                      const Spacer(),
+                    ],
+                  );
+                  final actions = Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
                       Tooltip(
                         message: _markdownEnabled
                             ? 'Show trace messages as plain text'
@@ -86,7 +94,6 @@ class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
                           mouseCursor: SystemMouseCursors.click,
                         ),
                       ),
-                      const SizedBox(width: 6),
                       IconButton(
                         tooltip: 'Close',
                         onPressed: () => Navigator.of(context).pop(),
@@ -94,34 +101,89 @@ class _TraceDetailsDialogState extends State<TraceDetailsDialog> {
                         icon: const Icon(Icons.close_rounded),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 14,
-                    runSpacing: 6,
+                  );
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _HeaderMetric(
-                        icon: Icons.bolt_rounded,
-                        label: 'LLM ${_fmtMs(totals.llmMs)}',
-                        color: theme.colorScheme.primary,
+                      if (compact)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: title),
+                                IconButton(
+                                  tooltip: 'Close',
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  mouseCursor: SystemMouseCursors.click,
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                              ],
+                            ),
+                            Tooltip(
+                              message: _markdownEnabled
+                                  ? 'Show trace messages as plain text'
+                                  : 'Render trace messages as Markdown',
+                              child: FilterChip(
+                                avatar: Icon(
+                                  Icons.text_snippet_outlined,
+                                  size: 16,
+                                  color: _markdownEnabled
+                                      ? theme.colorScheme.onPrimary
+                                      : theme.colorScheme.onSurface.withValues(
+                                          alpha: 0.72,
+                                        ),
+                                ),
+                                label: const Text('Markdown'),
+                                selected: _markdownEnabled,
+                                onSelected: (value) {
+                                  setState(() => _markdownEnabled = value);
+                                },
+                                visualDensity: VisualDensity.compact,
+                                mouseCursor: SystemMouseCursors.click,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: title),
+                            actions,
+                          ],
+                        ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 14,
+                        runSpacing: 6,
+                        children: [
+                          _HeaderMetric(
+                            icon: Icons.bolt_rounded,
+                            label: 'LLM ${_fmtMs(totals.llmMs)}',
+                            color: theme.colorScheme.primary,
+                          ),
+                          if (totals.toolMs > 0)
+                            _HeaderMetric(
+                              icon: Icons.build_circle_outlined,
+                              label:
+                                  'Tools ${_fmtMs(totals.toolMs)} · ${totals.toolCalls} call${totals.toolCalls == 1 ? '' : 's'}',
+                              color: theme.colorScheme.tertiary,
+                            ),
+                          if (totals.prompt + totals.completion > 0)
+                            _HeaderTokenMetric(
+                              prompt: totals.prompt,
+                              completion: totals.completion,
+                              reasoning: totals.reasoning,
+                              cached: totals.cached,
+                            ),
+                        ],
                       ),
-                      if (totals.toolMs > 0)
-                        _HeaderMetric(
-                          icon: Icons.build_circle_outlined,
-                          label:
-                              'Tools ${_fmtMs(totals.toolMs)} · ${totals.toolCalls} call${totals.toolCalls == 1 ? '' : 's'}',
-                          color: theme.colorScheme.tertiary,
-                        ),
-                      if (totals.prompt + totals.completion > 0)
-                        _HeaderTokenMetric(
-                          prompt: totals.prompt,
-                          completion: totals.completion,
-                          reasoning: totals.reasoning,
-                          cached: totals.cached,
-                        ),
                     ],
-                  ),
-                ],
+                  );
+                },
               ),
             ),
             const Divider(height: 1),
@@ -195,9 +257,15 @@ class _TraceRound extends StatelessWidget {
       child: Column(
         children: [
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             color: headerColor,
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              alignment: WrapAlignment.start,
+              runAlignment: WrapAlignment.start,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Icon(
                   hasTools
@@ -206,26 +274,21 @@ class _TraceRound extends StatelessWidget {
                   size: 18,
                   color: borderColor,
                 ),
-                const SizedBox(width: 8),
                 Text('Round $index', style: theme.textTheme.titleMedium),
-                const SizedBox(width: 6),
                 Text(
-                  '— ${hasTools ? '${toolResults.length} tool call${toolResults.length == 1 ? '' : 's'}' : 'final answer'}',
+                  hasTools
+                      ? '${toolResults.length} tool call${toolResults.length == 1 ? '' : 's'}'
+                      : 'final answer',
                   style: theme.textTheme.bodySmall,
                 ),
-                const Spacer(),
                 _TraceTag(label: 'LLM ${_fmtMs(llmMs)}', color: _traceBlue),
-                if (hasTools) ...[
-                  const SizedBox(width: 6),
+                if (hasTools)
                   _TraceTag(
                     label: 'tools ${_fmtMs(toolMs)}',
                     color: _traceOrange,
                   ),
-                ],
-                if (prompt + completion > 0) ...[
-                  const SizedBox(width: 8),
+                if (prompt + completion > 0)
                   _TokenMiniMetric(prompt: prompt, completion: completion),
-                ],
               ],
             ),
           ),
@@ -339,11 +402,14 @@ class _TraceSectionState extends State<_TraceSection> {
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  widget.title,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (widget.trailing != null) ...[
@@ -494,9 +560,12 @@ class _InlineExpansionState extends State<_InlineExpansion> {
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.62),
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  widget.title,
-                  style: theme.textTheme.bodySmall?.copyWith(fontSize: 13),
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: theme.textTheme.bodySmall?.copyWith(fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
@@ -650,11 +719,16 @@ class _ToolCallCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(
-                  'id:${call['id'] ?? ''}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                    fontSize: 10,
+                Flexible(
+                  child: Text(
+                    'id:${call['id'] ?? ''}',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.55,
+                      ),
+                      fontSize: 10,
+                    ),
                   ),
                 ),
               ],
@@ -1667,28 +1741,63 @@ class _HeaderTokenMetric extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.bodySmall;
+    return Wrap(
+      spacing: 7,
+      runSpacing: 3,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _InlineMetric(
+          icon: Icons.arrow_upward_rounded,
+          label: '$prompt',
+          color: _traceBlue,
+          style: style,
+        ),
+        _InlineMetric(
+          icon: Icons.arrow_downward_rounded,
+          label: '$completion tok',
+          color: _traceGreen,
+          style: style,
+        ),
+        if (reasoning > 0)
+          _InlineMetric(
+            icon: Icons.psychology_alt_outlined,
+            label: '$reasoning reasoning',
+            color: _traceYellow,
+            style: style,
+          ),
+        if (cached > 0)
+          _InlineMetric(
+            icon: Icons.history_rounded,
+            label: '$cached cached',
+            color: _traceMuted,
+            style: style,
+          ),
+      ],
+    );
+  }
+}
+
+class _InlineMetric extends StatelessWidget {
+  const _InlineMetric({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.style,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.arrow_upward_rounded, size: 14, color: _traceBlue),
+        Icon(icon, size: 14, color: color),
         const SizedBox(width: 3),
-        Text('$prompt', style: style),
-        const SizedBox(width: 7),
-        Icon(Icons.arrow_downward_rounded, size: 14, color: _traceGreen),
-        const SizedBox(width: 3),
-        Text('$completion tok', style: style),
-        if (reasoning > 0) ...[
-          const SizedBox(width: 7),
-          Icon(Icons.psychology_alt_outlined, size: 14, color: _traceYellow),
-          const SizedBox(width: 3),
-          Text('$reasoning reasoning', style: style),
-        ],
-        if (cached > 0) ...[
-          const SizedBox(width: 7),
-          Icon(Icons.history_rounded, size: 14, color: _traceMuted),
-          const SizedBox(width: 3),
-          Text('$cached cached', style: style),
-        ],
+        Text(label, style: style),
       ],
     );
   }

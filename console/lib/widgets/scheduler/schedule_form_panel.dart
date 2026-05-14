@@ -25,12 +25,14 @@ class ScheduleFormPanel extends StatefulWidget {
     required this.initial,
     required this.onSaved,
     required this.onCancel,
+    this.onBack,
   });
 
   final PromptdAppState state;
   final Schedule? initial;
   final ValueChanged<Schedule> onSaved;
   final VoidCallback onCancel;
+  final VoidCallback? onBack;
 
   @override
   State<ScheduleFormPanel> createState() => _ScheduleFormPanelState();
@@ -130,6 +132,15 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
               padding: const EdgeInsets.fromLTRB(16, 14, 10, 12),
               child: Row(
                 children: [
+                  if (widget.onBack != null) ...[
+                    IconButton(
+                      tooltip: 'Back to schedules',
+                      onPressed: widget.onBack,
+                      mouseCursor: SystemMouseCursors.click,
+                      icon: const Icon(Icons.arrow_back_rounded),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   Expanded(
                     child: Text(
                       widget.initial == null
@@ -182,19 +193,21 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                     validator: _required('Prompt is required'),
                   ),
                   const SizedBox(height: 12),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'cron', label: Text('Recurring')),
-              ButtonSegment(value: 'once', label: Text('One-time')),
-            ],
-            selected: {_type},
-            onSelectionChanged: (value) {
-              setState(() => _type = value.first);
-            },
-            style: const ButtonStyle(
-              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-            ),
-          ),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'cron', label: Text('Recurring')),
+                      ButtonSegment(value: 'once', label: Text('One-time')),
+                    ],
+                    selected: {_type},
+                    onSelectionChanged: (value) {
+                      setState(() => _type = value.first);
+                    },
+                    style: const ButtonStyle(
+                      mouseCursor: WidgetStatePropertyAll(
+                        SystemMouseCursors.click,
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   if (_type == 'cron')
                     _cronField(theme)
@@ -340,7 +353,9 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                   TextButton(
                     onPressed: _saving ? null : widget.onCancel,
                     style: const ButtonStyle(
-                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                      mouseCursor: WidgetStatePropertyAll(
+                        SystemMouseCursors.click,
+                      ),
                     ),
                     child: const Text('Cancel'),
                   ),
@@ -348,7 +363,9 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                   FilledButton.icon(
                     onPressed: _saving ? null : _save,
                     style: const ButtonStyle(
-                      mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
+                      mouseCursor: WidgetStatePropertyAll(
+                        SystemMouseCursors.click,
+                      ),
                     ),
                     icon: _saving
                         ? const SizedBox.square(

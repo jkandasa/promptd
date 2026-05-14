@@ -19,54 +19,28 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
   String? _selectedId;
   Schedule? _editing;
   bool _creating = false;
+  bool _narrowDetailOpen = false;
 
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final theme = Theme.of(context);
-    final selected = _selectedSchedule(state.schedules);
     final showForm = _creating || _editing != null;
     final canWrite = state.me?.permissions.schedulesWrite ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Scheduler', style: theme.textTheme.headlineMedium),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Scheduled prompts from the connected Promptd server.',
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (canWrite && !showForm)
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: FilledButton.icon(
-                  onPressed: () => setState(() {
-                    _creating = true;
-                    _editing = null;
-                  }),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('New schedule'),
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 18),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 980;
+              final wide = constraints.maxWidth >= 1080;
+              final selected = _selectedSchedule(
+                state.schedules,
+                autoSelect: wide,
+              );
+              final showNarrowDetail =
+                  !wide &&
+                  (showForm || (_narrowDetailOpen && selected != null));
 
               Widget listPanel = ScheduleListPanel(
                 state: state,
@@ -75,16 +49,20 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
                   _selectedId = schedule.id;
                   _creating = false;
                   _editing = null;
+                  if (!wide) _narrowDetailOpen = true;
                 }),
                 onOpen: (schedule) => setState(() {
                   _selectedId = schedule.id;
                   _creating = false;
                   _editing = null;
+                  if (!wide) _narrowDetailOpen = true;
                 }),
                 onCreate: () => setState(() {
                   _creating = true;
                   _editing = null;
+                  _narrowDetailOpen = true;
                 }),
+                onRefresh: state.refreshSchedules,
               );
 
               Widget detailPanel;
@@ -92,16 +70,25 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
                 detailPanel = ScheduleFormPanel(
                   state: state,
                   initial: _editing,
+                  onBack: !wide
+                      ? () => setState(() {
+                          _creating = false;
+                          _editing = null;
+                          _narrowDetailOpen = false;
+                        })
+                      : null,
                   onSaved: (schedule) {
                     setState(() {
                       _selectedId = schedule.id;
                       _creating = false;
                       _editing = null;
+                      _narrowDetailOpen = !wide;
                     });
                   },
                   onCancel: () => setState(() {
                     _creating = false;
                     _editing = null;
+                    if (!wide && selected == null) _narrowDetailOpen = false;
                   }),
                 );
               } else if (selected != null) {
@@ -109,10 +96,14 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
                   state: state,
                   schedule: selected,
                   canWrite: canWrite,
+                  onBack: !wide
+                      ? () => setState(() => _narrowDetailOpen = false)
+                      : null,
                   onTrigger: () => state.triggerSchedule(selected.id),
                   onEdit: () => setState(() {
                     _editing = selected;
                     _creating = false;
+                    _narrowDetailOpen = true;
                   }),
                   onRefresh: () async {
                     await state.refreshSchedules();
@@ -120,38 +111,13 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
                     setState(() {});
                   },
                   onDelete: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Delete schedule?'),
-                        content: Text('Delete "${selected.name}"?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            style: const ButtonStyle(
-                              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-                            ),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            style: ButtonStyle(
-                              backgroundColor: WidgetStatePropertyAll(theme.colorScheme.error),
-                              foregroundColor: WidgetStatePropertyAll(theme.colorScheme.onError),
-                              mouseCursor: const WidgetStatePropertyAll(SystemMouseCursors.click),
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed != true || !mounted) return;
                     await state.deleteSchedule(selected.id);
                     if (!mounted) return;
                     setState(() {
                       _selectedId = null;
                       _editing = null;
                       _creating = false;
+                      _narrowDetailOpen = false;
                     });
                   },
                 );
@@ -163,13 +129,17 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
                       Icon(
                         Icons.event_repeat_rounded,
                         size: 64,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.2),
                       ),
                       const SizedBox(height: 16),
                       Text(
                         'Select a schedule to view details',
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.5),
                         ),
                       ),
                     ],
@@ -178,15 +148,7 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
               }
 
               if (!wide) {
-                final screenHeight = MediaQuery.sizeOf(context).height;
-                final listHeight = (screenHeight * 0.32).clamp(180.0, 300.0);
-                return Column(
-                  children: [
-                    SizedBox(height: listHeight, child: listPanel),
-                    const SizedBox(height: 14),
-                    Expanded(child: detailPanel),
-                  ],
-                );
+                return showNarrowDetail ? detailPanel : listPanel;
               }
 
               return Row(
@@ -204,13 +166,16 @@ class _SchedulerConsolePageState extends State<SchedulerConsolePage> {
     );
   }
 
-  Schedule? _selectedSchedule(List<Schedule> schedules) {
+  Schedule? _selectedSchedule(
+    List<Schedule> schedules, {
+    required bool autoSelect,
+  }) {
     if (schedules.isEmpty) return null;
     if (_selectedId != null) {
       for (final schedule in schedules) {
         if (schedule.id == _selectedId) return schedule;
       }
     }
-    return schedules.first;
+    return autoSelect ? schedules.first : null;
   }
 }
