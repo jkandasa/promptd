@@ -6,6 +6,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
 import '../chat/trace_details_dialog.dart';
+import '../common/app_ui.dart';
 
 class ScheduleDetailPanel extends StatefulWidget {
   const ScheduleDetailPanel({
@@ -512,13 +513,16 @@ class _ExecutionHistory extends StatelessWidget {
               }
               final executions = snapshot.data ?? const [];
               if (executions.isEmpty) {
-                return Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                    borderRadius: BorderRadius.circular(8),
+                return AppEmptyState(
+                  title: 'No executions yet',
+                  message: 'Run this schedule to build execution history.',
+                  icon: Icons.history_rounded,
+                  action: IconButton.filledTonal(
+                    tooltip: 'Refresh executions',
+                    onPressed: onRefresh,
+                    icon: const Icon(Icons.refresh_rounded),
+                    mouseCursor: SystemMouseCursors.click,
                   ),
-                  child: const Text('No executions yet'),
                 );
               }
               return Column(
@@ -556,11 +560,12 @@ class _ExecutionCardState extends State<_ExecutionCard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final statusColor = switch (widget.execution.status) {
-      'success' => Colors.green,
-      'error' => theme.colorScheme.error,
-      _ => theme.colorScheme.primary,
+    final statusTone = switch (widget.execution.status) {
+      'success' => AppTone.success,
+      'error' => AppTone.danger,
+      _ => AppTone.primary,
     };
+    final statusColor = appToneColor(theme, statusTone);
     return Container(
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
@@ -580,10 +585,7 @@ class _ExecutionCardState extends State<_ExecutionCard> {
                   children: [
                     Icon(Icons.circle, size: 9, color: statusColor),
                     const SizedBox(width: 7),
-                    Text(
-                      widget.execution.status,
-                      style: theme.textTheme.labelLarge,
-                    ),
+                    AppPill(label: widget.execution.status, tone: statusTone),
                     const SizedBox(width: 8),
                     Flexible(
                       child: Tooltip(

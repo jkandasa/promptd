@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../models/promptd_models.dart';
 import '../../services/file_downloader.dart';
 import '../../theme/app_theme.dart';
+import '../common/app_ui.dart';
 import 'trace_details_dialog.dart';
 
 class MessageBubble extends StatefulWidget {
@@ -179,24 +180,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             ),
             const SizedBox(width: 6),
             if (isCompact)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                  color: compactAccent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: compactAccent.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Text(
-                  'Compacted summary',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: compactAccent,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              )
+              const AppPill(label: 'Compacted summary', tone: AppTone.warning)
             else
               Text(
                 _roleLabel(message.role),
@@ -401,25 +385,18 @@ class _MessageBubbleState extends State<MessageBubble> {
 }
 
 Color _softErrorColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.surface,
-    theme.colorScheme.error,
-    theme.brightness == Brightness.dark ? 0.16 : 0.08,
-  )!;
+  return appToneFill(theme, AppTone.danger);
 }
 
 Color _softErrorBorderColor(ThemeData theme) {
-  return theme.colorScheme.error.withValues(
-    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
-  );
+  return appToneColor(
+    theme,
+    AppTone.danger,
+  ).withValues(alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22);
 }
 
 Color _softErrorAccentColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.error,
-    theme.colorScheme.onSurface,
-    theme.brightness == Brightness.dark ? 0.18 : 0.08,
-  )!;
+  return appToneColor(theme, AppTone.danger);
 }
 
 Color _userBubbleColor(ThemeData theme) {

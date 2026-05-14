@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/promptd_models.dart';
 import '../state/promptd_app_state.dart';
+import '../widgets/common/app_ui.dart';
 
 enum _ToolSortColumn { name, parameters, required, inbuilt }
 
@@ -41,7 +42,6 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final tools = _filteredTools();
     final toolsWithParams = _cachedToolsWithParams;
     final simpleTools = _cachedSimpleTools;
@@ -60,51 +60,34 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
             _ToolsTopBar(compact: isSmall),
             const SizedBox(height: 16),
             Expanded(
-              child: Padding(
-                padding: EdgeInsets.all(isSmall ? 12 : 18),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(isSmall ? 12 : 18),
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                    boxShadow: [
-                      BoxShadow(
-                        color: theme.shadowColor.withValues(alpha: 0.04),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: EdgeInsets.all(isSmall ? 12 : 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _ToolsPanelHeader(
-                          stacked: isNarrow,
-                          shownCount: tools.length,
-                          totalCount: widget.state.tools.length,
-                          toolsWithParams: toolsWithParams,
-                          simpleTools: simpleTools,
-                          filter: _filter,
-                          searchController: _searchController,
-                          loading: widget.state.loadingData,
-                          onFilterChanged: (value) {
-                            setState(() => _filter = value);
-                          },
-                          onSearchChanged: () => setState(() {}),
-                          onRefresh: widget.state.refreshAppData,
-                        ),
-                        const SizedBox(height: 16),
-                        Expanded(
-                          child: _buildToolsContent(
-                            isSmall: isSmall,
-                            tools: tools,
-                          ),
-                        ),
-                      ],
+              child: AppSurface(
+                margin: EdgeInsets.all(isSmall ? 12 : 18),
+                padding: EdgeInsets.all(isSmall ? 12 : 16),
+                radius: isSmall ? 12 : 18,
+                elevated: !isSmall,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ToolsPanelHeader(
+                      stacked: isNarrow,
+                      shownCount: tools.length,
+                      totalCount: widget.state.tools.length,
+                      toolsWithParams: toolsWithParams,
+                      simpleTools: simpleTools,
+                      filter: _filter,
+                      searchController: _searchController,
+                      loading: widget.state.loadingData,
+                      onFilterChanged: (value) {
+                        setState(() => _filter = value);
+                      },
+                      onSearchChanged: () => setState(() {}),
+                      onRefresh: widget.state.refreshAppData,
                     ),
-                  ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: _buildToolsContent(isSmall: isSmall, tools: tools),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -122,23 +105,23 @@ class _ToolsConsolePageState extends State<ToolsConsolePage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (widget.state.tools.isEmpty) {
-      return const Center(child: Text('No tools registered'));
+      return const AppEmptyState(
+        title: 'No tools registered',
+        message: 'Tools exposed by the connected server will appear here.',
+        icon: Icons.build_circle_outlined,
+      );
     }
     if (tools.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('No matching tools'),
-            const SizedBox(height: 10),
-            TextButton(
-              onPressed: () {
-                _searchController.clear();
-                setState(() => _filter = 'all');
-              },
-              child: const Text('Clear filters'),
-            ),
-          ],
+      return AppEmptyState(
+        title: 'No matching tools',
+        message: 'Try a different search term or filter.',
+        icon: Icons.search_off_rounded,
+        action: TextButton(
+          onPressed: () {
+            _searchController.clear();
+            setState(() => _filter = 'all');
+          },
+          child: const Text('Clear filters'),
         ),
       );
     }
@@ -238,19 +221,12 @@ class _ToolsTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final title = Text(
-      'Available Tools',
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: compact
-          ? theme.textTheme.titleLarge
-          : theme.textTheme.headlineMedium,
-    );
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [Expanded(child: title)],
+    return AppSectionHeader(
+      title: 'Available Tools',
+      subtitle: compact
+          ? null
+          : 'Browse tool definitions exposed by the server.',
+      compact: compact,
     );
   }
 }
@@ -371,19 +347,19 @@ class _ToolsPanelControls extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _ToolFilterChip(
+              AppChoiceChip(
                 label: 'All',
                 count: totalCount,
                 selected: filter == 'all',
                 onSelected: () => onFilterChanged('all'),
               ),
-              _ToolFilterChip(
+              AppChoiceChip(
                 label: 'Configurable',
                 count: toolsWithParams,
                 selected: filter == 'configurable',
                 onSelected: () => onFilterChanged('configurable'),
               ),
-              _ToolFilterChip(
+              AppChoiceChip(
                 label: 'Simple',
                 count: simpleTools,
                 selected: filter == 'simple',
@@ -500,73 +476,6 @@ class _CatalogRefreshButton extends StatelessWidget {
               : const Icon(Icons.refresh_rounded),
         ),
       ),
-    );
-  }
-}
-
-class _ToolFilterChip extends StatelessWidget {
-  const _ToolFilterChip({
-    required this.label,
-    required this.count,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final String label;
-  final int count;
-  final bool selected;
-  final VoidCallback onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final selectedBackground = theme.colorScheme.primaryContainer.withValues(
-      alpha: 0.72,
-    );
-    final selectedForeground = theme.colorScheme.onPrimaryContainer;
-
-    return ChoiceChip(
-      showCheckmark: false,
-      selected: selected,
-      label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label),
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: selected
-                  ? theme.colorScheme.primary.withValues(alpha: 0.14)
-                  : theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              '$count',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: selected
-                    ? selectedForeground
-                    : theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-      labelStyle: theme.textTheme.labelLarge?.copyWith(
-        color: selected ? selectedForeground : theme.colorScheme.onSurface,
-        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-      ),
-      backgroundColor: theme.colorScheme.surface,
-      selectedColor: selectedBackground,
-      side: BorderSide(
-        color: selected
-            ? theme.colorScheme.primary.withValues(alpha: 0.42)
-            : theme.colorScheme.outlineVariant,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      visualDensity: VisualDensity.compact,
-      onSelected: (_) => onSelected(),
     );
   }
 }

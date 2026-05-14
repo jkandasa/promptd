@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../state/promptd_app_state.dart';
 import '../widgets/brand_mark.dart';
+import '../widgets/common/app_ui.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.state});
@@ -232,55 +233,10 @@ class _LoginError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _softErrorColor(theme),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _softErrorBorderColor(theme)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.error_outline_rounded,
-            color: _softErrorAccentColor(theme),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return AppNotice(
+      message: message,
+      tone: AppTone.danger,
+      icon: Icons.error_outline_rounded,
     );
   }
-}
-
-Color _softErrorColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.surface,
-    theme.colorScheme.error,
-    theme.brightness == Brightness.dark ? 0.16 : 0.08,
-  )!;
-}
-
-Color _softErrorBorderColor(ThemeData theme) {
-  return theme.colorScheme.error.withValues(
-    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
-  );
-}
-
-Color _softErrorAccentColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.error,
-    theme.colorScheme.onSurface,
-    theme.brightness == Brightness.dark ? 0.18 : 0.08,
-  )!;
 }

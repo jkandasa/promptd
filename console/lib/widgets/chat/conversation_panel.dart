@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
+import '../common/app_ui.dart';
 
 class ConversationPanel extends StatelessWidget {
   const ConversationPanel({super.key, required this.state, this.onSelected});
@@ -287,15 +288,10 @@ class _EmptyConversations extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Text(
-          'No conversations yet',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-      ),
+    return const AppEmptyState(
+      title: 'No conversations yet',
+      message: 'Start a new chat to keep history here.',
+      icon: Icons.chat_bubble_outline_rounded,
     );
   }
 }

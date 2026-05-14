@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../common/app_ui.dart';
+
 const _traceBlue = Color(0xff1677ff);
 const _traceGreen = Color(0xff52c41a);
 const _traceOrange = Color(0xfffa8c16);
@@ -1872,25 +1874,18 @@ Color _warningWellColor(ThemeData theme) {
 }
 
 Color _softErrorColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.surface,
-    theme.colorScheme.error,
-    theme.brightness == Brightness.dark ? 0.16 : 0.08,
-  )!;
+  return appToneFill(theme, AppTone.danger);
 }
 
 Color _softErrorBorderColor(ThemeData theme) {
-  return theme.colorScheme.error.withValues(
-    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
-  );
+  return appToneColor(
+    theme,
+    AppTone.danger,
+  ).withValues(alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22);
 }
 
 Color _softErrorAccentColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.error,
-    theme.colorScheme.onSurface,
-    theme.brightness == Brightness.dark ? 0.18 : 0.08,
-  )!;
+  return appToneColor(theme, AppTone.danger);
 }
 
 List<dynamic> _list(Object? value) {

@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
 import '../brand_mark.dart';
+import '../common/app_ui.dart';
 import '../search_select_field.dart';
 import 'message_bubble.dart';
 
@@ -96,33 +97,8 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
           ),
           if (state.error != null)
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              decoration: BoxDecoration(
-                color: _softErrorColor(theme),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _softErrorBorderColor(theme)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.error_outline_rounded,
-                    size: 16,
-                    color: _softErrorAccentColor(theme),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      state.error!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              child: AppNotice(message: state.error!, tone: AppTone.danger),
             ),
           const Divider(height: 1),
           Padding(
@@ -508,28 +484,6 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
     }
     promptController.dispose();
   }
-}
-
-Color _softErrorColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.surface,
-    theme.colorScheme.error,
-    theme.brightness == Brightness.dark ? 0.16 : 0.08,
-  )!;
-}
-
-Color _softErrorBorderColor(ThemeData theme) {
-  return theme.colorScheme.error.withValues(
-    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
-  );
-}
-
-Color _softErrorAccentColor(ThemeData theme) {
-  return Color.lerp(
-    theme.colorScheme.error,
-    theme.colorScheme.onSurface,
-    theme.brightness == Brightness.dark ? 0.18 : 0.08,
-  )!;
 }
 
 class _SendMessageIntent extends Intent {

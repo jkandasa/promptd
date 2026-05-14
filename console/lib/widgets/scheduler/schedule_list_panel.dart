@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
+import '../common/app_ui.dart';
 
 class ScheduleListPanel extends StatefulWidget {
   const ScheduleListPanel({
@@ -290,17 +291,17 @@ class _ScheduleToolbar extends StatelessWidget {
           runSpacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _ChoicePill(
+            AppChoiceChip(
               label: 'All',
               selected: statusFilter == 'all',
               onSelected: () => onStatusChanged('all'),
             ),
-            _ChoicePill(
+            AppChoiceChip(
               label: 'Active',
               selected: statusFilter == 'enabled',
               onSelected: () => onStatusChanged('enabled'),
             ),
-            _ChoicePill(
+            AppChoiceChip(
               label: 'Disabled',
               selected: statusFilter == 'disabled',
               onSelected: () => onStatusChanged('disabled'),
@@ -354,37 +355,6 @@ class _ScheduleToolbar extends StatelessWidget {
       'nextRun' => 'Next run',
       _ => 'Default',
     };
-  }
-}
-
-class _ChoicePill extends StatelessWidget {
-  const _ChoicePill({
-    required this.label,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return ChoiceChip(
-      label: Text(label),
-      selected: selected,
-      onSelected: (_) => onSelected(),
-      visualDensity: VisualDensity.compact,
-      mouseCursor: SystemMouseCursors.click,
-      selectedColor: theme.colorScheme.primary,
-      labelStyle: theme.textTheme.labelMedium?.copyWith(
-        color: selected
-            ? theme.colorScheme.onPrimary
-            : theme.colorScheme.onSurface,
-      ),
-      checkmarkColor: theme.colorScheme.onPrimary,
-    );
   }
 }
 
@@ -488,8 +458,16 @@ class _ScheduleTile extends StatelessWidget {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(schedule.name, style: theme.textTheme.titleMedium),
-                  _StatusChip(enabled: schedule.enabled),
-                  _TypeChip(type: schedule.type),
+                  AppPill(
+                    label: schedule.enabled ? 'enabled' : 'disabled',
+                    tone: schedule.enabled ? AppTone.success : AppTone.warning,
+                  ),
+                  AppPill(
+                    label: schedule.type,
+                    tone: schedule.type == 'cron'
+                        ? AppTone.primary
+                        : AppTone.warning,
+                  ),
                 ],
               ),
               const SizedBox(height: 4),
@@ -546,8 +524,18 @@ class _ScheduleTile extends StatelessWidget {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(schedule.name, style: theme.textTheme.titleSmall),
-                      _StatusChip(enabled: schedule.enabled),
-                      _TypeChip(type: schedule.type),
+                      AppPill(
+                        label: schedule.enabled ? 'enabled' : 'disabled',
+                        tone: schedule.enabled
+                            ? AppTone.success
+                            : AppTone.warning,
+                      ),
+                      AppPill(
+                        label: schedule.type,
+                        tone: schedule.type == 'cron'
+                            ? AppTone.primary
+                            : AppTone.warning,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 5),
@@ -613,62 +601,6 @@ class _ScheduleTile extends StatelessWidget {
   }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.enabled});
-
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = enabled ? Colors.green : Colors.orange;
-    final textColor = enabled
-        ? Colors.green.shade700
-        : theme.brightness == Brightness.dark
-        ? Colors.orange.shade200
-        : Colors.orange.shade800;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: enabled ? 0.12 : 0.18),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.42)),
-      ),
-      child: Text(
-        enabled ? 'enabled' : 'disabled',
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: textColor,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-class _TypeChip extends StatelessWidget {
-  const _TypeChip({required this.type});
-
-  final String type;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = type == 'cron' ? theme.colorScheme.primary : Colors.purple;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.26)),
-      ),
-      child: Text(
-        type,
-        style: theme.textTheme.labelSmall?.copyWith(color: color),
-      ),
-    );
-  }
-}
-
 class _MetaText extends StatelessWidget {
   const _MetaText(this.label, this.value);
 
@@ -703,32 +635,17 @@ class _EmptySchedules extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.event_repeat_rounded,
-              size: 58,
-              color: Theme.of(
-                context,
-              ).colorScheme.onSurface.withValues(alpha: 0.22),
-            ),
-            const SizedBox(height: 12),
-            const Text('No schedules configured'),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: onCreate,
-              style: const ButtonStyle(
-                mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-              ),
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Create first schedule'),
-            ),
-          ],
+    return AppEmptyState(
+      title: 'No schedules configured',
+      message: 'Create a scheduled prompt to run it automatically.',
+      icon: Icons.event_repeat_rounded,
+      action: FilledButton.icon(
+        onPressed: onCreate,
+        style: const ButtonStyle(
+          mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
         ),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Create first schedule'),
       ),
     );
   }
@@ -741,23 +658,16 @@ class _NoFilterMatches extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('No schedules match the current filters'),
-            const SizedBox(height: 10),
-            TextButton(
-              onPressed: onClear,
-              style: const ButtonStyle(
-                mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-              ),
-              child: const Text('Clear filters'),
-            ),
-          ],
+    return AppEmptyState(
+      title: 'No schedules match the current filters',
+      message: 'Try a different search, status, or sort option.',
+      icon: Icons.search_off_rounded,
+      action: TextButton(
+        onPressed: onClear,
+        style: const ButtonStyle(
+          mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
         ),
+        child: const Text('Clear filters'),
       ),
     );
   }

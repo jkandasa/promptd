@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/promptd_models.dart';
 import '../../state/promptd_app_state.dart';
+import '../common/app_ui.dart';
 import '../search_select_field.dart';
 
 const _cronPresets = <({String label, String value})>[
@@ -407,14 +408,12 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
           runSpacing: 6,
           children: [
             for (final preset in _cronPresets)
-              ChoiceChip(
-                label: Text(preset.label),
+              AppChoiceChip(
+                label: preset.label,
                 selected: _cronController.text == preset.value,
-                onSelected: (_) {
+                onSelected: () {
                   setState(() => _cronController.text = preset.value);
                 },
-                visualDensity: VisualDensity.compact,
-                mouseCursor: SystemMouseCursors.click,
               ),
           ],
         ),
@@ -484,14 +483,12 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
           spacing: 6,
           children: [
             for (final preset in _retainPresets)
-              ChoiceChip(
-                label: Text(preset == 0 ? 'All' : '$preset'),
+              AppChoiceChip(
+                label: preset == 0 ? 'All' : '$preset',
                 selected: _retainController.text == '$preset',
-                onSelected: (_) {
+                onSelected: () {
                   setState(() => _retainController.text = '$preset');
                 },
-                visualDensity: VisualDensity.compact,
-                mouseCursor: SystemMouseCursors.click,
               ),
           ],
         ),
