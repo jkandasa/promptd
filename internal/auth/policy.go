@@ -46,32 +46,33 @@ func (p *Permissions) Merge(other Permissions) {
 }
 
 type StringPolicy struct {
-	Allow []string `yaml:"allow"`
+	Allow []string `yaml:"allow" json:"allow"`
 }
 
 type Role struct {
-	SuperAdmin    bool         `yaml:"super_admin"`
-	Permissions   Permissions  `yaml:"permissions"`
-	Models        StringPolicy `yaml:"models"`
-	Tools         StringPolicy `yaml:"tools"`
-	SystemPrompts StringPolicy `yaml:"system_prompts"`
+	SuperAdmin    bool         `yaml:"super_admin" json:"super_admin"`
+	Permissions   Permissions  `yaml:"permissions" json:"permissions"`
+	Models        StringPolicy `yaml:"models" json:"models"`
+	Tools         StringPolicy `yaml:"tools" json:"tools"`
+	SystemPrompts StringPolicy `yaml:"system_prompts" json:"system_prompts"`
 }
 
 type ServiceToken struct {
-	ID        string `yaml:"id"`
-	TokenHash string `yaml:"token_hash"`
-	ExpiresAt string `yaml:"expires_at,omitempty"`
-	NotBefore string `yaml:"not_before,omitempty"`
-	Disabled  bool   `yaml:"disabled,omitempty"`
+	ID        string `yaml:"id" json:"id"`
+	TokenHash string `yaml:"token_hash" json:"-"`
+	ExpiresAt string `yaml:"expires_at,omitempty" json:"expires_at,omitempty"`
+	NotBefore string `yaml:"not_before,omitempty" json:"not_before,omitempty"`
+	Disabled  bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 type User struct {
-	ID            string         `yaml:"id"`
-	TenantID      string         `yaml:"tenant_id"`
-	PasswordHash  string         `yaml:"password_hash,omitempty"`
-	Roles         []string       `yaml:"roles"`
-	ServiceTokens []ServiceToken `yaml:"service_tokens,omitempty"`
-	Disabled      bool           `yaml:"disabled,omitempty"`
+	ID                 string         `yaml:"id" json:"id"`
+	TenantID           string         `yaml:"tenant_id" json:"tenant_id"`
+	PasswordHash       string         `yaml:"password_hash,omitempty" json:"-"`
+	Roles              []string       `yaml:"roles" json:"roles"`
+	ServiceTokens      []ServiceToken `yaml:"service_tokens,omitempty" json:"service_tokens,omitempty"`
+	Disabled           bool           `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	MustChangePassword bool           `yaml:"must_change_password,omitempty" json:"must_change_password"`
 }
 
 type ResourceScope struct {

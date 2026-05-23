@@ -377,6 +377,7 @@ type Handler struct {
 	store               *chat.SessionStore
 	storageStore        storage.Store
 	authService         *auth.Service
+	systemPromptStore   *SystemPromptStore
 	log                 *zap.Logger
 	staticFS            fs.FS
 	uiConfig            UIConfig
@@ -418,7 +419,7 @@ type SystemPromptInfo struct {
 }
 
 // New creates a Handler.
-func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, compactConfig CompactConversationConfig, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, authService *auth.Service, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadRoot string, traceEnabled bool) *Handler {
+func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, compactConfig CompactConversationConfig, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, authService *auth.Service, systemPromptStore *SystemPromptStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadRoot string, traceEnabled bool) *Handler {
 	if err := os.MkdirAll(uploadRoot, 0755); err != nil {
 		log.Fatal("failed to create upload directory", zap.String("dir", uploadRoot), zap.Error(err))
 	}
@@ -431,6 +432,7 @@ func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSy
 		store:               store,
 		storageStore:        storageStore,
 		authService:         authService,
+		systemPromptStore:   systemPromptStore,
 		log:                 log,
 		staticFS:            staticFS,
 		uiConfig:            uiConfig,
@@ -2163,13 +2165,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	me := h.authService.ToMeResponse(principal)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":     me.UserID,
-		"tenant_id":   me.TenantID,
-		"roles":       me.Roles,
-		"permissions": me.Permissions,
-		"super_admin": me.SuperAdmin,
-		"token":       token,
-		"expires_at":  expiresAt.Format(time.RFC3339),
+		"user_id":              me.UserID,
+		"tenant_id":            me.TenantID,
+		"roles":                me.Roles,
+		"permissions":          me.Permissions,
+		"super_admin":          me.SuperAdmin,
+		"must_change_password": me.MustChangePassword,
+		"token":                token,
+		"expires_at":           expiresAt.Format(time.RFC3339),
 	})
 }
 
@@ -2185,6 +2188,189 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.authService.ToMeResponse(principal))
+}
+
+func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) (*auth.Principal, bool) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return nil, false
+	}
+	if !principal.Policy.SuperAdmin && !principal.Policy.Permissions.Admin {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "admin permission required"})
+		return nil, false
+	}
+	return principal, true
+}
+
+func (h *Handler) ListAuthConfig(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers(), "roles": h.authService.ListRoles()})
+}
+
+func (h *Handler) SaveUser(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	var req struct {
+		ID       string   `json:"id"`
+		TenantID string   `json:"tenant_id"`
+		Password string   `json:"password"`
+		Roles    []string `json:"roles"`
+		Disabled bool     `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.authService.SaveUser(auth.User{ID: req.ID, TenantID: req.TenantID, Roles: req.Roles, Disabled: req.Disabled}, req.Password); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers()})
+}
+
+func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if id == principal.Scope.UserID {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "cannot delete current user"})
+		return
+	}
+	if err := h.authService.DeleteUser(id); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers()})
+}
+
+func (h *Handler) SaveRole(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	var req struct {
+		Name string    `json:"name"`
+		Role auth.Role `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.authService.SaveRole(req.Name, req.Role); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"roles": h.authService.ListRoles()})
+}
+
+func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	if err := h.authService.DeleteRole(r.PathValue("name")); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"roles": h.authService.ListRoles()})
+}
+
+func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.authService.ChangePassword(principal.Scope.UserID, req.CurrentPassword, req.NewPassword); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, auth.ErrUnauthorized) {
+			status = http.StatusUnauthorized
+		}
+		writeJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) ListSystemPrompts(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	items := make([]ManagedSystemPrompt, 0, len(h.systemPrompts))
+	for name, content := range h.systemPrompts {
+		items = append(items, ManagedSystemPrompt{Name: name, Content: content})
+	}
+	sortPrompts(items)
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (h *Handler) SaveSystemPrompt(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	var item ManagedSystemPrompt
+	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	items := make([]ManagedSystemPrompt, 0, len(h.systemPrompts)+1)
+	found := false
+	for name, content := range h.systemPrompts {
+		if name == item.Name {
+			items = append(items, item)
+			found = true
+		} else {
+			items = append(items, ManagedSystemPrompt{Name: name, Content: content})
+		}
+	}
+	if !found {
+		items = append(items, item)
+	}
+	if err := h.systemPromptStore.Save(items); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	h.systemPrompts, h.uiConfig.SystemPrompts = SystemPromptMap(items)
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (h *Handler) DeleteSystemPrompt(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	name := r.PathValue("name")
+	items := make([]ManagedSystemPrompt, 0, len(h.systemPrompts))
+	for promptName, content := range h.systemPrompts {
+		if promptName != name {
+			items = append(items, ManagedSystemPrompt{Name: promptName, Content: content})
+		}
+	}
+	if len(items) == len(h.systemPrompts) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "system prompt not found"})
+		return
+	}
+	if len(items) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "at least one system prompt is required"})
+		return
+	}
+	if err := h.systemPromptStore.Save(items); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	h.systemPrompts, h.uiConfig.SystemPrompts = SystemPromptMap(items)
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (h *Handler) UIConfig(w http.ResponseWriter, r *http.Request) {

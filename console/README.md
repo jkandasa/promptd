@@ -13,14 +13,31 @@ Targets generated:
 - Windows
 - Web
 
-Run locally:
+## Embedding in the binary
+
+The Flutter web build can be embedded into the `promptd` binary instead of the default React web UI. Run from the repo root:
+
+```bash
+make build-with-console
+# equivalent: make build WITH_CONSOLE=1
+```
+
+This builds the Flutter web release (`console/build/web/`) and copies it into `internal/ui/dist` before compiling the Go binary. The resulting `promptd` binary serves the Flutter console at `/`.
+
+To build just the Flutter web assets without compiling Go:
+
+```bash
+make console-ui
+```
+
+## Running locally
 
 ```bash
 cd console
 make run-web
 ```
 
-Available targets:
+## Available targets
 
 - `make pub`
 - `make run-web`

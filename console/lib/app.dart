@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'pages/chat_console_page.dart';
+import 'pages/admin_console_page.dart';
+import 'pages/change_password_page.dart';
 import 'pages/login_page.dart';
 import 'pages/scheduler_console_page.dart';
 import 'pages/tools_console_page.dart';
@@ -75,6 +77,9 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
           if (!_state.isAuthenticated) {
             return _WebSelectable(child: LoginPage(state: _state));
           }
+          if (_state.me!.mustChangePassword) {
+            return _WebSelectable(child: ChangePasswordPage(state: _state));
+          }
           return _WebSelectable(
             child: AppShell(
               section: _state.section,
@@ -90,6 +95,7 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
                 ConsoleSection.chat => ChatConsolePage(state: _state),
                 ConsoleSection.scheduler => SchedulerConsolePage(state: _state),
                 ConsoleSection.tools => ToolsConsolePage(state: _state),
+                ConsoleSection.admin => AdminConsolePage(state: _state),
               },
             ),
           );

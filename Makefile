@@ -21,11 +21,29 @@ LDFLAGS    := -s -w \
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
+# Pass WITH_CONSOLE=1 (or use build-with-console) to embed the Flutter console
+# instead of the default React/Yarn web UI.
+WITH_CONSOLE ?= 0
+
 .PHONY: ui
 ui:
+ifeq ($(WITH_CONSOLE),1)
+	$(MAKE) console-ui
+else
+	$(MAKE) web-ui
+endif
+
+.PHONY: web-ui
+web-ui:
 	cd web && yarn install --immutable && yarn build
 	rm -rf internal/ui/dist
 	cp -r web/dist internal/ui/dist
+
+.PHONY: console-ui
+console-ui:
+	cd console && flutter build web --release -O4 --no-source-maps
+	rm -rf internal/ui/dist
+	cp -r console/build/web internal/ui/dist
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -44,6 +62,11 @@ run-go:
 build: ui
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) $(CMD)
 
+# Build with the Flutter console UI embedded instead of the default web UI.
+.PHONY: build-with-console
+build-with-console:
+	$(MAKE) build WITH_CONSOLE=1
+
 .PHONY: docker-build
 docker-build: build
 	docker build --build-arg BINARY_PATH=./$(BIN) -t $(IMAGE) .
@@ -53,6 +76,7 @@ clean:
 	rm -f $(BIN)
 	rm -rf internal/ui/dist
 	rm -rf web/dist
+	rm -rf console/build/web
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 

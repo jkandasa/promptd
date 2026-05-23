@@ -527,50 +527,106 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
 
   Widget _allowedToolsField(ThemeData theme) {
     if (widget.state.tools.isEmpty) return const SizedBox.shrink();
+    final selected = _allowedTools.toList()..sort();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Allowed tools', style: theme.textTheme.labelLarge),
-        const SizedBox(height: 4),
-        Text(
-          _allowedTools.isEmpty
-              ? 'All tools are allowed.'
-              : '${_allowedTools.length} selected.',
-          style: theme.textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            FilterChip(
-              label: const Text('All tools'),
-              selected: _allowedTools.isEmpty,
-              onSelected: (_) => setState(() => _allowedTools.clear()),
-              mouseCursor: SystemMouseCursors.click,
+        InkWell(
+          onTap: _showAllowedToolsDialog,
+          mouseCursor: SystemMouseCursors.click,
+          borderRadius: BorderRadius.circular(12),
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Allowed tools',
+              helperText: 'Leave as all tools unless this schedule needs limits.',
+              suffixIcon: Icon(Icons.arrow_drop_down_rounded),
             ),
-            for (final tool in [
-              ...widget.state.tools,
-            ]..sort((a, b) => a.name.compareTo(b.name)))
-              FilterChip(
-                label: Text(tool.name),
-                selected: _allowedTools.contains(tool.name),
-                tooltip: tool.description,
-                onSelected: (selected) {
-                  setState(() {
-                    if (selected) {
-                      _allowedTools.add(tool.name);
-                    } else {
-                      _allowedTools.remove(tool.name);
-                    }
-                  });
-                },
-                mouseCursor: SystemMouseCursors.click,
-              ),
-          ],
+            child: Text(
+              _allowedTools.isEmpty
+                  ? 'All tools'
+                  : selected.take(4).join(', ') +
+                        (selected.length > 4 ? ' +${selected.length - 4} more' : ''),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyLarge,
+            ),
+          ),
         ),
       ],
     );
+  }
+
+  Future<void> _showAllowedToolsDialog() async {
+    final tools = [...widget.state.tools]..sort((a, b) => a.name.compareTo(b.name));
+    final selected = {..._allowedTools};
+    final searchController = TextEditingController();
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final query = searchController.text.trim().toLowerCase();
+          final visible = tools.where((tool) {
+            return query.isEmpty ||
+                tool.name.toLowerCase().contains(query) ||
+                tool.description.toLowerCase().contains(query);
+          }).toList();
+          return AlertDialog(
+            title: const Text('Allowed tools'),
+            content: SizedBox(
+              width: 520,
+              height: 520,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchController,
+                    decoration: const InputDecoration(
+                      hintText: 'Search tools',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  CheckboxListTile(
+                    value: selected.isEmpty,
+                    title: const Text('All tools'),
+                    subtitle: const Text('No explicit tool restriction'),
+                    onChanged: (_) => setDialogState(selected.clear),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: visible.length,
+                      itemBuilder: (context, index) {
+                        final tool = visible[index];
+                        return CheckboxListTile(
+                          value: selected.contains(tool.name),
+                          title: Text(tool.name),
+                          subtitle: tool.description.isEmpty
+                              ? null
+                              : Text(tool.description, maxLines: 2, overflow: TextOverflow.ellipsis),
+                          onChanged: (value) => setDialogState(() {
+                            if (value == true) {
+                              selected.add(tool.name);
+                            } else {
+                              selected.remove(tool.name);
+                            }
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(context, selected), child: const Text('Apply')),
+            ],
+          );
+        },
+      ),
+    );
+    searchController.dispose();
+    if (result != null) setState(() => _allowedTools = result);
   }
 
   Widget _paramsGrid(ThemeData theme) {

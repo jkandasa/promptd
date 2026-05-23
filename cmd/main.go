@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -120,13 +121,20 @@ func runServe(configPath string) error {
 	go mcpManager.StartHealthMonitor(ctx) // StartHealthMonitor spawns its own goroutine internally
 
 	systemPrompts, systemPromptInfos, defaultSystemPrompt := appconfig.LoadSystemPrompts(cfg, logger)
+	systemPromptStore := handler.NewSystemPromptStore(filepath.Join(dataDir, "system-prompts.yaml"))
+	managedPrompts, err := systemPromptStore.LoadOrBootstrap(systemPrompts)
+	if err != nil {
+		logger.Fatal("failed to initialize system prompt store", zap.Error(err))
+	}
+	systemPrompts, systemPromptInfos = handler.SystemPromptMap(managedPrompts)
 
 	st, err := storage.NewYAMLStore(dataDir)
 	if err != nil {
 		logger.Fatal("failed to create storage", zap.String("dir", dataDir), zap.Error(err))
 	}
 	store := chat.NewSessionStore(st)
-	authService, err := auth.NewService(auth.Config{JWT: cfg.Auth.JWT, Users: cfg.Auth.Users}, cfg.Roles)
+	authStore := auth.NewStore(filepath.Join(dataDir, "auth.yaml"))
+	authService, err := auth.NewService(auth.Config{JWT: cfg.Auth.JWT, Users: cfg.Auth.Users}, cfg.Roles, authStore, logger)
 	if err != nil {
 		logger.Fatal("failed to initialize auth service", zap.Error(err))
 	}
@@ -144,7 +152,7 @@ func runServe(configPath string) error {
 		AfterMessages: uiConfig.CompactConversation.AfterMessages,
 		AfterTokens:   uiConfig.CompactConversation.AfterTokens,
 	}
-	h := handler.New(providerRegistry, systemPrompts, defaultSystemPrompt, compactConfig, registry, store, st, authService, logger, ui.FS(), uiConfig, uploadRoot, traceEnabled)
+	h := handler.New(providerRegistry, systemPrompts, defaultSystemPrompt, compactConfig, registry, store, st, authService, systemPromptStore, logger, ui.FS(), uiConfig, uploadRoot, traceEnabled)
 	appcore.StartAutoDiscover(ctx, h, cfg, logger)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 

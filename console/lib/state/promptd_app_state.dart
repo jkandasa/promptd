@@ -35,6 +35,8 @@ class PromptdAppState extends ChangeNotifier {
   List<ChatMessage> messages = const [];
   List<ToolInfo> tools = const [];
   List<Schedule> schedules = const [];
+  AdminAuthConfig adminAuthConfig = const AdminAuthConfig();
+  List<ManagedSystemPrompt> managedSystemPrompts = const [];
   ConsoleSection section = ConsoleSection.chat;
   String? selectedConversationId;
   String? selectedProvider;
@@ -163,6 +165,86 @@ class PromptdAppState extends ChangeNotifier {
       discover: discover,
     );
     _selectDefaults();
+    notifyListeners();
+  }
+
+  Future<void> refreshAdminData() async {
+    if (me?.permissions.admin != true && me?.superAdmin != true) return;
+    loadingData = true;
+    error = null;
+    notifyListeners();
+    try {
+      final results = await Future.wait([
+        _api.adminAuthConfig(),
+        _api.adminSystemPrompts(),
+      ]);
+      adminAuthConfig = results[0] as AdminAuthConfig;
+      managedSystemPrompts = results[1] as List<ManagedSystemPrompt>;
+    } catch (err) {
+      error = err.toString();
+    } finally {
+      loadingData = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> saveAdminUser({
+    required String id,
+    required String tenantId,
+    required List<String> roles,
+    required bool disabled,
+    required bool mustChangePassword,
+    String password = '',
+  }) async {
+    await _api.saveAdminUser(
+      id: id,
+      tenantId: tenantId,
+      roles: roles,
+      disabled: disabled,
+      mustChangePassword: mustChangePassword,
+      password: password,
+    );
+    await refreshAdminData();
+  }
+
+  Future<void> deleteAdminUser(String id) async {
+    await _api.deleteAdminUser(id);
+    await refreshAdminData();
+  }
+
+  Future<void> saveAdminRole(AdminRole role) async {
+    await _api.saveAdminRole(role);
+    await refreshAdminData();
+  }
+
+  Future<void> deleteAdminRole(String name) async {
+    await _api.deleteAdminRole(name);
+    await refreshAdminData();
+  }
+
+  Future<void> saveSystemPrompt(ManagedSystemPrompt prompt) async {
+    await _api.saveSystemPrompt(prompt);
+    await refreshAdminData();
+    uiConfig = await _api.uiConfig();
+    notifyListeners();
+  }
+
+  Future<void> deleteSystemPrompt(String name) async {
+    await _api.deleteSystemPrompt(name);
+    await refreshAdminData();
+    uiConfig = await _api.uiConfig();
+    notifyListeners();
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _api.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    me = await _api.me();
     notifyListeners();
   }
 

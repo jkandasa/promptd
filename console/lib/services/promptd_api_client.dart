@@ -120,6 +120,74 @@ class PromptdApiClient {
     return AuthMe.fromJson(body);
   }
 
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _request(
+      'POST',
+      '/api/auth/change-password',
+      body: {'current_password': currentPassword, 'new_password': newPassword},
+    );
+  }
+
+  Future<AdminAuthConfig> adminAuthConfig() async {
+    final body = await _request('GET', '/api/admin/auth');
+    return AdminAuthConfig.fromJson(body);
+  }
+
+  Future<void> saveAdminUser({
+    required String id,
+    required String tenantId,
+    required List<String> roles,
+    required bool disabled,
+    required bool mustChangePassword,
+    String password = '',
+  }) async {
+    await _request('POST', '/api/admin/users', body: {
+      'id': id,
+      'tenant_id': tenantId,
+      'roles': roles,
+      'disabled': disabled,
+      'must_change_password': mustChangePassword,
+      if (password.isNotEmpty) 'password': password,
+    });
+  }
+
+  Future<void> deleteAdminUser(String id) async {
+    await _request('DELETE', '/api/admin/users/${Uri.encodeComponent(id)}');
+  }
+
+  Future<void> saveAdminRole(AdminRole role) async {
+    await _request('POST', '/api/admin/roles', body: {
+      'name': role.name,
+      'role': role.toJson(),
+    });
+  }
+
+  Future<void> deleteAdminRole(String name) async {
+    await _request('DELETE', '/api/admin/roles/${Uri.encodeComponent(name)}');
+  }
+
+  Future<List<ManagedSystemPrompt>> adminSystemPrompts() async {
+    final body = await _requestList('GET', '/api/admin/system-prompts');
+    return body
+        .whereType<Map<String, dynamic>>()
+        .map(ManagedSystemPrompt.fromJson)
+        .toList();
+  }
+
+  Future<void> saveSystemPrompt(ManagedSystemPrompt prompt) async {
+    await _request('POST', '/api/admin/system-prompts', body: prompt.toJson());
+  }
+
+  Future<void> deleteSystemPrompt(String name) async {
+    await _request(
+      'DELETE',
+      '/api/admin/system-prompts/${Uri.encodeComponent(name)}',
+    );
+  }
+
   Future<UIConfig> uiConfig() async {
     final body = await _request('GET', '/api/ui-config');
     return UIConfig.fromJson(body);

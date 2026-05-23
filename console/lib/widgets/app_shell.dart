@@ -4,7 +4,7 @@ import '../models/promptd_models.dart';
 import '../theme/app_theme.dart';
 import 'brand_mark.dart';
 
-enum ConsoleSection { chat, scheduler, tools }
+enum ConsoleSection { chat, scheduler, tools, admin }
 
 class AppShell extends StatelessWidget {
   const AppShell({
@@ -50,6 +50,7 @@ class AppShell extends StatelessWidget {
                     child: _SectionNav(
                       section: section,
                       extended: true,
+                      showAdmin: me.permissions.admin || me.superAdmin,
                       onSectionSelected: (selected) {
                         Navigator.of(context).pop();
                         onSectionSelected(selected);
@@ -246,6 +247,7 @@ class AppShell extends StatelessWidget {
                               child: _SectionNav(
                                 section: section,
                                 extended: useExtendedRail,
+                                showAdmin: me.permissions.admin || me.superAdmin,
                                 onSectionSelected: onSectionSelected,
                               ),
                             ),
@@ -336,11 +338,13 @@ class _SectionNav extends StatelessWidget {
   const _SectionNav({
     required this.section,
     required this.extended,
+    required this.showAdmin,
     required this.onSectionSelected,
   });
 
   final ConsoleSection section;
   final bool extended;
+  final bool showAdmin;
   final ValueChanged<ConsoleSection> onSectionSelected;
 
   @override
@@ -362,6 +366,12 @@ class _SectionNav extends StatelessWidget {
             icon: Icons.build_circle_outlined,
             label: 'Tools',
           ),
+          if (showAdmin)
+            (
+              section: ConsoleSection.admin,
+              icon: Icons.admin_panel_settings_outlined,
+              label: 'Admin',
+            ),
         ];
 
     if (!extended) {

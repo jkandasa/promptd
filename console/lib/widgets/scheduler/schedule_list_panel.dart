@@ -65,6 +65,9 @@ class _ScheduleListPanelState extends State<ScheduleListPanel> {
             controller: _searchController,
             statusFilter: _statusFilter,
             sortKey: _sortKey,
+            totalCount: widget.state.schedules.length,
+            enabledCount: widget.state.schedules.where((s) => s.enabled).length,
+            disabledCount: widget.state.schedules.where((s) => !s.enabled).length,
             onSearchChanged: (_) => setState(() {}),
             onStatusChanged: (value) => setState(() => _statusFilter = value),
             onSortChanged: (value) => setState(() => _sortKey = value),
@@ -249,6 +252,9 @@ class _ScheduleToolbar extends StatelessWidget {
     required this.controller,
     required this.statusFilter,
     required this.sortKey,
+    required this.totalCount,
+    required this.enabledCount,
+    required this.disabledCount,
     required this.onSearchChanged,
     required this.onStatusChanged,
     required this.onSortChanged,
@@ -257,6 +263,9 @@ class _ScheduleToolbar extends StatelessWidget {
   final TextEditingController controller;
   final String statusFilter;
   final String sortKey;
+  final int totalCount;
+  final int enabledCount;
+  final int disabledCount;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<String> onStatusChanged;
   final ValueChanged<String> onSortChanged;
@@ -266,6 +275,7 @@ class _ScheduleToolbar extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 640;
+        final useWrappedChips = constraints.maxWidth < 520;
         final search = TextField(
           controller: controller,
           onChanged: onSearchChanged,
@@ -286,40 +296,70 @@ class _ScheduleToolbar extends StatelessWidget {
                   ),
           ),
         );
+        final filterControl = useWrappedChips
+            ? Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  AppChoiceChip(
+                    label: 'All',
+                    count: totalCount,
+                    selected: statusFilter == 'all',
+                    onSelected: () => onStatusChanged('all'),
+                  ),
+                  AppChoiceChip(
+                    label: 'Active',
+                    count: enabledCount,
+                    selected: statusFilter == 'enabled',
+                    onSelected: () => onStatusChanged('enabled'),
+                  ),
+                  AppChoiceChip(
+                    label: 'Disabled',
+                    count: disabledCount,
+                    selected: statusFilter == 'disabled',
+                    onSelected: () => onStatusChanged('disabled'),
+                  ),
+                ],
+              )
+            : SegmentedButton<String>(
+                segments: [
+                  ButtonSegment(value: 'all', label: Text('All ($totalCount)')),
+                  ButtonSegment(
+                    value: 'enabled',
+                    label: Text('Active ($enabledCount)'),
+                  ),
+                  ButtonSegment(
+                    value: 'disabled',
+                    label: Text('Disabled ($disabledCount)'),
+                  ),
+                ],
+                selected: {statusFilter},
+                onSelectionChanged: (value) => onStatusChanged(value.first),
+              );
+        final sort = MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: PopupMenuButton<String>(
+            tooltip: 'Sort schedules',
+            initialValue: sortKey,
+            onSelected: onSortChanged,
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'default', child: Text('Default order')),
+              PopupMenuItem(value: 'name', child: Text('Name')),
+              PopupMenuItem(value: 'lastRun', child: Text('Last run')),
+              PopupMenuItem(value: 'nextRun', child: Text('Next run')),
+            ],
+            child: _SortButton(label: _sortLabel(sortKey)),
+          ),
+        );
         final filters = Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 12,
+          runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            AppChoiceChip(
-              label: 'All',
-              selected: statusFilter == 'all',
-              onSelected: () => onStatusChanged('all'),
-            ),
-            AppChoiceChip(
-              label: 'Active',
-              selected: statusFilter == 'enabled',
-              onSelected: () => onStatusChanged('enabled'),
-            ),
-            AppChoiceChip(
-              label: 'Disabled',
-              selected: statusFilter == 'disabled',
-              onSelected: () => onStatusChanged('disabled'),
-            ),
+            filterControl,
             MouseRegion(
               cursor: SystemMouseCursors.click,
-              child: PopupMenuButton<String>(
-                tooltip: 'Sort schedules',
-                initialValue: sortKey,
-                onSelected: onSortChanged,
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'default', child: Text('Default order')),
-                  PopupMenuItem(value: 'name', child: Text('Name')),
-                  PopupMenuItem(value: 'lastRun', child: Text('Last run')),
-                  PopupMenuItem(value: 'nextRun', child: Text('Next run')),
-                ],
-                child: _SortButton(label: _sortLabel(sortKey)),
-              ),
+              child: sort,
             ),
           ],
         );

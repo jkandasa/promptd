@@ -57,6 +57,10 @@ Example:
 
 ### Frontend
 
+Two UIs are available; both are served from the same embedded asset path (`internal/ui/dist`) and selected at build time.
+
+**React web UI** (default, built from `web/`):
+
 - `web/src/pages/index.tsx`: shell, navigation, route-state handling
 - `web/src/pages/chat/ChatPage.tsx`: main chat experience
 - `web/src/pages/scheduler/*`: schedule list, edit form, history/detail views
@@ -64,6 +68,10 @@ Example:
 - `web/src/components/*`: bubbles, markdown, trace drawer, params UI, tool drawers
 - `web/src/api/*`: thin fetch wrappers around `/api/*`
 - `web/src/types/*`: chat and scheduler types
+
+**Flutter console** (opt-in via `make build-with-console`, built from `console/`):
+
+A multi-platform Flutter app that compiles to web and is embedded in the binary instead of the React UI. It targets Android, iOS, Linux, macOS, Windows, and Web from the same codebase. See `console/README.md` for details.
 
 ## Data Layout
 
@@ -109,13 +117,21 @@ Notes:
 ### Requirements
 
 - Go 1.26
-- Node.js
-- Yarn
+- Node.js + Yarn (for the default React web UI)
+- Flutter 3.41+ / Dart 3.11+ (only needed when building with the Flutter console)
 
 ### Build UI
 
+Build the default React/Yarn web UI and copy it into the embedded asset tree:
+
 ```bash
 make ui
+```
+
+Build the Flutter console web UI instead:
+
+```bash
+make console-ui
 ```
 
 ### Run
@@ -132,8 +148,17 @@ go run ./cmd serve --config ./config.yaml
 
 ### Full Build
 
+Default build (embeds the React web UI):
+
 ```bash
 make build
+```
+
+Build with the Flutter console UI embedded:
+
+```bash
+make build-with-console
+# equivalent: make build WITH_CONSOLE=1
 ```
 
 ### Docker
@@ -324,6 +349,20 @@ All JSON APIs live under `/api`.
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
+- `POST /api/auth/change-password`
+
+### Admin
+
+Requires `admin` permission or `super_admin: true`.
+
+- `GET /api/admin/auth` — full auth config (users + roles)
+- `POST /api/admin/users` — create or update a user
+- `DELETE /api/admin/users/{id}` — delete a user
+- `POST /api/admin/roles` — create or update a role
+- `DELETE /api/admin/roles/{name}` — delete a role
+- `GET /api/admin/system-prompts` — list managed system prompts
+- `POST /api/admin/system-prompts` — create or update a system prompt
+- `DELETE /api/admin/system-prompts/{name}` — delete a system prompt
 
 ### Chat and Conversations
 

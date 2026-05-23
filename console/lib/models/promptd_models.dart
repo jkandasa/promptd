@@ -17,6 +17,7 @@ class AuthMe {
     required this.roles,
     required this.permissions,
     required this.superAdmin,
+    this.mustChangePassword = false,
   });
 
   final String userId;
@@ -24,6 +25,7 @@ class AuthMe {
   final List<String> roles;
   final Permissions permissions;
   final bool superAdmin;
+  final bool mustChangePassword;
 
   factory AuthMe.fromJson(Map<String, dynamic> json) {
     return AuthMe(
@@ -34,6 +36,7 @@ class AuthMe {
         json['permissions'] as Map<String, dynamic>? ?? {},
       ),
       superAdmin: json['super_admin'] as bool? ?? false,
+      mustChangePassword: json['must_change_password'] as bool? ?? false,
     );
   }
 }
@@ -75,6 +78,148 @@ class Permissions {
       admin: json['admin'] as bool? ?? false,
     );
   }
+
+  Permissions copyWith({
+    bool? chat,
+    bool? upload,
+    bool? conversationsRead,
+    bool? conversationsWrite,
+    bool? compactConversationWrite,
+    bool? schedulesRead,
+    bool? schedulesWrite,
+    bool? tracesRead,
+    bool? admin,
+  }) => Permissions(
+    chat: chat ?? this.chat,
+    upload: upload ?? this.upload,
+    conversationsRead: conversationsRead ?? this.conversationsRead,
+    conversationsWrite: conversationsWrite ?? this.conversationsWrite,
+    compactConversationWrite: compactConversationWrite ?? this.compactConversationWrite,
+    schedulesRead: schedulesRead ?? this.schedulesRead,
+    schedulesWrite: schedulesWrite ?? this.schedulesWrite,
+    tracesRead: tracesRead ?? this.tracesRead,
+    admin: admin ?? this.admin,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'chat': chat,
+    'upload': upload,
+    'conversations_read': conversationsRead,
+    'conversations_write': conversationsWrite,
+    'compact_conversation_write': compactConversationWrite,
+    'schedules_read': schedulesRead,
+    'schedules_write': schedulesWrite,
+    'traces_read': tracesRead,
+    'admin': admin,
+  };
+}
+
+class AdminUser {
+  const AdminUser({
+    required this.id,
+    required this.tenantId,
+    required this.roles,
+    this.disabled = false,
+    this.mustChangePassword = false,
+  });
+
+  final String id;
+  final String tenantId;
+  final List<String> roles;
+  final bool disabled;
+  final bool mustChangePassword;
+
+  factory AdminUser.fromJson(Map<String, dynamic> json) => AdminUser(
+    id: json['id'] as String? ?? '',
+    tenantId: json['tenant_id'] as String? ?? 'default',
+    roles: (json['roles'] as List<dynamic>? ?? []).whereType<String>().toList(),
+    disabled: json['disabled'] as bool? ?? false,
+    mustChangePassword: json['must_change_password'] as bool? ?? false,
+  );
+}
+
+class RolePolicy {
+  const RolePolicy({this.allow = const []});
+
+  final List<String> allow;
+
+  factory RolePolicy.fromJson(Map<String, dynamic> json) => RolePolicy(
+    allow: (json['allow'] as List<dynamic>? ?? []).whereType<String>().toList(),
+  );
+
+  Map<String, dynamic> toJson() => {'allow': allow};
+}
+
+class AdminRole {
+  const AdminRole({
+    required this.name,
+    this.superAdmin = false,
+    this.permissions = const Permissions(),
+    this.models = const RolePolicy(),
+    this.tools = const RolePolicy(),
+    this.systemPrompts = const RolePolicy(),
+  });
+
+  final String name;
+  final bool superAdmin;
+  final Permissions permissions;
+  final RolePolicy models;
+  final RolePolicy tools;
+  final RolePolicy systemPrompts;
+
+  factory AdminRole.fromEntry(String name, Map<String, dynamic> json) => AdminRole(
+    name: name,
+    superAdmin: json['super_admin'] as bool? ?? false,
+    permissions: Permissions.fromJson(json['permissions'] as Map<String, dynamic>? ?? {}),
+    models: RolePolicy.fromJson(json['models'] as Map<String, dynamic>? ?? {}),
+    tools: RolePolicy.fromJson(json['tools'] as Map<String, dynamic>? ?? {}),
+    systemPrompts: RolePolicy.fromJson(json['system_prompts'] as Map<String, dynamic>? ?? {}),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'super_admin': superAdmin,
+    'permissions': permissions.toJson(),
+    'models': models.toJson(),
+    'tools': tools.toJson(),
+    'system_prompts': systemPrompts.toJson(),
+  };
+}
+
+class AdminAuthConfig {
+  const AdminAuthConfig({this.users = const [], this.roles = const []});
+
+  final List<AdminUser> users;
+  final List<AdminRole> roles;
+
+  factory AdminAuthConfig.fromJson(Map<String, dynamic> json) {
+    final rolesJson = json['roles'] as Map<String, dynamic>? ?? {};
+    final roles = rolesJson.entries
+        .where((entry) => entry.value is Map<String, dynamic>)
+        .map((entry) => AdminRole.fromEntry(entry.key, entry.value as Map<String, dynamic>))
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    return AdminAuthConfig(
+      users: (json['users'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(AdminUser.fromJson)
+          .toList(),
+      roles: roles,
+    );
+  }
+}
+
+class ManagedSystemPrompt {
+  const ManagedSystemPrompt({required this.name, required this.content});
+
+  final String name;
+  final String content;
+
+  factory ManagedSystemPrompt.fromJson(Map<String, dynamic> json) => ManagedSystemPrompt(
+    name: json['name'] as String? ?? '',
+    content: json['content'] as String? ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {'name': name, 'content': content};
 }
 
 class UIConfig {
