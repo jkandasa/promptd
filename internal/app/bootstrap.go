@@ -176,6 +176,7 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, h *handler.Ha
 	mux.Handle("GET /api/admin/system-prompts", requireAuth(http.HandlerFunc(h.ListSystemPrompts)))
 	mux.Handle("POST /api/admin/system-prompts", requireAuth(http.HandlerFunc(h.SaveSystemPrompt)))
 	mux.Handle("DELETE /api/admin/system-prompts/{name}", requireAuth(http.HandlerFunc(h.DeleteSystemPrompt)))
+	mux.Handle("POST /api/execute", requireAuth(http.HandlerFunc(h.Execute)))
 	mux.Handle("POST /api/chat", requireAuth(http.HandlerFunc(h.Chat)))
 	mux.Handle("POST /api/reset", requireAuth(http.HandlerFunc(h.Reset)))
 	mux.Handle("GET /api/mcp", requireAuth(http.HandlerFunc(mcpHandler.List)))

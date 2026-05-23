@@ -364,6 +364,12 @@ Requires `admin` permission or `super_admin: true`.
 - `POST /api/admin/system-prompts` — create or update a system prompt
 - `DELETE /api/admin/system-prompts/{name}` — delete a system prompt
 
+### Execute (service-account LLM calls)
+
+A stateless single-shot LLM endpoint for programmatic use. See `docs/execute-api.md` for the full reference.
+
+- `POST /api/execute` — stateless LLM call with inline or named system prompt, explicit tool patterns, and optional history logging
+
 ### Chat and Conversations
 
 - `POST /api/chat`

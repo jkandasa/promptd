@@ -947,14 +947,21 @@ func storageMessageToRawMap(msg storage.Message) map[string]any {
 	return out
 }
 
-func (h *Handler) buildChatCompletionRequest(ctx context.Context, scope storage.Scope, session *chat.Session, entry *ProviderEntry, model string, modelParams LLMParams, tools []llm.Tool) (map[string]any, []llm.Message, error) {
+// buildChatCompletionRequest assembles the raw JSON body and trace messages for
+// an LLM chat-completion call. systemPromptOverride, when non-empty, is used
+// as the system prompt directly; otherwise the prompt is resolved from the
+// session's named system prompt.
+func (h *Handler) buildChatCompletionRequest(ctx context.Context, scope storage.Scope, session *chat.Session, entry *ProviderEntry, model string, modelParams LLMParams, tools []llm.Tool, systemPromptOverride string) (map[string]any, []llm.Message, error) {
 	conv := session.Snapshot()
 	rawMessages := make([]map[string]any, 0)
 	traceMessages := make([]llm.Message, 0)
-	promptName := session.SystemPrompt()
-	if prompt := h.systemPrompts[promptName]; prompt != "" {
-		rawMessages = append(rawMessages, map[string]any{"role": llm.RoleSystem, "content": prompt})
-		traceMessages = append(traceMessages, llm.Message{Role: llm.RoleSystem, Content: prompt})
+	promptText := systemPromptOverride
+	if promptText == "" {
+		promptText = h.systemPrompts[session.SystemPrompt()]
+	}
+	if promptText != "" {
+		rawMessages = append(rawMessages, map[string]any{"role": llm.RoleSystem, "content": promptText})
+		traceMessages = append(traceMessages, llm.Message{Role: llm.RoleSystem, Content: promptText})
 	}
 	if summary := h.compactionSummaryMessage(conv); summary != nil {
 		summaryContent := "Conversation summary so far:\n" + summary.Content
@@ -1669,7 +1676,7 @@ func (h *Handler) runLLM(ctx context.Context, principal *auth.Principal, session
 				allowedTools = h.registry.OpenAIToolsByNames(toolNames)
 			}
 		}
-		requestBody, requestMsgs, err := h.buildChatCompletionRequest(ctx, scope, session, providerEntry, model, modelParams, allowedTools)
+		requestBody, requestMsgs, err := h.buildChatCompletionRequest(ctx, scope, session, providerEntry, model, modelParams, allowedTools, "")
 		if err != nil {
 			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("build chat request: %w", err)
 		}

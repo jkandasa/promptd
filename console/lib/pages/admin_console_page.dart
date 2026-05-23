@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../models/promptd_models.dart';
 import '../state/promptd_app_state.dart';
@@ -500,20 +501,40 @@ class _PromptsCard extends StatelessWidget {
     final isCreate = prompt == null;
     final nameCtrl = TextEditingController(text: prompt?.name ?? '');
     final contentCtrl = TextEditingController(text: prompt?.content ?? '');
+    var previewMode = false;
 
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
           final canSave = nameCtrl.text.trim().isNotEmpty && contentCtrl.text.trim().isNotEmpty;
-          return AlertDialog(
-            title: Text(isCreate ? 'Create system prompt' : 'Edit system prompt'),
-            content: SizedBox(
-              width: 560,
-              child: SingleChildScrollView(
+          final theme = Theme.of(context);
+          return Dialog(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760, maxHeight: 680),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Title row
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            isCreate ? 'Create system prompt' : 'Edit system prompt',
+                            style: theme.textTheme.titleLarge,
+                          ),
+                        ),
+                        IconButton(
+                          mouseCursor: SystemMouseCursors.click,
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context, false),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Name field
                     TextField(
                       controller: nameCtrl,
                       enabled: isCreate,
@@ -523,31 +544,71 @@ class _PromptsCard extends StatelessWidget {
                         hintText: 'e.g. assistant-v1',
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: contentCtrl,
-                      minLines: 8,
-                      maxLines: 14,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Prompt',
-                        alignLabelWithHint: true,
-                      ),
+                    const SizedBox(height: 16),
+                    // Content label + Edit/Preview toggle
+                    Row(
+                      children: [
+                        _FormSectionLabel('Prompt content'),
+                        const Spacer(),
+                        SegmentedButton<bool>(
+                          style: SegmentedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          segments: const [
+                            ButtonSegment(
+                              value: false,
+                              label: Text('Edit'),
+                              icon: Icon(Icons.edit_outlined, size: 15),
+                            ),
+                            ButtonSegment(
+                              value: true,
+                              label: Text('Preview'),
+                              icon: Icon(Icons.visibility_outlined, size: 15),
+                            ),
+                          ],
+                          selected: {previewMode},
+                          onSelectionChanged: (s) => setState(() => previewMode = s.first),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // Content area — fills remaining space
+                    Expanded(
+                      child: previewMode
+                          ? _MarkdownPreview(text: contentCtrl.text)
+                          : TextField(
+                              controller: contentCtrl,
+                              expands: true,
+                              maxLines: null,
+                              onChanged: (_) => setState(() {}),
+                              textAlignVertical: TextAlignVertical.top,
+                              decoration: const InputDecoration(
+                                hintText: 'Enter system prompt text…',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.all(12),
+                              ),
+                            ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Action row
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: canSave ? () => Navigator.pop(context, true) : null,
+                          child: const Text('Save'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: canSave ? () => Navigator.pop(context, true) : null,
-                child: const Text('Save'),
-              ),
-            ],
           );
         },
       ),
@@ -611,6 +672,37 @@ class _AdminCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+class _MarkdownPreview extends StatelessWidget {
+  const _MarkdownPreview({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: text.trim().isEmpty
+          ? Center(
+              child: Text(
+                'Nothing to preview',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: MarkdownBody(data: text),
+            ),
+    );
+  }
+}
 
 class _FormSectionLabel extends StatelessWidget {
   const _FormSectionLabel(this.label);

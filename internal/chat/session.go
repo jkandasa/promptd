@@ -342,6 +342,19 @@ func truncate(s string, n int) string {
 	return string(runes[:n]) + "…"
 }
 
+// NewEphemeral returns an in-memory-only Session that is never written to disk.
+// Use it for stateless LLM calls where history persistence should be skipped.
+func NewEphemeral() *Session {
+	return &Session{
+		store: nil,
+		conv: storage.Conversation{
+			ID:        uuid.New().String(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+}
+
 // ── SessionStore ──────────────────────────────────────────────────────────────
 
 // SessionStore manages in-memory sessions, optionally backed by a storage.Store.
