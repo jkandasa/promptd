@@ -318,6 +318,15 @@ class PromptdApiClient {
     await _request('DELETE', '/api/conversations/$id');
   }
 
+  Future<int> deleteConversations(List<String> ids) async {
+    final body = await _request(
+      'POST',
+      '/api/conversations/bulk-delete',
+      body: {'ids': ids},
+    );
+    return body['deleted'] as int? ?? 0;
+  }
+
   Future<void> deleteMessage({
     required String conversationId,
     required String messageId,

@@ -2953,6 +2953,40 @@ func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// DeleteConversations bulk-deletes a list of conversations by ID.
+func (h *Handler) DeleteConversations(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil || !principal.Policy.Permissions.ConversationsWrite {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "conversation write not allowed"})
+		return
+	}
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "ids is required"})
+		return
+	}
+	scope := requestScope(r)
+	deleted := 0
+	for _, id := range req.IDs {
+		var filesToDelete []storage.UploadedFile
+		if h.storageStore != nil {
+			if conv, err := h.storageStore.Load(scope, id); err == nil {
+				filesToDelete = collectFiles(conv.Messages)
+			}
+		}
+		if err := h.store.Delete(scope, id); err != nil {
+			h.log.Warn("bulk delete: failed to delete conversation", zap.String("id", id), zap.Error(err))
+			continue
+		}
+		h.removeUploadedFiles(filesToDelete)
+		deleted++
+	}
+	h.log.Info("conversations bulk deleted", zap.Int("deleted", deleted), zap.Int("requested", len(req.IDs)))
+	writeJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
+}
+
 // DeleteMessage removes a single message from a conversation.
 func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	principal := requestPrincipal(r)

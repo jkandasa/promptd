@@ -512,6 +512,13 @@ class PromptdAppState extends ChangeNotifier {
     await _refreshConversationsOnly();
   }
 
+  Future<void> deleteConversations(List<String> ids) async {
+    if (ids.isEmpty) return;
+    await _api.deleteConversations(ids);
+    if (ids.contains(selectedConversationId)) startNewConversation();
+    await _refreshConversationsOnly();
+  }
+
   Future<void> deleteMessage(ChatMessage message) async {
     final conversationId = selectedConversationId;
     messages = messages.where((item) => item.id != message.id).toList();

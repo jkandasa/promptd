@@ -31,7 +31,7 @@ Example:
 - Multi-provider model routing with static or auto-discovered models
 - Per-provider selection method with backend-owned model resolution
 - Required system prompt selection in chat and scheduler flows
-- Persistent conversations with pin, rename, delete, and edit-resend flow
+- Persistent conversations with pin, rename, single and bulk delete, and edit-resend flow
 - File uploads with small-text inline handling and provider-aware upload fallback
 - Tool calling from built-in tools and MCP tools
 - Detailed LLM trace capture and UI trace drawers for debugging model behavior
@@ -397,6 +397,7 @@ A stateless single-shot LLM endpoint for programmatic use. See `docs/execute-api
 - `GET /api/models`
 - `GET /api/tools`
 - `GET /api/conversations`
+- `POST /api/conversations/bulk-delete` — delete multiple conversations by ID (`{"ids": [...]}`)
 - `GET /api/conversations/{id}`
 - `DELETE /api/conversations/{id}`
 - `PATCH /api/conversations/{id}/title`

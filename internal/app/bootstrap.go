@@ -194,6 +194,7 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, h *handler.Ha
 	mux.Handle("GET /api/files/", requireAuth(http.HandlerFunc(h.ServeFile)))
 	mux.Handle("DELETE /api/files/", requireAuth(http.HandlerFunc(h.DeleteFile)))
 	mux.Handle("GET /api/conversations", requireAuth(http.HandlerFunc(h.ListConversations)))
+	mux.Handle("POST /api/conversations/bulk-delete", requireAuth(http.HandlerFunc(h.DeleteConversations)))
 	mux.Handle("GET /api/conversations/{id}", requireAuth(http.HandlerFunc(h.GetConversation)))
 	mux.Handle("DELETE /api/conversations/{id}", requireAuth(http.HandlerFunc(h.DeleteConversation)))
 	mux.Handle("PATCH /api/conversations/{id}/title", requireAuth(http.HandlerFunc(h.RenameConversation)))
