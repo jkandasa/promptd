@@ -78,18 +78,24 @@ jobs:
           cache: true
 
       - name: Set up signing
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 secret is not set — refusing to build unsigned release"
+            exit 1
+          fi
           keystore_path="$PWD/console/android/keystore.jks"
-          echo "$KEYSTORE_BASE64" | base64 -d > "$keystore_path"
+          printenv KEYSTORE_BASE64 | base64 -d > "$keystore_path"
+          chmod 600 "$keystore_path"
           printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
             "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" "$keystore_path" \
             > console/android/key.properties
+          chmod 600 console/android/key.properties
 
       - name: Build APK and AAB
         run: |
@@ -100,6 +106,10 @@ jobs:
           flutter build appbundle --release \
             --build-name="0.0.0-devel" \
             --build-number="${{ github.run_number }}"
+
+      - name: Clean up signing files
+        if: always()
+        run: rm -f console/android/keystore.jks console/android/key.properties
 
       - name: Collect artifacts
         run: |
