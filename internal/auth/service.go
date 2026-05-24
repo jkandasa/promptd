@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -101,8 +104,8 @@ func validateUsers(users []User, roles map[string]Role) (map[string]*User, error
 		if _, exists := usersByID[user.ID]; exists {
 			return nil, fmt.Errorf("duplicate auth.users id %q", user.ID)
 		}
-		if strings.TrimSpace(user.PasswordHash) == "" && len(user.ServiceTokens) == 0 {
-			return nil, fmt.Errorf("auth.users[%q] must have password_hash or service_tokens", user.ID)
+		if strings.TrimSpace(user.PasswordHash) == "" && len(user.APIKeys) == 0 {
+			return nil, fmt.Errorf("auth.users[%q] must have password_hash or api_keys", user.ID)
 		}
 		if _, err := CompileEffectivePolicy(user.Roles, roles); err != nil {
 			return nil, fmt.Errorf("compile roles for user %q: %w", user.ID, err)
@@ -140,24 +143,24 @@ func (s *Service) AuthenticateBearer(token string) (*Principal, error) {
 		if user.Disabled {
 			continue
 		}
-		for _, serviceToken := range user.ServiceTokens {
-			if serviceToken.Disabled || strings.TrimSpace(serviceToken.TokenHash) == "" {
+		for _, key := range user.APIKeys {
+			if key.Disabled || strings.TrimSpace(key.TokenHash) == "" {
 				continue
 			}
-			if serviceToken.NotBefore != "" {
-				t, err := time.Parse(time.RFC3339, serviceToken.NotBefore)
+			if key.NotBefore != "" {
+				t, err := time.Parse(time.RFC3339, key.NotBefore)
 				if err == nil && now.Before(t) {
 					continue
 				}
 			}
-			if serviceToken.ExpiresAt != "" {
-				t, err := time.Parse(time.RFC3339, serviceToken.ExpiresAt)
+			if key.ExpiresAt != "" {
+				t, err := time.Parse(time.RFC3339, key.ExpiresAt)
 				if err == nil && !now.Before(t) {
 					continue
 				}
 			}
-			if bcrypt.CompareHashAndPassword([]byte(serviceToken.TokenHash), []byte(token)) == nil {
-				return s.buildPrincipal(user, "service_token")
+			if bcrypt.CompareHashAndPassword([]byte(key.TokenHash), []byte(token)) == nil {
+				return s.buildPrincipal(user, "api_key")
 			}
 		}
 	}
@@ -317,6 +320,21 @@ func (s *Service) ListUsers() []User {
 	return users
 }
 
+func (s *Service) GetAPIKeys(userID string) ([]APIKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, ok := s.usersByID[userID]
+	if !ok {
+		return nil, fmt.Errorf("unknown user %q", userID)
+	}
+	keys := make([]APIKey, len(user.APIKeys))
+	for i, k := range user.APIKeys {
+		k.TokenHash = ""
+		keys[i] = k
+	}
+	return keys, nil
+}
+
 func (s *Service) ListRoles() map[string]Role {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -341,10 +359,13 @@ func (s *Service) SaveUser(user User, password string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.usersByID[user.ID]; ok && user.PasswordHash == "" {
-		user.PasswordHash = existing.PasswordHash
-		user.ServiceTokens = existing.ServiceTokens
-		user.MustChangePassword = existing.MustChangePassword
+	if existing, ok := s.usersByID[user.ID]; ok {
+		// Always preserve API keys; they are managed via dedicated endpoints.
+		user.APIKeys = existing.APIKeys
+		if user.PasswordHash == "" {
+			user.PasswordHash = existing.PasswordHash
+			// MustChangePassword: honor the caller's value (admin's explicit choice).
+		}
 	}
 	users := s.usersLocked()
 	found := false
@@ -426,6 +447,131 @@ func (s *Service) ChangePassword(userID, currentPassword, newPassword string) er
 		}
 	}
 	return s.replaceLocked(users, s.roles)
+}
+
+// GenerateAPIKey creates a new API key for the given user, hashes it, persists
+// it, and returns the plaintext token (shown once, never stored).
+func (s *Service) GenerateAPIKey(userID, description, expiresAt string) (APIKey, string, error) {
+	token, err := generateAPIKeyToken()
+	if err != nil {
+		return APIKey{}, "", err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
+	if err != nil {
+		return APIKey{}, "", err
+	}
+	keyID, err := generateKeyID()
+	if err != nil {
+		return APIKey{}, "", err
+	}
+	key := APIKey{
+		ID:          keyID,
+		Description: strings.TrimSpace(description),
+		TokenHash:   string(hash),
+		ExpiresAt:   strings.TrimSpace(expiresAt),
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.usersByID[userID]
+	if !ok {
+		return APIKey{}, "", fmt.Errorf("unknown user %q", userID)
+	}
+	user := *existing
+	user.APIKeys = append(append([]APIKey(nil), user.APIKeys...), key)
+	users := s.usersLocked()
+	for i := range users {
+		if users[i].ID == userID {
+			users[i] = user
+			break
+		}
+	}
+	if err := s.replaceLocked(users, s.roles); err != nil {
+		return APIKey{}, "", err
+	}
+	key.TokenHash = "" // don't expose the hash
+	return key, token, nil
+}
+
+// DeleteAPIKey removes an API key by ID from the given user.
+func (s *Service) DeleteAPIKey(userID, keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.usersByID[userID]
+	if !ok {
+		return fmt.Errorf("unknown user %q", userID)
+	}
+	user := *existing
+	newKeys := make([]APIKey, 0, len(user.APIKeys))
+	found := false
+	for _, k := range user.APIKeys {
+		if k.ID == keyID {
+			found = true
+			continue
+		}
+		newKeys = append(newKeys, k)
+	}
+	if !found {
+		return fmt.Errorf("api key %q not found", keyID)
+	}
+	user.APIKeys = newKeys
+	users := s.usersLocked()
+	for i := range users {
+		if users[i].ID == userID {
+			users[i] = user
+			break
+		}
+	}
+	return s.replaceLocked(users, s.roles)
+}
+
+// UpdateAPIKey updates mutable fields (description, disabled, expires_at) of an API key.
+func (s *Service) UpdateAPIKey(userID, keyID, description string, disabled bool, expiresAt string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.usersByID[userID]
+	if !ok {
+		return fmt.Errorf("unknown user %q", userID)
+	}
+	user := *existing
+	found := false
+	for i := range user.APIKeys {
+		if user.APIKeys[i].ID == keyID {
+			user.APIKeys[i].Description = strings.TrimSpace(description)
+			user.APIKeys[i].Disabled = disabled
+			user.APIKeys[i].ExpiresAt = strings.TrimSpace(expiresAt)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("api key %q not found", keyID)
+	}
+	users := s.usersLocked()
+	for i := range users {
+		if users[i].ID == userID {
+			users[i] = user
+			break
+		}
+	}
+	return s.replaceLocked(users, s.roles)
+}
+
+func generateAPIKeyToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate api key token: %w", err)
+	}
+	return "pd_" + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func generateKeyID() (string, error) {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate key id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *Service) usersLocked() []User {

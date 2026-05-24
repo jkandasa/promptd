@@ -13,6 +13,7 @@ import 'services/session_store.dart';
 import 'state/promptd_app_state.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_shell.dart';
+import 'widgets/user_api_keys_dialog.dart';
 
 class PromptdConsoleApp extends StatefulWidget {
   const PromptdConsoleApp({super.key});
@@ -47,6 +48,15 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
     };
     if (!mounted) return;
     setState(() => _themeMode = mode);
+  }
+
+  Future<void> _showUserApiKeysDialog(BuildContext ctx) async {
+    await _state.refreshUserApiKeys();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: ctx,
+      builder: (_) => UserApiKeysDialog(state: _state),
+    );
   }
 
   Future<void> _setThemeMode(ThemeMode mode) async {
@@ -91,6 +101,7 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
               onRefresh: _state.refreshAppData,
               onLogout: _state.logout,
               onThemeModeChanged: _setThemeMode,
+              onApiKeys: () => _showUserApiKeysDialog(context),
               child: switch (_state.section) {
                 ConsoleSection.chat => ChatConsolePage(state: _state),
                 ConsoleSection.scheduler => SchedulerConsolePage(state: _state),

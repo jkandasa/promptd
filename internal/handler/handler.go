@@ -2237,21 +2237,164 @@ func (h *Handler) SaveUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID       string   `json:"id"`
-		TenantID string   `json:"tenant_id"`
-		Password string   `json:"password"`
-		Roles    []string `json:"roles"`
-		Disabled bool     `json:"disabled"`
+		ID                 string   `json:"id"`
+		TenantID           string   `json:"tenant_id"`
+		Password           string   `json:"password"`
+		Roles              []string `json:"roles"`
+		Disabled           bool     `json:"disabled"`
+		MustChangePassword bool     `json:"must_change_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
-	if err := h.authService.SaveUser(auth.User{ID: req.ID, TenantID: req.TenantID, Roles: req.Roles, Disabled: req.Disabled}, req.Password); err != nil {
+	if err := h.authService.SaveUser(auth.User{
+		ID:                 req.ID,
+		TenantID:           req.TenantID,
+		Roles:              req.Roles,
+		Disabled:           req.Disabled,
+		MustChangePassword: req.MustChangePassword,
+	}, req.Password); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers()})
+}
+
+func (h *Handler) GenerateAPIKey(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	userID := r.PathValue("id")
+	var req struct {
+		Description string `json:"description"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	key, token, err := h.authService.GenerateAPIKey(userID, req.Description, req.ExpiresAt)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"api_key": key,
+		"token":   token,
+		"users":   h.authService.ListUsers(),
+	})
+}
+
+func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	userID := r.PathValue("id")
+	keyID := r.PathValue("keyId")
+	if err := h.authService.DeleteAPIKey(userID, keyID); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers()})
+}
+
+func (h *Handler) UpdateAPIKey(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	userID := r.PathValue("id")
+	keyID := r.PathValue("keyId")
+	var req struct {
+		Description string `json:"description"`
+		Disabled    bool   `json:"disabled"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.authService.UpdateAPIKey(userID, keyID, req.Description, req.Disabled, req.ExpiresAt); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": h.authService.ListUsers()})
+}
+
+func (h *Handler) ListUserAPIKeys(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	keys, err := h.authService.GetAPIKeys(principal.Scope.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys})
+}
+
+func (h *Handler) UserGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	var req struct {
+		Description string `json:"description"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	key, token, err := h.authService.GenerateAPIKey(principal.Scope.UserID, req.Description, req.ExpiresAt)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	keys, _ := h.authService.GetAPIKeys(principal.Scope.UserID)
+	writeJSON(w, http.StatusOK, map[string]any{"api_key": key, "token": token, "api_keys": keys})
+}
+
+func (h *Handler) UserDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	keyID := r.PathValue("keyId")
+	if err := h.authService.DeleteAPIKey(principal.Scope.UserID, keyID); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	keys, _ := h.authService.GetAPIKeys(principal.Scope.UserID)
+	writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys})
+}
+
+func (h *Handler) UserUpdateAPIKey(w http.ResponseWriter, r *http.Request) {
+	principal := requestPrincipal(r)
+	if principal == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	keyID := r.PathValue("keyId")
+	var req struct {
+		Description string `json:"description"`
+		Disabled    bool   `json:"disabled"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+	if err := h.authService.UpdateAPIKey(principal.Scope.UserID, keyID, req.Description, req.Disabled, req.ExpiresAt); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	keys, _ := h.authService.GetAPIKeys(principal.Scope.UserID)
+	writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys})
 }
 
 func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {

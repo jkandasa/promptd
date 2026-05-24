@@ -114,6 +114,38 @@ class Permissions {
   };
 }
 
+class ApiKey {
+  const ApiKey({
+    required this.id,
+    this.description = '',
+    this.expiresAt,
+    this.createdAt,
+    this.disabled = false,
+  });
+
+  final String id;
+  final String description;
+  final String? expiresAt;
+  final String? createdAt;
+  final bool disabled;
+
+  bool get isExpired {
+    if (expiresAt == null || expiresAt!.isEmpty) return false;
+    final exp = DateTime.tryParse(expiresAt!);
+    return exp != null && DateTime.now().isAfter(exp);
+  }
+
+  bool get isActive => !disabled && !isExpired;
+
+  factory ApiKey.fromJson(Map<String, dynamic> json) => ApiKey(
+    id: json['id'] as String? ?? '',
+    description: json['description'] as String? ?? '',
+    expiresAt: json['expires_at'] as String?,
+    createdAt: json['created_at'] as String?,
+    disabled: json['disabled'] as bool? ?? false,
+  );
+}
+
 class AdminUser {
   const AdminUser({
     required this.id,
@@ -121,6 +153,7 @@ class AdminUser {
     required this.roles,
     this.disabled = false,
     this.mustChangePassword = false,
+    this.apiKeys = const [],
   });
 
   final String id;
@@ -128,6 +161,7 @@ class AdminUser {
   final List<String> roles;
   final bool disabled;
   final bool mustChangePassword;
+  final List<ApiKey> apiKeys;
 
   factory AdminUser.fromJson(Map<String, dynamic> json) => AdminUser(
     id: json['id'] as String? ?? '',
@@ -135,6 +169,10 @@ class AdminUser {
     roles: (json['roles'] as List<dynamic>? ?? []).whereType<String>().toList(),
     disabled: json['disabled'] as bool? ?? false,
     mustChangePassword: json['must_change_password'] as bool? ?? false,
+    apiKeys: (json['api_keys'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(ApiKey.fromJson)
+        .toList(),
   );
 }
 

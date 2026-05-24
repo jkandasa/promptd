@@ -18,6 +18,7 @@ class AppShell extends StatelessWidget {
     required this.onThemeModeChanged,
     required this.onRefresh,
     required this.onLogout,
+    required this.onApiKeys,
     required this.child,
   });
 
@@ -30,6 +31,7 @@ class AppShell extends StatelessWidget {
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final Future<void> Function() onRefresh;
   final Future<void> Function() onLogout;
+  final VoidCallback onApiKeys;
   final Widget child;
 
   @override
@@ -181,6 +183,7 @@ class AppShell extends StatelessWidget {
                           ),
                           onSelected: (value) {
                             if (value == 'logout') onLogout();
+                            if (value == 'api_keys') onApiKeys();
                           },
                           itemBuilder: (context) => [
                             PopupMenuItem(
@@ -197,6 +200,18 @@ class AppShell extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: theme.textTheme.bodySmall,
                                   ),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuDivider(),
+                            const PopupMenuItem(
+                              value: 'api_keys',
+                              mouseCursor: WidgetStateMouseCursor.clickable,
+                              child: Row(
+                                children: [
+                                  Icon(Icons.key_rounded),
+                                  SizedBox(width: 10),
+                                  Text('API Keys'),
                                 ],
                               ),
                             ),

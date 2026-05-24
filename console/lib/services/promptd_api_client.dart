@@ -158,6 +158,105 @@ class PromptdApiClient {
     await _request('DELETE', '/api/admin/users/${Uri.encodeComponent(id)}');
   }
 
+  /// Generates a new API key for [userId]. Returns the key metadata and the
+  /// plaintext token (shown once, not stored on the server).
+  Future<({ApiKey key, String token})> generateApiKey(
+    String userId, {
+    String description = '',
+    String expiresAt = '',
+  }) async {
+    final body = await _request(
+      'POST',
+      '/api/admin/users/${Uri.encodeComponent(userId)}/api-keys',
+      body: {
+        'description': description,
+        if (expiresAt.isNotEmpty) 'expires_at': expiresAt,
+      },
+    );
+    final key = ApiKey.fromJson(body['api_key'] as Map<String, dynamic>);
+    final token = body['token'] as String;
+    return (key: key, token: token);
+  }
+
+  Future<void> deleteApiKey(String userId, String keyId) async {
+    await _request(
+      'DELETE',
+      '/api/admin/users/${Uri.encodeComponent(userId)}/api-keys/${Uri.encodeComponent(keyId)}',
+    );
+  }
+
+  Future<void> updateApiKey(
+    String userId,
+    String keyId, {
+    required String description,
+    required bool disabled,
+    String expiresAt = '',
+  }) async {
+    await _request(
+      'PATCH',
+      '/api/admin/users/${Uri.encodeComponent(userId)}/api-keys/${Uri.encodeComponent(keyId)}',
+      body: {
+        'description': description,
+        'disabled': disabled,
+        'expires_at': expiresAt,
+      },
+    );
+  }
+
+  Future<List<ApiKey>> userApiKeys() async {
+    final body = await _request('GET', '/api/user/api-keys');
+    final list = body['api_keys'] as List<dynamic>? ?? [];
+    return list.whereType<Map<String, dynamic>>().map(ApiKey.fromJson).toList();
+  }
+
+  Future<({ApiKey key, String token, List<ApiKey> apiKeys})> userGenerateApiKey({
+    String description = '',
+    String expiresAt = '',
+  }) async {
+    final body = await _request(
+      'POST',
+      '/api/user/api-keys',
+      body: {
+        'description': description,
+        if (expiresAt.isNotEmpty) 'expires_at': expiresAt,
+      },
+    );
+    final key = ApiKey.fromJson(body['api_key'] as Map<String, dynamic>);
+    final token = body['token'] as String;
+    final list = body['api_keys'] as List<dynamic>? ?? [];
+    final apiKeys =
+        list.whereType<Map<String, dynamic>>().map(ApiKey.fromJson).toList();
+    return (key: key, token: token, apiKeys: apiKeys);
+  }
+
+  Future<List<ApiKey>> userDeleteApiKey(String keyId) async {
+    final body = await _request(
+      'DELETE',
+      '/api/user/api-keys/${Uri.encodeComponent(keyId)}',
+    );
+    final list = body['api_keys'] as List<dynamic>? ?? [];
+    return list.whereType<Map<String, dynamic>>().map(ApiKey.fromJson).toList();
+  }
+
+  Future<List<ApiKey>> userUpdateApiKey(
+    String keyId, {
+    required String description,
+    required bool disabled,
+    String expiresAt = '',
+  }) async {
+    final body = await _request(
+      'PATCH',
+      '/api/user/api-keys/${Uri.encodeComponent(keyId)}',
+      body: {
+        'description': description,
+        'disabled': disabled,
+        'expires_at': expiresAt,
+      },
+    );
+    final list = body['api_keys'] as List<dynamic>? ?? [];
+    return list.whereType<Map<String, dynamic>>().map(ApiKey.fromJson).toList();
+  }
+
   Future<void> saveAdminRole(AdminRole role) async {
     await _request('POST', '/api/admin/roles', body: {
       'name': role.name,

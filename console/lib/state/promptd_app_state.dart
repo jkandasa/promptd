@@ -37,6 +37,7 @@ class PromptdAppState extends ChangeNotifier {
   List<Schedule> schedules = const [];
   AdminAuthConfig adminAuthConfig = const AdminAuthConfig();
   List<ManagedSystemPrompt> managedSystemPrompts = const [];
+  List<ApiKey> userApiKeys = const [];
   ConsoleSection section = ConsoleSection.chat;
   String? selectedConversationId;
   String? selectedProvider;
@@ -212,6 +213,42 @@ class PromptdAppState extends ChangeNotifier {
     await refreshAdminData();
   }
 
+  Future<({ApiKey key, String token})> generateApiKey(
+    String userId, {
+    String description = '',
+    String expiresAt = '',
+  }) async {
+    final result = await _api.generateApiKey(
+      userId,
+      description: description,
+      expiresAt: expiresAt,
+    );
+    await refreshAdminData();
+    return result;
+  }
+
+  Future<void> deleteApiKey(String userId, String keyId) async {
+    await _api.deleteApiKey(userId, keyId);
+    await refreshAdminData();
+  }
+
+  Future<void> updateApiKey(
+    String userId,
+    String keyId, {
+    required String description,
+    required bool disabled,
+    String expiresAt = '',
+  }) async {
+    await _api.updateApiKey(
+      userId,
+      keyId,
+      description: description,
+      disabled: disabled,
+      expiresAt: expiresAt,
+    );
+    await refreshAdminData();
+  }
+
   Future<void> saveAdminRole(AdminRole role) async {
     await _api.saveAdminRole(role);
     await refreshAdminData();
@@ -245,6 +282,44 @@ class PromptdAppState extends ChangeNotifier {
       newPassword: newPassword,
     );
     me = await _api.me();
+    notifyListeners();
+  }
+
+  Future<void> refreshUserApiKeys() async {
+    userApiKeys = await _api.userApiKeys();
+    notifyListeners();
+  }
+
+  Future<({ApiKey key, String token})> userGenerateApiKey({
+    String description = '',
+    String expiresAt = '',
+  }) async {
+    final result = await _api.userGenerateApiKey(
+      description: description,
+      expiresAt: expiresAt,
+    );
+    userApiKeys = result.apiKeys;
+    notifyListeners();
+    return (key: result.key, token: result.token);
+  }
+
+  Future<void> userDeleteApiKey(String keyId) async {
+    userApiKeys = await _api.userDeleteApiKey(keyId);
+    notifyListeners();
+  }
+
+  Future<void> userUpdateApiKey(
+    String keyId, {
+    required String description,
+    required bool disabled,
+    String expiresAt = '',
+  }) async {
+    userApiKeys = await _api.userUpdateApiKey(
+      keyId,
+      description: description,
+      disabled: disabled,
+      expiresAt: expiresAt,
+    );
     notifyListeners();
   }
 

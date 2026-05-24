@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Permissions struct {
@@ -57,22 +59,53 @@ type Role struct {
 	SystemPrompts StringPolicy `yaml:"system_prompts" json:"system_prompts"`
 }
 
-type ServiceToken struct {
-	ID        string `yaml:"id" json:"id"`
-	TokenHash string `yaml:"token_hash" json:"-"`
-	ExpiresAt string `yaml:"expires_at,omitempty" json:"expires_at,omitempty"`
-	NotBefore string `yaml:"not_before,omitempty" json:"not_before,omitempty"`
-	Disabled  bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+type APIKey struct {
+	ID          string `yaml:"id" json:"id"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	TokenHash   string `yaml:"token_hash" json:"-"`
+	ExpiresAt   string `yaml:"expires_at,omitempty" json:"expires_at,omitempty"`
+	NotBefore   string `yaml:"not_before,omitempty" json:"not_before,omitempty"`
+	Disabled    bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	CreatedAt   string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 }
 
 type User struct {
-	ID                 string         `yaml:"id" json:"id"`
-	TenantID           string         `yaml:"tenant_id" json:"tenant_id"`
-	PasswordHash       string         `yaml:"password_hash,omitempty" json:"-"`
-	Roles              []string       `yaml:"roles" json:"roles"`
-	ServiceTokens      []ServiceToken `yaml:"service_tokens,omitempty" json:"service_tokens,omitempty"`
-	Disabled           bool           `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	MustChangePassword bool           `yaml:"must_change_password,omitempty" json:"must_change_password"`
+	ID                 string   `yaml:"id" json:"id"`
+	TenantID           string   `yaml:"tenant_id" json:"tenant_id"`
+	PasswordHash       string   `yaml:"password_hash,omitempty" json:"-"`
+	Roles              []string `yaml:"roles" json:"roles"`
+	APIKeys            []APIKey `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
+	Disabled           bool     `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	MustChangePassword bool     `yaml:"must_change_password,omitempty" json:"must_change_password"`
+}
+
+// UnmarshalYAML migrates the legacy service_tokens field to api_keys.
+func (u *User) UnmarshalYAML(value *yaml.Node) error {
+	type userWire struct {
+		ID                 string   `yaml:"id"`
+		TenantID           string   `yaml:"tenant_id"`
+		PasswordHash       string   `yaml:"password_hash"`
+		Roles              []string `yaml:"roles"`
+		APIKeys            []APIKey `yaml:"api_keys"`
+		ServiceTokens      []APIKey `yaml:"service_tokens"` // legacy field
+		Disabled           bool     `yaml:"disabled"`
+		MustChangePassword bool     `yaml:"must_change_password"`
+	}
+	var w userWire
+	if err := value.Decode(&w); err != nil {
+		return err
+	}
+	u.ID = w.ID
+	u.TenantID = w.TenantID
+	u.PasswordHash = w.PasswordHash
+	u.Roles = w.Roles
+	u.APIKeys = w.APIKeys
+	if len(u.APIKeys) == 0 {
+		u.APIKeys = w.ServiceTokens // migrate legacy service_tokens
+	}
+	u.Disabled = w.Disabled
+	u.MustChangePassword = w.MustChangePassword
+	return nil
 }
 
 type ResourceScope struct {
