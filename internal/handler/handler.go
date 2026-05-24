@@ -1986,6 +1986,7 @@ func (h *Handler) executeTool(ctx context.Context, principal *auth.Principal, tc
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+	extendLLMWriteDeadline(w)
 	principal := requestPrincipal(r)
 	if principal == nil || !principal.Policy.Permissions.Chat {
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "chat not allowed"})
@@ -2140,6 +2141,20 @@ func (h *Handler) ServeUI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	http.ServeContent(w, r, "index.html", time.Time{}, seeker)
+}
+
+// llmWriteTimeout is the per-handler write deadline for LLM endpoints.
+// It is deliberately longer than the server's global WriteTimeout because LLM
+// calls — especially multi-step tool loops — can legitimately exceed 120 s.
+// Without this override the server closes the connection mid-flight and the
+// client sees a bare EOF with no response body.
+const llmWriteTimeout = 10 * time.Minute
+
+// extendLLMWriteDeadline pushes the write deadline for w far enough ahead that
+// a slow LLM call will not be cut off by the global server WriteTimeout.
+func extendLLMWriteDeadline(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(llmWriteTimeout))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

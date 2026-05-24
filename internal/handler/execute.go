@@ -48,6 +48,11 @@ type executeResponse struct {
 }
 
 func (h *Handler) Execute(w http.ResponseWriter, r *http.Request) {
+	// Extend the write deadline: LLM calls with tool loops can run well beyond
+	// the server's global WriteTimeout. EOF on the client is the symptom when
+	// the global deadline fires before the response is written.
+	extendLLMWriteDeadline(w)
+
 	principal := requestPrincipal(r)
 	if principal == nil || !principal.Policy.Permissions.Chat {
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "chat not allowed"})

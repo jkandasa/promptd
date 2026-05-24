@@ -30,9 +30,15 @@ class MessageBubble extends StatefulWidget {
   State<MessageBubble> createState() => _MessageBubbleState();
 }
 
+// Messages longer than this are collapsed by default.
+const int _collapseThreshold = 5000;
+// Number of characters shown in collapsed mode.
+const int _collapseLength = 4000;
+
 class _MessageBubbleState extends State<MessageBubble> {
   bool _editing = false;
   bool _submittingEdit = false;
+  bool _expanded = false;
   late final TextEditingController _editController;
 
   @override
@@ -161,6 +167,11 @@ class _MessageBubbleState extends State<MessageBubble> {
     final compactAccent = _compactAccentColor(theme);
     final userAccent = _userAccentColor(theme);
 
+    final isLong = message.content.length > _collapseThreshold;
+    final displayContent = isLong && !_expanded
+        ? '${message.content.substring(0, _collapseLength)}…'
+        : message.content;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -204,8 +215,7 @@ class _MessageBubbleState extends State<MessageBubble> {
         else if (message.role == 'assistant')
           RepaintBoundary(
             child: MarkdownBody(
-              data: message.content,
-              selectable: true,
+              data: displayContent,
               onTapLink: (text, href, title) => _openLink(href),
               styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                 a: theme.textTheme.bodyLarge?.copyWith(
@@ -239,14 +249,31 @@ class _MessageBubbleState extends State<MessageBubble> {
           )
         else
           RepaintBoundary(
-            child: SelectableText(
-              message.content,
+            child: Text(
+              displayContent,
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: foreground,
                 height: 1.55,
               ),
             ),
           ),
+        if (isLong) ...[
+          const SizedBox(height: 6),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: () => setState(() => _expanded = !_expanded),
+            icon: Icon(
+              _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+              size: 18,
+            ),
+            label: Text(_expanded ? 'Show less' : 'Show more'),
+          ),
+        ],
       ],
     );
   }

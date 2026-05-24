@@ -92,7 +92,7 @@ class _ConversationRow {
   final ConversationMeta? conversation;
 }
 
-class _ConversationTile extends StatelessWidget {
+class _ConversationTile extends StatefulWidget {
   const _ConversationTile({
     required this.state,
     required this.conversation,
@@ -104,9 +104,15 @@ class _ConversationTile extends StatelessWidget {
   final VoidCallback? onSelected;
 
   @override
+  State<_ConversationTile> createState() => _ConversationTileState();
+}
+
+class _ConversationTileState extends State<_ConversationTile> {
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final selected = state.selectedConversationId == conversation.id;
+    final conversation = widget.conversation;
+    final selected = widget.state.selectedConversationId == conversation.id;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -119,8 +125,8 @@ class _ConversationTile extends StatelessWidget {
           mouseCursor: SystemMouseCursors.click,
           borderRadius: BorderRadius.circular(8),
           onTap: () async {
-            await state.loadConversation(conversation.id);
-            onSelected?.call();
+            await widget.state.loadConversation(conversation.id);
+            widget.onSelected?.call();
           },
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 9, 4, 9),
@@ -142,18 +148,14 @@ class _ConversationTile extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.58,
-                          ),
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.58),
                         ),
                       ),
                       const SizedBox(height: 1),
                       Text(
                         _conversationTime(conversation),
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.45,
-                          ),
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
                           fontSize: 11,
                         ),
                       ),
@@ -163,16 +165,14 @@ class _ConversationTile extends StatelessWidget {
                 PopupMenuButton<String>(
                   tooltip: 'Conversation actions',
                   style: const ButtonStyle(
-                    mouseCursor: WidgetStatePropertyAll(
-                      WidgetStateMouseCursor.clickable,
-                    ),
+                    mouseCursor: WidgetStatePropertyAll(WidgetStateMouseCursor.clickable),
                   ),
                   onSelected: (value) {
                     if (value == 'pin') {
-                      state.togglePinConversation(conversation.id);
+                      widget.state.togglePinConversation(conversation.id);
                     }
                     if (value == 'delete') {
-                      state.deleteConversation(conversation.id);
+                      _confirmDelete(context, conversation);
                     }
                   },
                   itemBuilder: (context) => [
@@ -181,24 +181,20 @@ class _ConversationTile extends StatelessWidget {
                       mouseCursor: WidgetStateMouseCursor.clickable,
                       child: Row(
                         children: [
-                          Icon(
-                            conversation.pinned
-                                ? Icons.push_pin
-                                : Icons.push_pin_outlined,
-                          ),
+                          Icon(conversation.pinned ? Icons.push_pin : Icons.push_pin_outlined),
                           const SizedBox(width: 10),
                           Text(conversation.pinned ? 'Unpin' : 'Pin'),
                         ],
                       ),
                     ),
-                    const PopupMenuItem(
+                    PopupMenuItem(
                       value: 'delete',
                       mouseCursor: WidgetStateMouseCursor.clickable,
                       child: Row(
                         children: [
-                          Icon(Icons.delete_outline_rounded),
-                          SizedBox(width: 10),
-                          Text('Delete'),
+                          Icon(Icons.delete_outline_rounded, color: theme.colorScheme.error),
+                          const SizedBox(width: 10),
+                          Text('Delete', style: TextStyle(color: theme.colorScheme.error)),
                         ],
                       ),
                     ),
@@ -212,12 +208,43 @@ class _ConversationTile extends StatelessWidget {
     );
   }
 
+  Future<void> _confirmDelete(BuildContext context, ConversationMeta conversation) async {
+    final theme = Theme.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete conversation?'),
+        content: Text(
+          '"${conversation.title}" will be permanently deleted.',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.colorScheme.error,
+              foregroundColor: theme.colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      widget.state.deleteConversation(conversation.id);
+    }
+  }
+
   String _conversationProviderModel(ConversationMeta conversation) {
-    final provider = conversation.provider ?? '';
-    final model = conversation.model ?? '';
     final parts = [
-      if (provider.isNotEmpty) provider,
-      if (model.isNotEmpty) model,
+      if ((conversation.provider ?? '').isNotEmpty) conversation.provider!,
+      if ((conversation.model ?? '').isNotEmpty) conversation.model!,
     ];
     return parts.join(' · ');
   }
@@ -243,20 +270,7 @@ class _ConversationTile extends StatelessWidget {
   }
 
   String _monthName(int month) {
-    const names = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
+    const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return names[month - 1];
   }
 }
