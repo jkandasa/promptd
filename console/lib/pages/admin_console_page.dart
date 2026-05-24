@@ -109,13 +109,32 @@ class _Header extends StatelessWidget {
 // Users
 // ---------------------------------------------------------------------------
 
-class _UsersCard extends StatelessWidget {
+class _UsersCard extends StatefulWidget {
   const _UsersCard({required this.state});
 
   final PromptdAppState state;
 
   @override
+  State<_UsersCard> createState() => _UsersCardState();
+}
+
+class _UsersCardState extends State<_UsersCard> {
+  final _filterCtrl = TextEditingController();
+  String _filter = '';
+
+  @override
+  void dispose() {
+    _filterCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final all = widget.state.adminAuthConfig.users;
+    final users = _filter.isEmpty
+        ? all
+        : all.where((u) => u.id.toLowerCase().contains(_filter)).toList();
+
     return _AdminCard(
       title: 'Users',
       icon: Icons.people_alt_outlined,
@@ -124,8 +143,19 @@ class _UsersCard extends StatelessWidget {
         icon: Icons.add_rounded,
         onPressed: () => _showUserDialog(context),
       ),
+      filter: _FilterField(
+        controller: _filterCtrl,
+        hint: 'Filter users…',
+        active: _filter.isNotEmpty,
+        onChanged: (v) => setState(() => _filter = v.trim().toLowerCase()),
+        onClear: () {
+          _filterCtrl.clear();
+          setState(() => _filter = '');
+        },
+      ),
+      emptyMessage: all.isEmpty ? 'No users' : 'No matches for "$_filter"',
       children: [
-        for (final user in state.adminAuthConfig.users)
+        for (final user in users)
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(user.id),
@@ -155,7 +185,7 @@ class _UsersCard extends StatelessWidget {
                 IconButton(
                   tooltip: 'Delete',
                   mouseCursor: SystemMouseCursors.click,
-                  onPressed: user.id == state.me?.userId
+                  onPressed: user.id == widget.state.me?.userId
                       ? null
                       : () => _deleteUser(context, user.id),
                   icon: const Icon(Icons.delete_outline_rounded),
@@ -175,13 +205,13 @@ class _UsersCard extends StatelessWidget {
   Future<void> _showApiKeysDialog(BuildContext context, AdminUser user) async {
     await showDialog<void>(
       context: context,
-      builder: (ctx) => _ApiKeysDialog(state: state, user: user),
+      builder: (ctx) => _ApiKeysDialog(state: widget.state, user: user),
     );
   }
 
   Future<void> _deleteUser(BuildContext context, String id) async {
     final ok = await _confirm(context, 'Delete user?', 'Delete "$id"?');
-    if (ok) await state.deleteAdminUser(id);
+    if (ok) await widget.state.deleteAdminUser(id);
   }
 
   Future<void> _showUserDialog(BuildContext context, {AdminUser? user}) async {
@@ -256,14 +286,14 @@ class _UsersCard extends StatelessWidget {
                     const SizedBox(height: 8),
                     _FormSectionLabel('Roles'),
                     const SizedBox(height: 6),
-                    if (state.adminAuthConfig.roles.isEmpty)
+                    if (widget.state.adminAuthConfig.roles.isEmpty)
                       const Text('No roles defined')
                     else
                       Wrap(
                         spacing: 8,
                         runSpacing: 4,
                         children: [
-                          for (final role in state.adminAuthConfig.roles)
+                          for (final role in widget.state.adminAuthConfig.roles)
                             AppFilterChip(
                               label: role.name,
                               selected: selected.contains(role.name),
@@ -292,7 +322,7 @@ class _UsersCard extends StatelessWidget {
     );
 
     if (result == true) {
-      await state.saveAdminUser(
+      await widget.state.saveAdminUser(
         id: idCtrl.text.trim(),
         tenantId: tenantCtrl.text.trim(),
         roles: selected.toList()..sort(),
@@ -454,7 +484,7 @@ class _ApiKeysDialogState extends State<_ApiKeysDialog> {
       final token = generated.token;
       if (!mounted) return;
       await showDialog<void>(
-        context: context,
+        context: context, // ignore: use_build_context_synchronously
         barrierDismissible: false,
         builder: (ctx) => _ApiKeyGeneratedDialog(token: token),
       );
@@ -875,13 +905,32 @@ class _ApiKeyGeneratedDialogState extends State<_ApiKeyGeneratedDialog> {
 // Roles
 // ---------------------------------------------------------------------------
 
-class _RolesCard extends StatelessWidget {
+class _RolesCard extends StatefulWidget {
   const _RolesCard({required this.state});
 
   final PromptdAppState state;
 
   @override
+  State<_RolesCard> createState() => _RolesCardState();
+}
+
+class _RolesCardState extends State<_RolesCard> {
+  final _filterCtrl = TextEditingController();
+  String _filter = '';
+
+  @override
+  void dispose() {
+    _filterCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final all = widget.state.adminAuthConfig.roles;
+    final roles = _filter.isEmpty
+        ? all
+        : all.where((r) => r.name.toLowerCase().contains(_filter)).toList();
+
     return _AdminCard(
       title: 'Roles',
       icon: Icons.badge_outlined,
@@ -890,8 +939,19 @@ class _RolesCard extends StatelessWidget {
         icon: Icons.add_rounded,
         onPressed: () => _showRoleDialog(context),
       ),
+      filter: _FilterField(
+        controller: _filterCtrl,
+        hint: 'Filter roles…',
+        active: _filter.isNotEmpty,
+        onChanged: (v) => setState(() => _filter = v.trim().toLowerCase()),
+        onClear: () {
+          _filterCtrl.clear();
+          setState(() => _filter = '');
+        },
+      ),
+      emptyMessage: all.isEmpty ? 'No roles' : 'No matches for "$_filter"',
       children: [
-        for (final role in state.adminAuthConfig.roles)
+        for (final role in roles)
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(role.name),
@@ -919,7 +979,7 @@ class _RolesCard extends StatelessWidget {
 
   Future<void> _deleteRole(BuildContext context, String name) async {
     final ok = await _confirm(context, 'Delete role?', 'Delete "$name"?');
-    if (ok) await state.deleteAdminRole(name);
+    if (ok) await widget.state.deleteAdminRole(name);
   }
 
   Future<void> _showRoleDialog(BuildContext context, {AdminRole? role}) async {
@@ -1024,7 +1084,7 @@ class _RolesCard extends StatelessWidget {
     );
 
     if (result == true) {
-      await state.saveAdminRole(AdminRole(
+      await widget.state.saveAdminRole(AdminRole(
         name: nameCtrl.text.trim(),
         superAdmin: superAdmin,
         permissions: p,
@@ -1040,13 +1100,32 @@ class _RolesCard extends StatelessWidget {
 // System Prompts
 // ---------------------------------------------------------------------------
 
-class _PromptsCard extends StatelessWidget {
+class _PromptsCard extends StatefulWidget {
   const _PromptsCard({required this.state});
 
   final PromptdAppState state;
 
   @override
+  State<_PromptsCard> createState() => _PromptsCardState();
+}
+
+class _PromptsCardState extends State<_PromptsCard> {
+  final _filterCtrl = TextEditingController();
+  String _filter = '';
+
+  @override
+  void dispose() {
+    _filterCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final all = widget.state.managedSystemPrompts;
+    final prompts = _filter.isEmpty
+        ? all
+        : all.where((p) => p.name.toLowerCase().contains(_filter)).toList();
+
     return _AdminCard(
       title: 'System Prompts',
       icon: Icons.article_outlined,
@@ -1055,8 +1134,19 @@ class _PromptsCard extends StatelessWidget {
         icon: Icons.add_rounded,
         onPressed: () => _showPromptDialog(context),
       ),
+      filter: _FilterField(
+        controller: _filterCtrl,
+        hint: 'Filter prompts…',
+        active: _filter.isNotEmpty,
+        onChanged: (v) => setState(() => _filter = v.trim().toLowerCase()),
+        onClear: () {
+          _filterCtrl.clear();
+          setState(() => _filter = '');
+        },
+      ),
+      emptyMessage: all.isEmpty ? 'No system prompts' : 'No matches for "$_filter"',
       children: [
-        for (final prompt in state.managedSystemPrompts)
+        for (final prompt in prompts)
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(prompt.name),
@@ -1084,7 +1174,7 @@ class _PromptsCard extends StatelessWidget {
 
   Future<void> _deletePrompt(BuildContext context, String name) async {
     final ok = await _confirm(context, 'Delete prompt?', 'Delete "$name"?');
-    if (ok) await state.deleteSystemPrompt(name);
+    if (ok) await widget.state.deleteSystemPrompt(name);
   }
 
   Future<void> _showPromptDialog(BuildContext context, {ManagedSystemPrompt? prompt}) async {
@@ -1205,7 +1295,7 @@ class _PromptsCard extends StatelessWidget {
     );
 
     if (result == true) {
-      await state.saveSystemPrompt(
+      await widget.state.saveSystemPrompt(
         ManagedSystemPrompt(name: nameCtrl.text.trim(), content: contentCtrl.text),
       );
     }
@@ -1222,12 +1312,16 @@ class _AdminCard extends StatelessWidget {
     required this.icon,
     required this.action,
     required this.children,
+    this.filter,
+    this.emptyMessage = 'No records',
   });
 
   final String title;
   final IconData icon;
   final Widget action;
   final List<Widget> children;
+  final Widget? filter;
+  final String emptyMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -1238,6 +1332,7 @@ class _AdminCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
@@ -1247,13 +1342,74 @@ class _AdminCard extends StatelessWidget {
                 action,
               ],
             ),
-            const SizedBox(height: 12),
+            if (filter != null) ...[
+              const SizedBox(height: 10),
+              filter!,
+            ],
+            const SizedBox(height: 8),
             if (children.isEmpty)
-              const Padding(padding: EdgeInsets.all(12), child: Text('No records'))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  emptyMessage,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  ),
+                ),
+              )
             else
-              ...children,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 380),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: children,
+                  ),
+                ),
+              ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Filter field
+// ---------------------------------------------------------------------------
+
+class _FilterField extends StatelessWidget {
+  const _FilterField({
+    required this.controller,
+    required this.hint,
+    required this.active,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final String hint;
+  final bool active;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText: hint,
+        prefixIcon: const Icon(Icons.search_rounded, size: 18),
+        suffixIcon: active
+            ? IconButton(
+                mouseCursor: SystemMouseCursors.click,
+                icon: const Icon(Icons.clear_rounded, size: 16),
+                onPressed: onClear,
+              )
+            : null,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       ),
     );
   }
