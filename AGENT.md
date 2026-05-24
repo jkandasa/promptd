@@ -4,7 +4,7 @@ This file is for humans and coding agents working inside this repository. It des
 
 ## Project Summary
 
-`promptd` is a single-binary Go application with an embedded React frontend.
+`promptd` is a single-binary Go application with an embedded Flutter console UI (compiled to web). Published releases bundle the Flutter UI in airgap mode (CanvasKit and fonts included locally, no CDN). A React web UI is also available for local builds.
 
 Primary capabilities:
 
@@ -55,30 +55,7 @@ Primary capabilities:
 - `internal/ui/`
   Embedded built frontend assets.
 
-### Frontend
-
-- `web/src/pages/index.tsx`
-  App shell, top-level routing state, shared data fetch.
-
-- `web/src/pages/chat/ChatPage.tsx`
-  Chat UI, history sidebar, provider/model/system prompt state, uploads, compaction.
-
-- `web/src/pages/scheduler/`
-  Schedule list, editor, history/detail UI.
-
-- `web/src/pages/tools/`
-  Tool catalog page.
-
-- `web/src/components/`
-  Message bubbles, markdown, code blocks, traces, params UI, tool drawers.
-
-- `web/src/api/`
-  Fetch wrappers for backend APIs.
-
-- `web/src/types/`
-  Shared frontend data contracts.
-
-### Console (Flutter)
+### Console (Flutter) — default for releases
 
 - `console/lib/pages/chat_console_page.dart`
   Top-level chat console page with responsive layout (sidebar + workspace).
@@ -90,7 +67,7 @@ Primary capabilities:
   Message bubble widget with markdown rendering, image/SVG attachments, edit flow, and link opening.
 
 - `console/lib/widgets/chat/conversation_panel.dart`
-  Conversation sidebar panel with list, search, pin, rename, and delete.
+  Conversation sidebar panel with list, pin, rename, single delete, and bulk multi-select delete.
 
 - `console/lib/widgets/chat/trace_details_dialog.dart`
   Trace viewer for LLM call details, tool calls/results, token usage.
@@ -103,6 +80,16 @@ Primary capabilities:
 
 - `console/lib/services/`
   API client, file downloader, storage helpers.
+
+### React Web UI — local development alternative
+
+- `web/src/pages/index.tsx`: app shell, top-level routing state, shared data fetch
+- `web/src/pages/chat/ChatPage.tsx`: chat UI, history sidebar, provider/model/system prompt state, uploads, compaction
+- `web/src/pages/scheduler/`: schedule list, editor, history/detail UI
+- `web/src/pages/tools/`: tool catalog page
+- `web/src/components/`: message bubbles, markdown, code blocks, traces, params UI, tool drawers
+- `web/src/api/`: fetch wrappers for backend APIs
+- `web/src/types/`: shared frontend data contracts
 
 ## Runtime Model
 
@@ -171,7 +158,7 @@ Current permission flags:
 - One-time schedules disable themselves after a run.
 - History retention is enforced by deleting oldest execution files when necessary.
 
-## Current Frontend Behavior
+## Current React Web UI Behavior
 
 - Main views are shell-managed through pathname parsing, not a React Router route tree.
 - Chat remembers selected provider/model/system prompt in local storage.
@@ -188,7 +175,7 @@ Current permission flags:
 - Chat workspace mirrors web app: provider/model selection, system prompt, file uploads, compaction.
 - Message bubbles render markdown via `flutter_markdown_plus`; links open in external browser.
 - Performance optimizations for 4K/Wayland: `RepaintBoundary` isolation, increased list cache extent, scroll scheduling off build path.
-- Conversation panel: list, search, pin, rename, delete with relative timestamps.
+- Conversation panel: list, pin, rename, single delete, and multi-select bulk delete with relative timestamps.
 - Trace details dialog: LLM call inspection, tool call/result cards, token usage visualization.
 - Scheduler: list, create/edit forms, execution history.
 - Settings: compact conversation toggle, model/provider selection via `SearchSelectField`.
@@ -239,9 +226,20 @@ go test ./...
 go run ./cmd serve --config ./config.yaml
 ./promptd hash-password
 ./promptd version
-cd web && pnpm build
-make ui
-make build
+```
+
+Build (Flutter console, matches CI/releases):
+
+```bash
+make ui WITH_CONSOLE=1 AIRGAP=1   # airgap Flutter web UI — what CI uses
+make build WITH_CONSOLE=1 AIRGAP=1  # full binary with airgap Flutter UI
+```
+
+Build (React web UI, local alternative):
+
+```bash
+make ui       # React web UI
+make build    # full binary with React web UI
 ```
 
 Console (Flutter):
@@ -253,7 +251,7 @@ flutter analyze
 flutter run -d linux        # run on Linux desktop
 flutter run -d chrome       # run on web
 flutter build linux --release
-flutter build web --release
+flutter build web --release --no-web-resources-cdn  # airgap (matches CI)
 ```
 
 ## Documentation Expectations
