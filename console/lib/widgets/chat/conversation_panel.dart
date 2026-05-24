@@ -209,7 +209,6 @@ class _ConversationTileState extends State<_ConversationTile> {
   }
 
   Future<void> _confirmDelete(BuildContext context, ConversationMeta conversation) async {
-    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -224,14 +223,11 @@ class _ConversationTileState extends State<_ConversationTile> {
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-            ),
+          AppButton(
+            label: 'Delete',
+            icon: Icons.delete_outline_rounded,
             onPressed: () => Navigator.of(ctx).pop(true),
-            icon: const Icon(Icons.delete_outline_rounded),
-            label: const Text('Delete'),
+            destructive: true,
           ),
         ],
       ),

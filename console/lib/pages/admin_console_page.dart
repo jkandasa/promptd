@@ -119,10 +119,10 @@ class _UsersCard extends StatelessWidget {
     return _AdminCard(
       title: 'Users',
       icon: Icons.people_alt_outlined,
-      action: FilledButton.icon(
+      action: AppButton(
+        label: 'User',
+        icon: Icons.add_rounded,
         onPressed: () => _showUserDialog(context),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('User'),
       ),
       children: [
         for (final user in state.adminAuthConfig.users)
@@ -133,9 +133,9 @@ class _UsersCard extends StatelessWidget {
             trailing: Wrap(
               spacing: 4,
               children: [
-                if (user.disabled) const Chip(label: Text('Disabled')),
+                if (user.disabled) const AppPill(label: 'Disabled', tone: AppTone.neutral),
                 if (user.mustChangePassword)
-                  const Chip(label: Text('Change password')),
+                  const AppPill(label: 'Change password', tone: AppTone.warning),
                 IconButton(
                   tooltip: 'API Keys',
                   mouseCursor: SystemMouseCursors.click,
@@ -264,8 +264,8 @@ class _UsersCard extends StatelessWidget {
                         runSpacing: 4,
                         children: [
                           for (final role in state.adminAuthConfig.roles)
-                            FilterChip(
-                              label: Text(role.name),
+                            AppFilterChip(
+                              label: role.name,
                               selected: selected.contains(role.name),
                               onSelected: (value) => setState(() =>
                                   value ? selected.add(role.name) : selected.remove(role.name)),
@@ -281,9 +281,9 @@ class _UsersCard extends StatelessWidget {
                 onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancel'),
               ),
-              FilledButton(
+              AppButton(
+                label: 'Save',
                 onPressed: canSave ? () => Navigator.pop(context, true) : null,
-                child: const Text('Save'),
               ),
             ],
           );
@@ -414,16 +414,11 @@ class _ApiKeysDialogState extends State<_ApiKeysDialog> {
             const Divider(height: 1),
             Padding(
               padding: const EdgeInsets.all(16),
-              child: FilledButton.icon(
-                onPressed: _loading ? null : () => _generateKey(context),
-                icon: _loading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.add_rounded),
-                label: const Text('Generate new API key'),
+              child: AppButton(
+                label: 'Generate new API key',
+                icon: Icons.add_rounded,
+                onPressed: () => _generateKey(context),
+                loading: _loading,
               ),
             ),
           ],
@@ -474,7 +469,6 @@ class _ApiKeysDialogState extends State<_ApiKeysDialog> {
   }
 
   Future<void> _deleteKey(ApiKey key) async {
-    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -487,13 +481,10 @@ class _ApiKeysDialogState extends State<_ApiKeysDialog> {
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-            ),
+          AppButton(
+            label: 'Delete',
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete'),
+            destructive: true,
           ),
         ],
       ),
@@ -545,18 +536,12 @@ class _ApiKeyTile extends StatelessWidget {
     final isActive = apiKey.isActive;
     final isExpired = apiKey.isExpired;
 
-    Color statusColor;
-    String statusLabel;
-    if (isExpired) {
-      statusColor = theme.colorScheme.error;
-      statusLabel = 'Expired';
-    } else if (apiKey.disabled) {
-      statusColor = theme.colorScheme.secondary;
-      statusLabel = 'Disabled';
-    } else {
-      statusColor = Colors.green;
-      statusLabel = 'Active';
-    }
+    final statusTone = isExpired
+        ? AppTone.danger
+        : apiKey.disabled
+            ? AppTone.neutral
+            : AppTone.success;
+    final statusLabel = isExpired ? 'Expired' : apiKey.disabled ? 'Disabled' : 'Active';
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -602,13 +587,7 @@ class _ApiKeyTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Chip(
-            label: Text(statusLabel, style: TextStyle(color: statusColor, fontSize: 11)),
-            side: BorderSide(color: statusColor.withValues(alpha: 0.4)),
-            backgroundColor: statusColor.withValues(alpha: 0.08),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
+          AppPill(label: statusLabel, tone: statusTone),
           const SizedBox(width: 4),
           PopupMenuButton<String>(
             tooltip: 'Key actions',
@@ -785,12 +764,12 @@ class _GenerateApiKeyDialogState extends State<_GenerateApiKeyDialog> {
           onPressed: () => Navigator.of(context).pop(null),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        AppButton(
+          label: 'Generate',
           onPressed: () => Navigator.of(context).pop((
             description: _descCtrl.text.trim(),
             expiresAt: _expiresAt,
           )),
-          child: const Text('Generate'),
         ),
       ],
     );
@@ -883,9 +862,9 @@ class _ApiKeyGeneratedDialogState extends State<_ApiKeyGeneratedDialog> {
         ),
       ),
       actions: [
-        FilledButton(
+        AppButton(
+          label: "I've copied the key",
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text("I've copied the key"),
         ),
       ],
     );
@@ -906,10 +885,10 @@ class _RolesCard extends StatelessWidget {
     return _AdminCard(
       title: 'Roles',
       icon: Icons.badge_outlined,
-      action: FilledButton.icon(
+      action: AppButton(
+        label: 'Role',
+        icon: Icons.add_rounded,
         onPressed: () => _showRoleDialog(context),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Role'),
       ),
       children: [
         for (final role in state.adminAuthConfig.roles)
@@ -1034,9 +1013,9 @@ class _RolesCard extends StatelessWidget {
                 onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancel'),
               ),
-              FilledButton(
+              AppButton(
+                label: 'Save',
                 onPressed: canSave ? () => Navigator.pop(context, true) : null,
-                child: const Text('Save'),
               ),
             ],
           );
@@ -1071,10 +1050,10 @@ class _PromptsCard extends StatelessWidget {
     return _AdminCard(
       title: 'System Prompts',
       icon: Icons.article_outlined,
-      action: FilledButton.icon(
+      action: AppButton(
+        label: 'Prompt',
+        icon: Icons.add_rounded,
         onPressed: () => _showPromptDialog(context),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Prompt'),
       ),
       children: [
         for (final prompt in state.managedSystemPrompts)
@@ -1210,9 +1189,9 @@ class _PromptsCard extends StatelessWidget {
                           child: const Text('Cancel'),
                         ),
                         const SizedBox(width: 8),
-                        FilledButton(
+                        AppButton(
+                          label: 'Save',
                           onPressed: canSave ? () => Navigator.pop(context, true) : null,
-                          child: const Text('Save'),
                         ),
                       ],
                     ),
@@ -1370,26 +1349,20 @@ List<String> _lines(String value) =>
 Future<bool> _confirm(BuildContext context, String title, String message) async {
   return await showDialog<bool>(
     context: context,
-    builder: (context) {
-      final theme = Theme.of(context);
-      return AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      );
-    },
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        AppButton(
+          label: 'Delete',
+          onPressed: () => Navigator.pop(context, true),
+          destructive: true,
+        ),
+      ],
+    ),
   ) ?? false;
 }

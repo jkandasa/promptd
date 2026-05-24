@@ -308,15 +308,11 @@ class _MessageBubbleState extends State<MessageBubble> {
                 icon: const Icon(Icons.close_rounded),
                 label: const Text('Cancel'),
               ),
-              FilledButton.icon(
-                onPressed: _submittingEdit ? null : _submitEdit,
-                icon: _submittingEdit
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.send_rounded),
-                label: const Text('Send'),
+              AppButton(
+                label: 'Send',
+                icon: Icons.send_rounded,
+                onPressed: _submitEdit,
+                loading: _submittingEdit,
               ),
             ],
           ),
@@ -369,7 +365,6 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
-    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -379,14 +374,11 @@ class _MessageBubbleState extends State<MessageBubble> {
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('Cancel'),
           ),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.errorContainer,
-              foregroundColor: theme.colorScheme.onErrorContainer,
-            ),
+          AppButton(
+            label: 'Delete',
+            icon: Icons.delete_outline_rounded,
             onPressed: () => Navigator.of(context).pop(true),
-            icon: const Icon(Icons.delete_outline_rounded),
-            label: const Text('Delete'),
+            destructive: true,
           ),
         ],
       ),

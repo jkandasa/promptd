@@ -107,28 +107,13 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                                 TextButton(
                                   onPressed: () =>
                                       Navigator.of(context).pop(false),
-                                  style: const ButtonStyle(
-                                    mouseCursor: WidgetStatePropertyAll(
-                                      SystemMouseCursors.click,
-                                    ),
-                                  ),
                                   child: const Text('Cancel'),
                                 ),
-                                FilledButton(
+                                AppButton(
+                                  label: 'Delete',
                                   onPressed: () =>
                                       Navigator.of(context).pop(true),
-                                  style: ButtonStyle(
-                                    backgroundColor: WidgetStatePropertyAll(
-                                      Theme.of(context).colorScheme.error,
-                                    ),
-                                    foregroundColor: WidgetStatePropertyAll(
-                                      Theme.of(context).colorScheme.onError,
-                                    ),
-                                    mouseCursor: const WidgetStatePropertyAll(
-                                      SystemMouseCursors.click,
-                                    ),
-                                  ),
-                                  child: const Text('Delete'),
+                                  destructive: true,
                                 ),
                               ],
                             ),
@@ -158,25 +143,12 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            style: const ButtonStyle(
-              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-            ),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          AppButton(
+            label: 'Delete',
             onPressed: () => Navigator.of(context).pop(true),
-            style: ButtonStyle(
-              backgroundColor: WidgetStatePropertyAll(
-                Theme.of(context).colorScheme.error,
-              ),
-              foregroundColor: WidgetStatePropertyAll(
-                Theme.of(context).colorScheme.onError,
-              ),
-              mouseCursor: const WidgetStatePropertyAll(
-                SystemMouseCursors.click,
-              ),
-            ),
-            child: const Text('Delete'),
+            destructive: true,
           ),
         ],
       ),

@@ -219,15 +219,10 @@ class _ListHeaderState extends State<_ListHeader> {
                         mouseCursor: SystemMouseCursors.click,
                         icon: const Icon(Icons.add_rounded),
                       )
-                    : FilledButton.icon(
+                    : AppButton(
+                        label: 'New schedule',
+                        icon: Icons.add_rounded,
                         onPressed: widget.onCreate,
-                        style: const ButtonStyle(
-                          mouseCursor: WidgetStatePropertyAll(
-                            SystemMouseCursors.click,
-                          ),
-                        ),
-                        icon: const Icon(Icons.add_rounded),
-                        label: const Text('New schedule'),
                       ),
               ],
             ],
@@ -679,13 +674,10 @@ class _EmptySchedules extends StatelessWidget {
       title: 'No schedules configured',
       message: 'Create a scheduled prompt to run it automatically.',
       icon: Icons.event_repeat_rounded,
-      action: FilledButton.icon(
+      action: AppButton(
+        label: 'Create first schedule',
+        icon: Icons.add_rounded,
         onPressed: onCreate,
-        style: const ButtonStyle(
-          mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-        ),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Create first schedule'),
       ),
     );
   }
@@ -704,9 +696,6 @@ class _NoFilterMatches extends StatelessWidget {
       icon: Icons.search_off_rounded,
       action: TextButton(
         onPressed: onClear,
-        style: const ButtonStyle(
-          mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-        ),
         child: const Text('Clear filters'),
       ),
     );

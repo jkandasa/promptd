@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../models/promptd_models.dart';
 import '../state/promptd_app_state.dart';
+import 'common/app_ui.dart';
 
 class UserApiKeysDialog extends StatefulWidget {
   const UserApiKeysDialog({super.key, required this.state});
@@ -116,16 +117,11 @@ class _UserApiKeysDialogState extends State<UserApiKeysDialog> {
                 const Divider(height: 1),
                 Padding(
                   padding: const EdgeInsets.all(16),
-                  child: FilledButton.icon(
-                    onPressed: _loading ? null : () => _generateKey(context),
-                    icon: _loading
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.add_rounded),
-                    label: const Text('Generate new API key'),
+                  child: AppButton(
+                    label: 'Generate new API key',
+                    icon: Icons.add_rounded,
+                    onPressed: () => _generateKey(context),
+                    loading: _loading,
                   ),
                 ),
               ],
@@ -174,7 +170,6 @@ class _UserApiKeysDialogState extends State<UserApiKeysDialog> {
   }
 
   Future<void> _deleteKey(ApiKey key) async {
-    final theme = Theme.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -188,13 +183,10 @@ class _UserApiKeysDialogState extends State<UserApiKeysDialog> {
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-            ),
+          AppButton(
+            label: 'Delete',
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete'),
+            destructive: true,
           ),
         ],
       ),
@@ -261,18 +253,12 @@ class _ApiKeyTile extends StatelessWidget {
     final isActive = apiKey.isActive;
     final isExpired = apiKey.isExpired;
 
-    Color statusColor;
-    String statusLabel;
-    if (isExpired) {
-      statusColor = theme.colorScheme.error;
-      statusLabel = 'Expired';
-    } else if (apiKey.disabled) {
-      statusColor = theme.colorScheme.secondary;
-      statusLabel = 'Disabled';
-    } else {
-      statusColor = Colors.green;
-      statusLabel = 'Active';
-    }
+    final statusTone = isExpired
+        ? AppTone.danger
+        : apiKey.disabled
+            ? AppTone.neutral
+            : AppTone.success;
+    final statusLabel = isExpired ? 'Expired' : apiKey.disabled ? 'Disabled' : 'Active';
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -322,16 +308,7 @@ class _ApiKeyTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Chip(
-            label: Text(
-              statusLabel,
-              style: TextStyle(color: statusColor, fontSize: 11),
-            ),
-            side: BorderSide(color: statusColor.withValues(alpha: 0.4)),
-            backgroundColor: statusColor.withValues(alpha: 0.08),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
+          AppPill(label: statusLabel, tone: statusTone),
           const SizedBox(width: 4),
           PopupMenuButton<String>(
             tooltip: 'Key actions',
@@ -525,12 +502,12 @@ class _GenerateApiKeyDialogState extends State<_GenerateApiKeyDialog> {
           onPressed: () => Navigator.of(context).pop(null),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        AppButton(
+          label: 'Generate',
           onPressed: () => Navigator.of(context).pop((
             description: _descCtrl.text.trim(),
             expiresAt: _expiresAt,
           )),
-          child: const Text('Generate'),
         ),
       ],
     );
@@ -634,9 +611,9 @@ class _ApiKeyGeneratedDialogState extends State<_ApiKeyGeneratedDialog> {
         ),
       ),
       actions: [
-        FilledButton(
+        AppButton(
+          label: "I've copied the key",
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text("I've copied the key"),
         ),
       ],
     );

@@ -227,7 +227,7 @@ class AppPill extends StatelessWidget {
             label,
             style: theme.textTheme.labelSmall?.copyWith(
               color: foreground,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w600,
               height: 1.2,
             ),
           ),
@@ -271,7 +271,7 @@ class AppChoiceChip extends StatelessWidget {
         color: selected
             ? theme.colorScheme.onPrimary
             : theme.colorScheme.onSurface,
-        fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
       ),
       label: Row(
         mainAxisSize: MainAxisSize.min,
@@ -293,13 +293,52 @@ class AppChoiceChip extends StatelessWidget {
                   color: selected
                       ? theme.colorScheme.onPrimary
                       : theme.colorScheme.onSurface.withValues(alpha: 0.68),
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+class AppFilterChip extends StatelessWidget {
+  const AppFilterChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FilterChip(
+      showCheckmark: false,
+      selected: selected,
+      onSelected: onSelected,
+      mouseCursor: SystemMouseCursors.click,
+      visualDensity: VisualDensity.compact,
+      selectedColor: theme.colorScheme.primary,
+      backgroundColor: theme.colorScheme.surface,
+      side: BorderSide(
+        color: selected
+            ? theme.colorScheme.primary
+            : theme.colorScheme.outlineVariant,
+      ),
+      labelStyle: theme.textTheme.labelMedium?.copyWith(
+        color: selected
+            ? theme.colorScheme.onPrimary
+            : theme.colorScheme.onSurface,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+      ),
+      label: Text(label),
     );
   }
 }
@@ -354,6 +393,59 @@ class AppNotice extends StatelessWidget {
       AppTone.primary => Icons.info_outline_rounded,
       AppTone.neutral => Icons.info_outline_rounded,
     };
+  }
+}
+
+/// A button that shows an inline spinner when [loading] is true and disables
+/// itself. Use [icon] for an icon-prefixed [FilledButton]; omit it for a
+/// text-only button. Set [destructive] for error-colored actions.
+class AppButton extends StatelessWidget {
+  const AppButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.loading = false,
+    this.destructive = false,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final IconData? icon;
+  final bool loading;
+  final bool destructive;
+
+  static const _spinner = SizedBox.square(
+    dimension: 16,
+    child: CircularProgressIndicator(strokeWidth: 2),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final effectiveOnPressed = loading ? null : onPressed;
+    final effectiveIcon = loading ? _spinner : (icon != null ? Icon(icon) : null);
+
+    final style = destructive
+        ? FilledButton.styleFrom(
+            backgroundColor: theme.colorScheme.error,
+            foregroundColor: theme.colorScheme.onError,
+          )
+        : null;
+
+    if (effectiveIcon != null) {
+      return FilledButton.icon(
+        onPressed: effectiveOnPressed,
+        style: style,
+        icon: effectiveIcon,
+        label: Text(label),
+      );
+    }
+    return FilledButton(
+      onPressed: effectiveOnPressed,
+      style: style,
+      child: Text(label),
+    );
   }
 }
 

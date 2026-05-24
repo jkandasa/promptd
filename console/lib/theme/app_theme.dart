@@ -9,6 +9,11 @@ class AppTheme {
   static const Color outline = Color(0xFFDDE3EC);
   static const String codeFontFamily = 'monospace';
 
+  // ── Font ──────────────────────────────────────────────────────────────────
+  // To switch the app font: change 'montserrat' to any GoogleFonts name.
+  static TextStyle _font(double size, FontWeight weight, {Color? color}) =>
+      GoogleFonts.montserrat(fontSize: size, fontWeight: weight, color: color);
+
   static ThemeData light() {
     const scheme = ColorScheme(
       brightness: Brightness.light,
@@ -65,68 +70,33 @@ class AppTheme {
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      fontFamily: GoogleFonts.montserrat().fontFamily,
+      // Derived from _font so non-explicit text styles also pick up the font.
+      fontFamily: _font(14, FontWeight.w400).fontFamily,
       scaffoldBackgroundColor: scheme.brightness == Brightness.dark
           ? const Color(0xFF020617)
           : mist,
     );
 
-    final textTheme = GoogleFonts.montserratTextTheme(base.textTheme).copyWith(
-      displayLarge: GoogleFonts.montserrat(
-        fontSize: 48,
-        fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
-      ),
-      displayMedium: GoogleFonts.montserrat(
-        fontSize: 40,
-        fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
-      ),
-      headlineMedium: GoogleFonts.montserrat(
-        fontSize: 28,
-        fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
-      ),
-      titleLarge: GoogleFonts.montserrat(
-        fontSize: 20,
-        fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
-      ),
-      titleMedium: GoogleFonts.montserrat(
-        fontSize: 16,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface,
-      ),
-      bodyLarge: GoogleFonts.montserrat(
-        fontSize: 15,
-        fontWeight: FontWeight.w500,
-        color: scheme.onSurface,
-      ),
-      bodyMedium: GoogleFonts.montserrat(
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-        color: scheme.onSurface.withValues(alpha: 0.88),
-      ),
-      bodySmall: GoogleFonts.montserrat(
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        color: scheme.onSurface.withValues(alpha: 0.78),
-      ),
-      labelLarge: GoogleFonts.montserrat(
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
-      ),
-      labelMedium: GoogleFonts.montserrat(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface,
-      ),
-      labelSmall: GoogleFonts.montserrat(
-        fontSize: 11,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface,
-      ),
+    final textTheme = base.textTheme.copyWith(
+      displayLarge: _font(48, FontWeight.w700, color: scheme.onSurface),
+      displayMedium: _font(40, FontWeight.w700, color: scheme.onSurface),
+      headlineMedium: _font(28, FontWeight.w700, color: scheme.onSurface),
+      titleLarge: _font(20, FontWeight.w700, color: scheme.onSurface),
+      titleMedium: _font(16, FontWeight.w600, color: scheme.onSurface),
+      bodyLarge: _font(15, FontWeight.w500, color: scheme.onSurface),
+      bodyMedium: _font(14, FontWeight.w500,
+          color: scheme.onSurface.withValues(alpha: 0.88)),
+      bodySmall: _font(12, FontWeight.w500,
+          color: scheme.onSurface.withValues(alpha: 0.78)),
+      labelLarge: _font(14, FontWeight.w700, color: scheme.onSurface),
+      labelMedium: _font(12, FontWeight.w600, color: scheme.onSurface),
+      labelSmall: _font(11, FontWeight.w600, color: scheme.onSurface),
+    );
+
+    // Button text style: w500 from the same _font() so the correct variant
+    // is loaded (not a copyWith over a variant-specific fontFamily string).
+    final buttonTextStyle = WidgetStatePropertyAll(
+      _font(14, FontWeight.w500),
     );
 
     return base.copyWith(
@@ -238,7 +208,7 @@ class AppTheme {
       ),
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
-          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          textStyle: buttonTextStyle,
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
@@ -249,7 +219,7 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
-          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          textStyle: buttonTextStyle,
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
@@ -260,7 +230,7 @@ class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
-          textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
+          textStyle: buttonTextStyle,
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
@@ -271,7 +241,9 @@ class AppTheme {
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
-          textStyle: WidgetStatePropertyAll(textTheme.labelMedium),
+          textStyle: WidgetStatePropertyAll(
+            _font(12, FontWeight.w500),
+          ),
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),

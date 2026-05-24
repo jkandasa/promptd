@@ -467,10 +467,10 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
               onPressed: () => Navigator.of(context).pop(false),
               child: const Text('Cancel'),
             ),
-            FilledButton.icon(
+            AppButton(
+              label: 'Compact',
+              icon: Icons.compress_rounded,
               onPressed: () => Navigator.of(context).pop(true),
-              icon: const Icon(Icons.compress_rounded),
-              label: const Text('Compact'),
             ),
           ],
         );

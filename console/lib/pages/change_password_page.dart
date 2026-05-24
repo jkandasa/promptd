@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../state/promptd_app_state.dart';
+import '../widgets/common/app_ui.dart';
 
 class ChangePasswordPage extends StatefulWidget {
   const ChangePasswordPage({super.key, required this.state});
@@ -54,9 +55,10 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                     Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
                   ],
                   const SizedBox(height: 20),
-                  FilledButton(
-                    onPressed: _saving ? null : _save,
-                    child: _saving ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Update password'),
+                  AppButton(
+                    label: 'Update password',
+                    onPressed: _save,
+                    loading: _saving,
                   ),
                   TextButton(onPressed: _saving ? null : widget.state.logout, child: const Text('Sign out')),
                 ],

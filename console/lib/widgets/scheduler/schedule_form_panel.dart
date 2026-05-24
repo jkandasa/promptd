@@ -353,32 +353,16 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
                 children: [
                   TextButton(
                     onPressed: _saving ? null : widget.onCancel,
-                    style: const ButtonStyle(
-                      mouseCursor: WidgetStatePropertyAll(
-                        SystemMouseCursors.click,
-                      ),
-                    ),
                     child: const Text('Cancel'),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton.icon(
-                    onPressed: _saving ? null : _save,
-                    style: const ButtonStyle(
-                      mouseCursor: WidgetStatePropertyAll(
-                        SystemMouseCursors.click,
-                      ),
-                    ),
-                    icon: _saving
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.save_rounded),
-                    label: Text(
-                      widget.initial == null
-                          ? 'Create schedule'
-                          : 'Save changes',
-                    ),
+                  AppButton(
+                    label: widget.initial == null
+                        ? 'Create schedule'
+                        : 'Save changes',
+                    icon: Icons.save_rounded,
+                    onPressed: _save,
+                    loading: _saving,
                   ),
                 ],
               ),
@@ -447,9 +431,6 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
           ),
           OutlinedButton.icon(
             onPressed: _pickRunAt,
-            style: const ButtonStyle(
-              mouseCursor: WidgetStatePropertyAll(SystemMouseCursors.click),
-            ),
             icon: const Icon(Icons.calendar_month_rounded),
             label: const Text('Select'),
           ),
@@ -619,7 +600,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, selected), child: const Text('Apply')),
+              AppButton(label: 'Apply', onPressed: () => Navigator.pop(context, selected)),
             ],
           );
         },

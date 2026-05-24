@@ -154,19 +154,11 @@ class _LoginPageState extends State<LoginPage> {
                               const SizedBox(height: 20),
                               SizedBox(
                                 width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: widget.state.signingIn
-                                      ? null
-                                      : _submit,
-                                  icon: widget.state.signingIn
-                                      ? const SizedBox.square(
-                                          dimension: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Icon(Icons.login_rounded),
-                                  label: const Text('Sign in'),
+                                child: AppButton(
+                                  label: 'Sign in',
+                                  icon: Icons.login_rounded,
+                                  onPressed: _submit,
+                                  loading: widget.state.signingIn,
                                 ),
                               ),
                             ],

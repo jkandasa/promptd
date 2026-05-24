@@ -42,7 +42,7 @@ class SearchSelectField<T> extends StatelessWidget {
       child: MouseRegion(
         cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           onTap: enabled ? () => _openPicker(context) : null,
           child: InputDecorator(
             decoration: InputDecoration(
