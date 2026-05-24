@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -15,15 +17,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.github.jkandasa.promptd"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -32,14 +27,13 @@ android {
 
     val keyPropsFile = rootProject.file("key.properties")
     if (keyPropsFile.exists()) {
-        val keyProps = java.util.Properties()
-        keyProps.load(keyPropsFile.inputStream())
+        val keyProps = Properties().apply { load(keyPropsFile.inputStream()) }
         signingConfigs {
             create("release") {
-                keyAlias = keyProps["keyAlias"] as String
-                keyPassword = keyProps["keyPassword"] as String
-                storeFile = file(keyProps["storeFile"] as String)
-                storePassword = keyProps["storePassword"] as String
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+                storeFile = file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
             }
         }
     }
@@ -52,6 +46,12 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
