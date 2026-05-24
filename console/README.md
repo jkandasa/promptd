@@ -57,6 +57,53 @@ make run-web
 - `make build-android`
 - `make build-linux`
 
+## Android release signing
+
+The CI workflows require a release keystore to build signed APK and AAB artifacts. Signing is mandatory — the build fails if the secrets are not configured.
+
+### Generate a keystore (one-time)
+
+```bash
+keytool -genkey -v \
+  -keystore ~/promptd-release.jks \
+  -alias promptd \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 10000
+```
+
+Keep `promptd-release.jks` safe. Losing it means you can no longer publish updates to an existing Play Store listing.
+
+If `keytool` did not prompt for a separate key password, the key password equals the keystore password.
+
+### Configure GitHub secrets
+
+Add these four secrets under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | `base64 -w 0 ~/promptd-release.jks` |
+| `KEY_ALIAS` | `promptd` |
+| `KEY_PASSWORD` | key password (same as store password if not prompted separately) |
+| `STORE_PASSWORD` | keystore password |
+
+### Local signing
+
+To sign locally, create `console/android/key.properties` (gitignored — never commit it):
+
+```properties
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=promptd
+storeFile=/absolute/path/to/promptd-release.jks
+```
+
+The `build.gradle.kts` detects this file automatically and uses the release signing config. Without it, the debug key is used.
+
+### Play Store
+
+Upload the `.aab` from the release artifacts. On first upload, enable **Play App Signing** in the Play Console — Google re-signs the final APK for distribution using their own key. The upload key only needs to be kept secure on your end.
+
 The current UI mirrors the web app's visual system:
 
 - Montserrat and Open Sans typography (Montserrat is bundled locally; no CDN fetch needed)
