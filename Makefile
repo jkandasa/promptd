@@ -25,6 +25,10 @@ LDFLAGS    := -s -w \
 # instead of the default React/Yarn web UI.
 WITH_CONSOLE ?= 0
 
+# Pass AIRGAP=1 to bundle canvaskit locally instead of loading from Google CDN.
+# Required for deployments without internet access. Increases binary size by ~32MB.
+AIRGAP ?= 0
+
 .PHONY: ui
 ui:
 ifeq ($(WITH_CONSOLE),1)
@@ -41,7 +45,12 @@ web-ui:
 
 .PHONY: console-ui
 console-ui:
+ifeq ($(AIRGAP),1)
+	cd console && flutter build web --release -O4 --no-source-maps --no-web-resources-cdn
+else
 	cd console && flutter build web --release -O4 --no-source-maps
+	rm -rf console/build/web/canvaskit
+endif
 	rm -rf internal/ui/dist
 	cp -r console/build/web internal/ui/dist
 
@@ -66,6 +75,11 @@ build: ui
 .PHONY: build-with-console
 build-with-console:
 	$(MAKE) build WITH_CONSOLE=1
+
+# Build with the Flutter console UI in airgap mode (canvaskit bundled, no CDN).
+.PHONY: build-with-console-airgap
+build-with-console-airgap:
+	$(MAKE) build WITH_CONSOLE=1 AIRGAP=1
 
 .PHONY: docker-build
 docker-build: build

@@ -67,3 +67,4 @@ flutter:
   uses-material-design: true
   assets:
     - promptd-logo.svg
+    - assets/google_fonts/
