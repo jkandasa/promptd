@@ -11,8 +11,7 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  NODE_VERSION: "24"
-  YARN_VERSION: "4.9.2"
+  FLUTTER_VERSION: "3.41.9"
   BINARY_NAME: promptd
 
 jobs:
@@ -65,18 +64,15 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
 
-      - name: Enable Corepack Yarn
-        run: |
-          corepack enable
-          corepack prepare yarn@${{ env.YARN_VERSION }} --activate
-
-      - name: Build embedded UI
-        run: make ui
+      - name: Build embedded UI (Flutter, airgap)
+        run: make ui WITH_CONSOLE=1 AIRGAP=1
 
       - name: Upload UI artifact
         uses: actions/upload-artifact@v4
