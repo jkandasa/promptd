@@ -13,6 +13,8 @@ env:
   GO_VERSION: "1.26"
   FLUTTER_VERSION: "3.41.9"
   BINARY_NAME: promptd
+  java_version: 21 # major versions: 8, 11, 16, 17, 21
+  java_distribution: 'zulu' # See 'Supported distributions' for available options
 
 jobs:
   prepare:
@@ -64,18 +66,34 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: cache flutter
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-flutter
+        with:
+          path: |
+            /opt/hostedtoolcache/flutter
+            /home/runner/.pub-cache
+            /home/runner/.gradle
+          key: ${{ runner.os }}-flutter-${{ hashFiles('**/pubspec.lock') }}
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "21"
+          distribution: ${{ env.java_distribution }}
+          java-version: ${{ env.java_version }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+
+
+      - run: flutter --version
 
       - name: Set up signing
         env:
