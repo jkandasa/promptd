@@ -3,7 +3,7 @@
 ## What Was Implemented
 
 - Cookie-based browser login with JWT session cookies.
-- Bearer-token authentication for service tokens tied to users.
+- Bearer-token authentication for API keys tied to users.
 - Role-based authorization with union semantics across multiple roles.
 - Tenant-aware `super_admin` bypass.
 - Wildcard allow rules for models, tools, and system prompts.
@@ -21,12 +21,22 @@
   - returns current authenticated user, tenant, roles, and permissions
 - `POST /api/auth/logout`
   - clears the session cookie
-- Service callers authenticate with `Authorization: Bearer <token>`
+- Service callers authenticate with `Authorization: Bearer <token>` using an API key
 
 ## Hash Support
 
-- Password and service token verification currently use bcrypt hashes.
+- Password and API key verification use bcrypt hashes.
+- Plaintext API key tokens are shown exactly once at generation time and never stored.
 - Config examples in `config_template.yaml` were updated accordingly.
+
+## API Key Management
+
+Users can generate and manage API keys through the UI (avatar menu → API Keys) or programmatically:
+
+- Admins manage keys for any user via `POST /api/admin/users/{id}/api-keys`.
+- Any authenticated user manages their own keys via `POST /api/user/api-keys`.
+- Keys support an optional description, expiry date/time, and can be disabled without deletion.
+- The `api_keys` field in `auth.users` supersedes the legacy `service_tokens` field; existing configs using `service_tokens` are migrated transparently on load.
 
 ## Wildcard Policy Rules
 
@@ -115,6 +125,5 @@ This keeps the code ready for future DB-backed conversation/schedule storage whi
 ## Follow-Ups Worth Doing
 
 - Add automated tests for auth, wildcard matching, and scoped storage.
-- Add a helper script or doc for generating bcrypt hashes for users and service tokens.
-- Add optional admin UI for managing users/roles later.
+- Add a helper script or doc for generating bcrypt hashes for users.
 - Consider `Secure` cookies behind TLS-aware deployment settings.

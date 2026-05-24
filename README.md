@@ -109,7 +109,7 @@ promptd serve --help
 Notes:
 
 - Running `promptd` with no subcommand is equivalent to `promptd serve`.
-- `hash-password` is used for both user passwords and service tokens because both use bcrypt.
+- `hash-password` is used for user passwords because both use bcrypt. API keys are generated through the UI or the admin API.
 - Use `promptd --help` and `promptd <command> --help` for command help.
 
 ## Development
@@ -159,6 +159,13 @@ Build with the Flutter console UI embedded:
 ```bash
 make build-with-console
 # equivalent: make build WITH_CONSOLE=1
+```
+
+Build with the Flutter console UI for air-gapped deployments (bundles CanvasKit and Montserrat fonts locally instead of loading from CDN):
+
+```bash
+make build-with-console-airgap
+# equivalent: make build WITH_CONSOLE=1 AIRGAP=1
 ```
 
 ### Docker
@@ -247,7 +254,7 @@ Important first steps:
 - `server.address`: listen address
 - `server.tls.*`: HTTPS settings
 - `auth.jwt`: JWT cookie settings
-- `auth.users`: users, password hashes, service tokens
+- `auth.users`: users, password hashes, api_keys
 - `roles`: permission and allow-list policy
 - `llm.providers`: provider definitions
 - `llm.providers[].file_uploads`: optional provider-side file upload handling
@@ -358,11 +365,23 @@ Requires `admin` permission or `super_admin: true`.
 - `GET /api/admin/auth` — full auth config (users + roles)
 - `POST /api/admin/users` — create or update a user
 - `DELETE /api/admin/users/{id}` — delete a user
+- `POST /api/admin/users/{id}/api-keys` — generate an API key for a user
+- `DELETE /api/admin/users/{id}/api-keys/{keyId}` — delete a user's API key
+- `PATCH /api/admin/users/{id}/api-keys/{keyId}` — update a user's API key (description, disabled, expires_at)
 - `POST /api/admin/roles` — create or update a role
 - `DELETE /api/admin/roles/{name}` — delete a role
 - `GET /api/admin/system-prompts` — list managed system prompts
 - `POST /api/admin/system-prompts` — create or update a system prompt
 - `DELETE /api/admin/system-prompts/{name}` — delete a system prompt
+
+### User (self-service)
+
+Available to any authenticated user for managing their own API keys.
+
+- `GET /api/user/api-keys` — list the current user's API keys
+- `POST /api/user/api-keys` — generate a new API key for the current user
+- `DELETE /api/user/api-keys/{keyId}` — delete one of the current user's API keys
+- `PATCH /api/user/api-keys/{keyId}` — update one of the current user's API keys (description, disabled, expires_at)
 
 ### Execute (service-account LLM calls)
 
@@ -415,7 +434,7 @@ A stateless single-shot LLM endpoint for programmatic use. See `docs/execute-api
 
 ## Security Notes
 
-- Do not commit live API keys, service tokens, or JWT secrets.
+- Do not commit live API keys or JWT secrets.
 - Rotate any credentials that were ever stored in a tracked config file.
 - Prefer environment-specific configs outside version control for production.
 - Self-signed certificates are useful for local/private deployments, not for public trusted browsers.
