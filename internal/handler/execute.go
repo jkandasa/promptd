@@ -23,9 +23,9 @@ type executeRequest struct {
 	SystemPrompt     string `json:"system_prompt"`      // inline system prompt text
 	SystemPromptName string `json:"system_prompt_name"` // named prompt from config (RBAC enforced)
 
-	Provider string    `json:"provider"`
-	Model    string    `json:"model"`
-	Message  string    `json:"message"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Message  string `json:"message"`
 	// Tools controls which tools are exposed to the model.
 	// Absent or null → no tools.
 	// ["*"] → all tools the service account's roles allow.
@@ -44,6 +44,7 @@ type executeResponse struct {
 	LLMCalls       int                 `json:"llm_calls"`
 	ToolCalls      int                 `json:"tool_calls"`
 	UsedParams     *storage.UsedParams `json:"used_params,omitempty"`
+	TokenUsage     *storage.TokenUsage `json:"token_usage,omitempty"`
 	Trace          []storage.LLMRound  `json:"trace,omitempty"`
 }
 
@@ -112,7 +113,7 @@ func (h *Handler) Execute(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	session.Add(llm.RoleUser, req.Message, nil)
 
-	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, err := h.runExecute(
+	reply, finalMsg, model, providerUsed, llmCalls, toolCalls, trace, usedParams, tokenUsage, err := h.runExecute(
 		r.Context(), principal, sessionID, session,
 		req.Model, req.Provider, req.Params,
 		systemPromptText, allowedTools,
@@ -158,6 +159,7 @@ func (h *Handler) Execute(w http.ResponseWriter, r *http.Request) {
 		LLMCalls:       llmCalls,
 		ToolCalls:      toolCalls,
 		UsedParams:     usedParams,
+		TokenUsage:     tokenUsage,
 		Trace:          trace,
 	})
 }
@@ -173,24 +175,25 @@ func (h *Handler) runExecute(
 	reqParams LLMParams,
 	systemPromptText string,
 	allowedTools []llm.Tool,
-) (string, llm.Message, string, string, int, int, []storage.LLMRound, *storage.UsedParams, error) {
+) (string, llm.Message, string, string, int, int, []storage.LLMRound, *storage.UsedParams, *storage.TokenUsage, error) {
 	llmCalls := 0
 	toolCalls := 0
 	var trace []storage.LLMRound
+	var totalUsage storage.TokenUsage
 
 	scope := requestScopeFromPrincipal(principal)
 
 	if preferredModel != "" && provider != "" && !principal.Policy.AllowModel(provider, preferredModel) {
-		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q is not allowed", preferredModel)
+		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, nil, fmt.Errorf("model %q is not allowed", preferredModel)
 	}
 
 	model, _, providerUsed, llmClient := h.resolveAllowedModel(principal, preferredModel, provider)
 	providerEntry := h.providers.ProviderEntry(providerUsed)
 	if model == "" || providerUsed == "" || llmClient == nil || providerEntry == nil {
-		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, fmt.Errorf("no allowed model available")
+		return "", llm.Message{}, preferredModel, provider, llmCalls, toolCalls, trace, nil, nil, fmt.Errorf("no allowed model available")
 	}
 	if !principal.Policy.AllowModel(providerUsed, model) {
-		return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
+		return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, nil, nil, fmt.Errorf("model %q from provider %q is not allowed", model, providerUsed)
 	}
 
 	modelParams := h.providers.GetModelParamsForProvider(model, provider)
@@ -219,14 +222,14 @@ func (h *Handler) runExecute(
 
 	for {
 		if llmCalls >= maxToolIterations {
-			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams,
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage),
 				fmt.Errorf("exceeded max tool call iterations (%d)", maxToolIterations)
 		}
 		llmCalls++
 
 		requestBody, requestMsgs, err := h.buildChatCompletionRequest(ctx, scope, session, providerEntry, model, modelParams, allowedTools, systemPromptText)
 		if err != nil {
-			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("build chat request: %w", err)
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage), fmt.Errorf("build chat request: %w", err)
 		}
 
 		var availableTools []storage.TraceToolDef
@@ -244,11 +247,13 @@ func (h *Handler) runExecute(
 		resp, err := createRawChatCompletion(ctx, providerEntry, requestBody)
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 		if err != nil {
-			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM error: %w", err)
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage), fmt.Errorf("LLM error: %w", err)
 		}
 		if len(resp.Choices) == 0 {
-			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, fmt.Errorf("LLM returned no choices")
+			return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage), fmt.Errorf("LLM returned no choices")
 		}
+
+		accumulateUsage(&totalUsage, resp.Usage)
 
 		choice := resp.Choices[0]
 		choice.Message = sanitizeAssistantMessage(choice.Message)
@@ -264,7 +269,7 @@ func (h *Handler) runExecute(
 
 		if choice.FinishReason != llm.FinishReasonToolCalls {
 			if choice.Message.Content == "" {
-				return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams,
+				return "", llm.Message{}, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage),
 					fmt.Errorf("model returned an empty response (finish_reason: %q)", choice.FinishReason)
 			}
 			if h.TraceEnabled {
@@ -276,7 +281,7 @@ func (h *Handler) runExecute(
 					Usage:          traceUsage(resp.Usage),
 				})
 			}
-			return choice.Message.Content, choice.Message, model, providerUsed, llmCalls, toolCalls, trace, usedParams, nil
+			return choice.Message.Content, choice.Message, model, providerUsed, llmCalls, toolCalls, trace, usedParams, usagePtr(&totalUsage), nil
 		}
 
 		session.AddMessage(choice.Message)
@@ -319,6 +324,32 @@ func (h *Handler) runExecute(
 			trace = append(trace, round)
 		}
 	}
+}
+
+// accumulateUsage adds the counts from one LLM response into a running total.
+// TotalTokens is recomputed as prompt+completion when the provider omits it.
+func accumulateUsage(dst *storage.TokenUsage, u llm.Usage) {
+	dst.PromptTokens += u.PromptTokens
+	dst.CompletionTokens += u.CompletionTokens
+	total := u.TotalTokens
+	if total == 0 {
+		total = u.PromptTokens + u.CompletionTokens
+	}
+	dst.TotalTokens += total
+	if u.CompletionTokensDetails != nil {
+		dst.ReasoningTokens += u.CompletionTokensDetails.ReasoningTokens
+	}
+	if u.PromptTokensDetails != nil {
+		dst.CachedTokens += u.PromptTokensDetails.CachedTokens
+	}
+}
+
+// usagePtr returns a pointer to u if any token counts are non-zero, else nil.
+func usagePtr(u *storage.TokenUsage) *storage.TokenUsage {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	return u
 }
 
 // resolveExecuteTools intersects the caller-requested tool patterns with the
