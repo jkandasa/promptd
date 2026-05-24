@@ -57,6 +57,65 @@ jobs:
           path: ${{ steps.changelog.outputs.file }}
           if-no-files-found: error
 
+  build-android:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up signing
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          keystore_path="$PWD/console/android/keystore.jks"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$keystore_path"
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
+            "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" "$keystore_path" \
+            > console/android/key.properties
+
+      - name: Build APK and AAB
+        run: |
+          cd console
+          flutter build apk --release \
+            --build-name="0.0.0-devel" \
+            --build-number="${{ github.run_number }}"
+          flutter build appbundle --release \
+            --build-name="0.0.0-devel" \
+            --build-number="${{ github.run_number }}"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/android
+          cp console/build/app/outputs/flutter-apk/app-release.apk \
+            dist/android/promptd_devel_android.apk
+          cp console/build/app/outputs/bundle/release/app-release.aab \
+            dist/android/promptd_devel_android.aab
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-android
+          path: dist/android/
+          if-no-files-found: error
+
   build-ui:
     needs: prepare
     runs-on: ubuntu-latest
@@ -174,6 +233,7 @@ jobs:
     needs:
       - prepare
       - build-binaries
+      - build-android
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
@@ -200,6 +260,8 @@ jobs:
           files: |
             dist/release/*.tar.gz
             dist/release/*.zip
+            dist/*.apk
+            dist/*.aab
 
   docker:
     needs: build-binaries
