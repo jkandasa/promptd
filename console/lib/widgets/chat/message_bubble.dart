@@ -216,6 +216,11 @@ class _MessageBubbleState extends State<MessageBubble> {
           RepaintBoundary(
             child: MarkdownBody(
               data: displayContent,
+              // Render each block as a SelectableText so multi-line and
+              // multi-paragraph selection works reliably. flutter_markdown lays
+              // inline spans out in a Wrap, which an ancestor SelectionArea
+              // cannot extend a selection across line-by-line.
+              selectable: true,
               onTapLink: (text, href, title) => _openLink(href),
               styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                 a: theme.textTheme.bodyLarge?.copyWith(
@@ -249,7 +254,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           )
         else
           RepaintBoundary(
-            child: Text(
+            child: SelectableText(
               displayContent,
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: foreground,

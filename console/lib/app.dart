@@ -72,58 +72,52 @@ class _PromptdConsoleAppState extends State<PromptdConsoleApp> {
 
   @override
   Widget build(BuildContext context) {
+    final Widget content = AnimatedBuilder(
+      animation: _state,
+      builder: (context, _) {
+        if (_state.initializing) {
+          return const _LoadingScreen();
+        }
+        if (!_state.isAuthenticated) {
+          return LoginPage(state: _state);
+        }
+        if (_state.me!.mustChangePassword) {
+          return ChangePasswordPage(state: _state);
+        }
+        return AppShell(
+          section: _state.section,
+          themeMode: _themeMode,
+          me: _state.me!,
+          serverUrl: _state.serverUrl,
+          loading: _state.loadingData,
+          onSectionSelected: _state.selectSection,
+          onRefresh: _state.refreshAppData,
+          onLogout: _state.logout,
+          onThemeModeChanged: _setThemeMode,
+          onApiKeys: () => _showUserApiKeysDialog(context),
+          child: switch (_state.section) {
+            ConsoleSection.chat => ChatConsolePage(state: _state),
+            ConsoleSection.scheduler => SchedulerConsolePage(state: _state),
+            ConsoleSection.tools => ToolsConsolePage(state: _state),
+            ConsoleSection.admin => AdminConsolePage(state: _state),
+          },
+        );
+      },
+    );
+
     return MaterialApp(
       title: 'Promptd Console',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      home: AnimatedBuilder(
-        animation: _state,
-        builder: (context, _) {
-          if (_state.initializing) {
-            return const _WebSelectable(child: _LoadingScreen());
-          }
-          if (!_state.isAuthenticated) {
-            return _WebSelectable(child: LoginPage(state: _state));
-          }
-          if (_state.me!.mustChangePassword) {
-            return _WebSelectable(child: ChangePasswordPage(state: _state));
-          }
-          return _WebSelectable(
-            child: AppShell(
-              section: _state.section,
-              themeMode: _themeMode,
-              me: _state.me!,
-              serverUrl: _state.serverUrl,
-              loading: _state.loadingData,
-              onSectionSelected: _state.selectSection,
-              onRefresh: _state.refreshAppData,
-              onLogout: _state.logout,
-              onThemeModeChanged: _setThemeMode,
-              onApiKeys: () => _showUserApiKeysDialog(context),
-              child: switch (_state.section) {
-                ConsoleSection.chat => ChatConsolePage(state: _state),
-                ConsoleSection.scheduler => SchedulerConsolePage(state: _state),
-                ConsoleSection.tools => ToolsConsolePage(state: _state),
-                ConsoleSection.admin => AdminConsolePage(state: _state),
-              },
-            ),
-          );
-        },
-      ),
+      // Enable text selection on web. SelectionArea must sit *inside* `home`
+      // (below the MaterialApp's Navigator/Overlay) — a SelectableRegion
+      // requires an Overlay ancestor, so placing it in `builder` (above the
+      // Navigator) throws "No Overlay widget found". Chat messages render their
+      // own selectable widgets; this covers the remaining plain text.
+      home: kIsWeb ? SelectionArea(child: content) : content,
     );
-  }
-}
-
-class _WebSelectable extends StatelessWidget {
-  const _WebSelectable({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return kIsWeb ? SelectionArea(child: child) : child;
   }
 }
 
