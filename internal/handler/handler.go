@@ -55,6 +55,11 @@ type ProviderFileUploadConfig struct {
 	Purpose            string
 	MaxInlineTextBytes int
 	PreferInlineImages bool
+	// ImageURLMode is "base64", "url", or "off" (see config.image_url_mode).
+	ImageURLMode string
+	// ShareTTL is the lifetime of a shared image URL for this provider.
+	// Zero means fall back to the global PublicAssetConfig.DefaultTTL.
+	ShareTTL time.Duration
 }
 
 type ModelSelector struct {
@@ -382,7 +387,16 @@ type Handler struct {
 	staticFS            fs.FS
 	uiConfig            UIConfig
 	uploadRoot          string
+	publicAssets        PublicAssetConfig
 	TraceEnabled        bool
+}
+
+// PublicAssetConfig holds the settings used to mint and serve temporary public
+// image URLs for providers that fetch images by URL.
+type PublicAssetConfig struct {
+	BaseURL    string
+	DefaultTTL time.Duration
+	Store      *PublicAssetStore
 }
 
 type UIConfig struct {
@@ -419,7 +433,7 @@ type SystemPromptInfo struct {
 }
 
 // New creates a Handler.
-func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, compactConfig CompactConversationConfig, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, authService *auth.Service, systemPromptStore *SystemPromptStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadRoot string, traceEnabled bool) *Handler {
+func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSystemPrompt string, compactConfig CompactConversationConfig, registry *tools.Registry, store *chat.SessionStore, storageStore storage.Store, authService *auth.Service, systemPromptStore *SystemPromptStore, log *zap.Logger, staticFS fs.FS, uiConfig UIConfig, uploadRoot string, publicAssets PublicAssetConfig, traceEnabled bool) *Handler {
 	if err := os.MkdirAll(uploadRoot, 0755); err != nil {
 		log.Fatal("failed to create upload directory", zap.String("dir", uploadRoot), zap.Error(err))
 	}
@@ -437,6 +451,7 @@ func New(providers *ProviderRegistry, systemPrompts map[string]string, defaultSy
 		staticFS:            staticFS,
 		uiConfig:            uiConfig,
 		uploadRoot:          uploadRoot,
+		publicAssets:        publicAssets,
 		TraceEnabled:        traceEnabled,
 	}
 }
@@ -810,6 +825,15 @@ func (h *Handler) prepareAttachment(ctx context.Context, scope storage.Scope, en
 	if isTextAttachment(file, data) && len(data) <= maxInline {
 		return preparedAttachment{File: file, Mode: "inline_text", Text: string(data)}, nil
 	}
+	// Images are sent to the provider as image_url content parts (the standard
+	// OpenAI/OpenRouter multimodal vision format) unless the provider opts out
+	// with image_url_mode: off. This takes precedence over the provider file
+	// upload path, which is meant for documents (PDFs etc.), not images.
+	if isImageAttachment(file, data) {
+		if att, ok := h.prepareImageURLAttachment(scope, entry, file, data); ok {
+			return att, nil
+		}
+	}
 	if entry != nil && entry.FileUploads.Enabled {
 		updatedFile, fileID, uploadErr := h.uploadFileToProvider(ctx, entry, file, data)
 		if uploadErr == nil {
@@ -847,6 +871,104 @@ func (h *Handler) prepareAttachment(ctx context.Context, scope storage.Scope, en
 		note = fmt.Sprintf("binary attachment metadata only (%d bytes)", file.Size)
 	}
 	return preparedAttachment{File: file, Mode: "metadata_only", Note: note}, nil
+}
+
+// prepareImageURLAttachment turns an image into an image_url content part using
+// the provider's configured mode. It returns ok=false when the provider opted
+// out (image_url_mode: off) so the caller can fall back to the legacy path.
+func (h *Handler) prepareImageURLAttachment(scope storage.Scope, entry *ProviderEntry, file storage.UploadedFile, data []byte) (preparedAttachment, bool) {
+	mode := "base64"
+	if entry != nil && entry.FileUploads.ImageURLMode != "" {
+		mode = entry.FileUploads.ImageURLMode
+	}
+	switch mode {
+	case "off", "none":
+		return preparedAttachment{}, false
+	case "url":
+		if shareURL, ok := h.publicImageURL(scope, entry, file, data); ok {
+			return preparedAttachment{File: file, Mode: "inline_image", ImageURL: shareURL}, true
+		}
+		// Public URL could not be built (no public_base_url configured, etc.);
+		// fall back to inline base64 so the image is still sent to the model.
+		return preparedAttachment{File: file, Mode: "inline_image", ImageURL: imageDataURL(file, data), Note: "public url unavailable; sent as inline base64"}, true
+	default: // base64
+		return preparedAttachment{File: file, Mode: "inline_image", ImageURL: imageDataURL(file, data)}, true
+	}
+}
+
+// imageDataURL encodes image bytes as a base64 data URL suitable for an
+// image_url content part.
+func imageDataURL(file storage.UploadedFile, data []byte) string {
+	contentType := detectFileContentType(file, data)
+	if !strings.HasPrefix(contentType, "image/") {
+		contentType = imageContentTypeFromName(file.Filename)
+	}
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// publicImageURL mints (or reuses) a temporary, unauthenticated public URL the
+// provider can fetch the image from. The random token in the path acts as the
+// access token; the URL expires after the resolved TTL while the stored upload
+// is left untouched.
+func (h *Handler) publicImageURL(scope storage.Scope, entry *ProviderEntry, file storage.UploadedFile, data []byte) (string, bool) {
+	if h.publicAssets.Store == nil || strings.TrimSpace(h.publicAssets.BaseURL) == "" {
+		return "", false
+	}
+	ttl := h.publicAssets.DefaultTTL
+	if entry != nil && entry.FileUploads.ShareTTL > 0 {
+		ttl = entry.FileUploads.ShareTTL
+	}
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	contentType := detectFileContentType(file, data)
+	token := h.publicAssets.Store.Share(scope.TenantID, scope.UserID, file.ID, file.Filename, contentType, ttl)
+	name := strings.TrimSpace(file.Filename)
+	if name == "" {
+		name = "image"
+	}
+	return fmt.Sprintf("%s/api/assets/public/%s/%s", h.publicAssets.BaseURL, token, url.PathEscape(name)), true
+}
+
+// ServePublicAsset serves a shared file over an unauthenticated URL. Access is
+// gated solely by the unguessable random token; the path filename is cosmetic.
+func (h *Handler) ServePublicAsset(w http.ResponseWriter, r *http.Request) {
+	if h.publicAssets.Store == nil {
+		http.NotFound(w, r)
+		return
+	}
+	token := r.PathValue("token")
+	rec, ok := h.publicAssets.Store.Get(token)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	scope := storage.Scope{TenantID: rec.TenantID, UserID: rec.UserID}
+	filePath := h.uploadPath(scope, rec.FileID)
+	uploadDir := h.uploadDir(scope)
+	if !isUnderDir(filePath, uploadDir) {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	if rec.ContentType != "" {
+		w.Header().Set("Content-Type", rec.ContentType)
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, rec.Filename, info.ModTime(), f)
 }
 
 func contentPartsToText(content string, attachments []preparedAttachment) string {

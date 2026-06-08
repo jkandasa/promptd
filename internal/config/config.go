@@ -80,6 +80,14 @@ type LLMProviderConfig struct {
 		Purpose            string `yaml:"purpose"`
 		MaxInlineTextBytes int    `yaml:"max_inline_text_bytes"`
 		PreferInlineImages bool   `yaml:"prefer_inline_images"`
+		// ImageURLMode controls how images are sent to the provider as
+		// image_url content parts: "base64" (default, inline data URL),
+		// "url" (a temporary public promptd URL the provider fetches), or
+		// "off" (skip image_url; use legacy file-upload/metadata handling).
+		ImageURLMode string `yaml:"image_url_mode"`
+		// PublicAssetTTL overrides server.public_asset_ttl for this provider.
+		// It only bounds the shared image URL, never the stored upload.
+		PublicAssetTTL Duration `yaml:"public_asset_ttl"`
 	} `yaml:"file_uploads"`
 	ImageGeneration ImageGenerationConfig `yaml:"image_generation"`
 }
@@ -135,7 +143,17 @@ type Config struct {
 	} `yaml:"data"`
 	Server struct {
 		Address string `yaml:"address"`
-		TLS     struct {
+		// PublicBaseURL is the externally reachable base URL of this promptd
+		// server (scheme + host [+ port]), e.g. "https://promptd.example.com".
+		// It may be a domain, a public IPv4, or a bracketed IPv6 address.
+		// Used to build temporary shareable image URLs for providers that
+		// fetch images by URL (file_uploads.image_url_mode: url).
+		PublicBaseURL string `yaml:"public_base_url"`
+		// PublicAssetTTL is the global default lifetime of a shared image URL.
+		// It applies only to the shared URL token, never to the stored upload.
+		// Providers may override it via file_uploads.public_asset_ttl.
+		PublicAssetTTL Duration `yaml:"public_asset_ttl"`
+		TLS            struct {
 			Enabled      bool     `yaml:"enabled"`
 			CertFile     string   `yaml:"cert_file"`
 			KeyFile      string   `yaml:"key_file"`
@@ -236,6 +254,10 @@ func Load(path string) (*Config, error) {
 	if cfg.Server.Address == "" {
 		cfg.Server.Address = "localhost:8080"
 	}
+	cfg.Server.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.Server.PublicBaseURL), "/")
+	if cfg.Server.PublicAssetTTL <= 0 {
+		cfg.Server.PublicAssetTTL = Duration(15 * time.Minute)
+	}
 	globalSelectionMethod := cfg.LLM.SelectionMethod
 	if globalSelectionMethod == "" {
 		globalSelectionMethod = "round_robin"
@@ -277,6 +299,14 @@ func Load(path string) (*Config, error) {
 		}
 		if p.FileUploads.MaxInlineTextBytes <= 0 {
 			p.FileUploads.MaxInlineTextBytes = 128 * 1024
+		}
+		switch strings.ToLower(strings.TrimSpace(p.FileUploads.ImageURLMode)) {
+		case "url":
+			p.FileUploads.ImageURLMode = "url"
+		case "off", "none":
+			p.FileUploads.ImageURLMode = "off"
+		default:
+			p.FileUploads.ImageURLMode = "base64"
 		}
 		if p.ImageGeneration.Enabled == nil {
 			enabled := p.ImageGeneration.Strategy != "" || p.ImageGeneration.ResponseField != ""

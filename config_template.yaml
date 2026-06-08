@@ -13,6 +13,19 @@ data:
 server:
   # Server address, default: localhost:8080
   address: "localhost:8080"
+
+  # Externally reachable base URL of this server (scheme + host [+ port]).
+  # Accepts a domain, public IPv4, or bracketed IPv6 address, e.g.
+  #   https://promptd.example.com   |   http://203.0.113.10:8080   |   http://[2001:db8::1]:8080
+  # Required only when a provider sets file_uploads.image_url_mode: url, so the
+  # provider can fetch images directly from this server over a temporary URL.
+  # public_base_url: "https://promptd.example.com"
+
+  # Global default lifetime for shared image URLs (image_url_mode: url).
+  # Bounds the shared URL token only — never the stored upload. Default: 15m.
+  # Per-provider override: file_uploads.public_asset_ttl.
+  # public_asset_ttl: 15m
+
   tls:
     # Enable HTTPS.
     enabled: false
@@ -198,12 +211,24 @@ llm:
       #   purpose: "user_data"
       #   max_inline_text_bytes: 131072
       #   prefer_inline_images: false
+      #   # How images are sent to the provider as image_url content parts:
+      #   #   base64 (default) - inline data URL (no public_base_url needed)
+      #   #   url              - temporary public promptd URL the provider fetches
+      #   #                      (requires server.public_base_url)
+      #   #   off              - skip image_url; use legacy upload/metadata handling
+      #   image_url_mode: base64
+      #   # Per-provider override of server.public_asset_ttl (shared URL lifetime
+      #   # only). Default: inherits the global value.
+      #   public_asset_ttl: 30m
 
       # Notes:
       # - OpenAI can usually enable file uploads directly.
       # - OpenRouter/custom OpenAI-compatible endpoints should stay disabled
       #   until you have validated the provider/model behavior.
       # - prefer_inline_images only affects fallback when provider upload is not used.
+      # - image_url_mode: url shares the image over /api/assets/public/<token>/<name>;
+      #   the random token is the access credential and expires after the TTL,
+      #   while the stored upload under <data>/uploads is never removed by expiry.
 
       # Optional image-generation routing for this provider.
       # strategy:

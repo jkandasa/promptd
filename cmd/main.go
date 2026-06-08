@@ -152,7 +152,18 @@ func runServe(configPath string) error {
 		AfterMessages: uiConfig.CompactConversation.AfterMessages,
 		AfterTokens:   uiConfig.CompactConversation.AfterTokens,
 	}
-	h := handler.New(providerRegistry, systemPrompts, defaultSystemPrompt, compactConfig, registry, store, st, authService, systemPromptStore, logger, ui.FS(), uiConfig, uploadRoot, traceEnabled)
+	publicAssetStore, err := handler.NewPublicAssetStore(filepath.Join(dataDir, "public-assets.yaml"), logger)
+	if err != nil {
+		logger.Fatal("failed to initialize public asset store", zap.Error(err))
+	}
+	publicAssetTTL := cfg.Server.PublicAssetTTL.AsDuration()
+	go publicAssetStore.StartCleanup(ctx, min(publicAssetTTL, time.Hour))
+	publicAssets := handler.PublicAssetConfig{
+		BaseURL:    cfg.Server.PublicBaseURL,
+		DefaultTTL: publicAssetTTL,
+		Store:      publicAssetStore,
+	}
+	h := handler.New(providerRegistry, systemPrompts, defaultSystemPrompt, compactConfig, registry, store, st, authService, systemPromptStore, logger, ui.FS(), uiConfig, uploadRoot, publicAssets, traceEnabled)
 	appcore.StartAutoDiscover(ctx, h, cfg, logger)
 	mcpHandler := handler.NewMCPToolsHandler(mcpManager, logger)
 

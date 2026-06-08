@@ -132,6 +132,8 @@ func BuildProviderRegistry(cfg *appconfig.Config, logger *zap.Logger) *handler.P
 				Purpose:            p.FileUploads.Purpose,
 				MaxInlineTextBytes: p.FileUploads.MaxInlineTextBytes,
 				PreferInlineImages: p.FileUploads.PreferInlineImages,
+				ImageURLMode:       p.FileUploads.ImageURLMode,
+				ShareTTL:           p.FileUploads.PublicAssetTTL.AsDuration(),
 			},
 			ImageGeneration: handler.ProviderImageGenerationConfig{
 				Enabled:       p.ImageGeneration.Enabled != nil && *p.ImageGeneration.Enabled,
@@ -191,6 +193,9 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, h *handler.Ha
 	mux.Handle("GET /api/models", requireAuth(http.HandlerFunc(h.ListModels)))
 	mux.Handle("GET /api/tools", requireAuth(http.HandlerFunc(h.ListTools)))
 	mux.Handle("POST /api/upload", requireAuth(http.HandlerFunc(h.Upload)))
+	// Public, unauthenticated: providers fetch shared images by their random
+	// token. Access is gated solely by the unguessable token in the path.
+	mux.HandleFunc("GET /api/assets/public/{token}/{filename}", h.ServePublicAsset)
 	mux.Handle("GET /api/files/", requireAuth(http.HandlerFunc(h.ServeFile)))
 	mux.Handle("DELETE /api/files/", requireAuth(http.HandlerFunc(h.DeleteFile)))
 	mux.Handle("GET /api/conversations", requireAuth(http.HandlerFunc(h.ListConversations)))
