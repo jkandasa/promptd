@@ -384,11 +384,7 @@ class _ChatWorkspaceState extends State<ChatWorkspace> {
     await widget.state.api.deleteFile(file.id).catchError((_) {});
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => showSnackBar(context, message);
 
   Future<void> _send(String text) async {
     final files = _uploadedFiles;

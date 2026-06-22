@@ -199,16 +199,11 @@ class _ListHeaderState extends State<_ListHeader> {
                 ),
               ),
               if (widget.onRefresh != null)
-                IconButton(
+                AppRefreshButton(
+                  loading: _refreshing,
+                  onRefresh: _refresh,
                   tooltip: 'Refresh schedules',
-                  onPressed: _refreshing ? null : _refresh,
-                  mouseCursor: SystemMouseCursors.click,
-                  icon: _refreshing
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh_rounded),
+                  filled: false,
                 ),
               if (widget.canWrite) ...[
                 SizedBox(width: compact ? 2 : 6),
@@ -271,25 +266,10 @@ class _ScheduleToolbar extends StatelessWidget {
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 640;
         final useWrappedChips = constraints.maxWidth < 520;
-        final search = TextField(
+        final search = AppSearchField(
           controller: controller,
-          onChanged: onSearchChanged,
-          decoration: InputDecoration(
-            isDense: true,
-            prefixIcon: const Icon(Icons.search_rounded),
-            hintText: 'Search schedules...',
-            suffixIcon: controller.text.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: () {
-                      controller.clear();
-                      onSearchChanged('');
-                    },
-                    mouseCursor: SystemMouseCursors.click,
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-          ),
+          hint: 'Search schedules…',
+          onChanged: () => onSearchChanged(controller.text),
         );
         final filterControl = useWrappedChips
             ? Wrap(
@@ -520,11 +500,11 @@ class _ScheduleTile extends StatelessWidget {
                 runSpacing: 4,
                 children: [
                   _MetaText('Schedule', _scheduleLine(schedule)),
-                  _MetaText('Last', _relativeTime(schedule.lastRunAt) ?? '-'),
+                  _MetaText('Last', appRelativeTime(schedule.lastRunAt) ?? '-'),
                   _MetaText(
                     'Next',
                     schedule.enabled
-                        ? _relativeTime(schedule.nextRunAt) ?? '-'
+                        ? appRelativeTime(schedule.nextRunAt) ?? '-'
                         : '-',
                   ),
                 ],
@@ -601,10 +581,10 @@ class _ScheduleTile extends StatelessWidget {
           runSpacing: 5,
           children: [
             _MetaText('Schedule', _scheduleLine(schedule)),
-            _MetaText('Last', _relativeTime(schedule.lastRunAt) ?? '-'),
+            _MetaText('Last', appRelativeTime(schedule.lastRunAt) ?? '-'),
             _MetaText(
               'Next',
-              schedule.enabled ? _relativeTime(schedule.nextRunAt) ?? '-' : '-',
+              schedule.enabled ? appRelativeTime(schedule.nextRunAt) ?? '-' : '-',
             ),
           ],
         ),
@@ -621,19 +601,6 @@ class _ScheduleTile extends StatelessWidget {
     return schedule.cronExpr ?? 'cron';
   }
 
-  String? _relativeTime(DateTime? date) {
-    if (date == null) return null;
-    final diffMs = date.difference(DateTime.now()).inMilliseconds;
-    final future = diffMs > 0;
-    final seconds = (diffMs.abs() / 1000).floor();
-    if (seconds < 60) return future ? 'in ${seconds}s' : '${seconds}s ago';
-    final minutes = (seconds / 60).floor();
-    if (minutes < 60) return future ? 'in ${minutes}m' : '${minutes}m ago';
-    final hours = (minutes / 60).floor();
-    if (hours < 24) return future ? 'in ${hours}h' : '${hours}h ago';
-    final days = (hours / 24).floor();
-    return future ? 'in ${days}d' : '${days}d ago';
-  }
 }
 
 class _MetaText extends StatelessWidget {

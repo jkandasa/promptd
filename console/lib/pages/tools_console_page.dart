@@ -386,32 +386,13 @@ class _ToolsPanelControls extends StatelessWidget {
         );
       },
     );
-    final search = TextField(
+    final search = AppSearchField(
       controller: searchController,
+      hint: 'Search tools',
       style: theme.textTheme.bodyLarge,
-      spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
-      decoration: InputDecoration(
-        hintText: 'Search tools',
-        prefixIcon: const Icon(Icons.search_rounded),
-        suffixIcon: searchController.text.isEmpty
-            ? null
-            : IconButton(
-                tooltip: 'Clear search',
-                onPressed: () {
-                  searchController.clear();
-                  onSearchChanged();
-                },
-                icon: const Icon(Icons.close_rounded),
-              ),
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      ),
-      onChanged: (_) => onSearchChanged(),
+      onChanged: onSearchChanged,
     );
-    final refresh = _CatalogRefreshButton(
-      loading: loading,
-      onRefresh: onRefresh,
-    );
+    final refresh = AppRefreshButton(loading: loading, onRefresh: onRefresh);
 
     if (stacked) {
       return Column(
@@ -440,42 +421,6 @@ class _ToolsPanelControls extends StatelessWidget {
         SizedBox(width: 280, child: search),
         refresh,
       ],
-    );
-  }
-}
-
-class _CatalogRefreshButton extends StatelessWidget {
-  const _CatalogRefreshButton({required this.loading, required this.onRefresh});
-
-  final bool loading;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: 'Refresh tools',
-      child: SizedBox.square(
-        dimension: 40,
-        child: IconButton.outlined(
-          onPressed: loading ? null : onRefresh,
-          iconSize: 18,
-          padding: EdgeInsets.zero,
-          style: IconButton.styleFrom(
-            side: BorderSide(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-          icon: loading
-              ? const SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.refresh_rounded),
-        ),
-      ),
     );
   }
 }

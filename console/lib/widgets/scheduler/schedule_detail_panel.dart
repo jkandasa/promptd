@@ -96,29 +96,12 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
                           _executionsFuture = _loadExecutions();
                         }),
                         onDelete: (execution) async {
-                          final confirmed = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Delete execution?'),
-                              content: Text(
-                                'Delete execution from ${_date(execution.triggeredAt)}?',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(false),
-                                  child: const Text('Cancel'),
-                                ),
-                                AppButton(
-                                  label: 'Delete',
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(true),
-                                  destructive: true,
-                                ),
-                              ],
-                            ),
+                          final confirmed = await showConfirmDialog(
+                            context,
+                            title: 'Delete execution?',
+                            message: 'Delete execution from ${_date(execution.triggeredAt)}?',
                           );
-                          if (confirmed != true || !mounted) return;
+                          if (!confirmed || !mounted) return;
                           await widget.state.deleteScheduleExecution(
                             scheduleId: current.id,
                             executionId: execution.id,
@@ -135,25 +118,12 @@ class _ScheduleDetailPanelState extends State<ScheduleDetailPanel> {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete schedule?'),
-        content: Text('Delete "${widget.schedule?.name ?? 'schedule'}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          AppButton(
-            label: 'Delete',
-            onPressed: () => Navigator.of(context).pop(true),
-            destructive: true,
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete schedule?',
+      message: 'Delete "${widget.schedule?.name ?? 'schedule'}"?',
     );
-    if (confirmed == true) await widget.onDelete?.call();
+    if (confirmed) await widget.onDelete?.call();
   }
 
   String _date(DateTime? date) =>
@@ -563,7 +533,7 @@ class _ExecutionCardState extends State<_ExecutionCard> {
                       child: Tooltip(
                         message: _date(widget.execution.triggeredAt),
                         child: Text(
-                          _relativeTime(widget.execution.triggeredAt),
+                          appRelativeTime(widget.execution.triggeredAt) ?? '',
                           style: theme.textTheme.bodySmall,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -747,20 +717,6 @@ class _ExecutionCardState extends State<_ExecutionCard> {
 
   String _date(DateTime? date) =>
       date == null ? '-' : date.toLocal().toString();
-
-  String _relativeTime(DateTime? date) {
-    if (date == null) return '';
-    final diffMs = date.difference(DateTime.now()).inMilliseconds;
-    final future = diffMs > 0;
-    final seconds = (diffMs.abs() / 1000).floor();
-    if (seconds < 60) return future ? 'in ${seconds}s' : '${seconds}s ago';
-    final minutes = (seconds / 60).floor();
-    if (minutes < 60) return future ? 'in ${minutes}m' : '${minutes}m ago';
-    final hours = (minutes / 60).floor();
-    if (hours < 24) return future ? 'in ${hours}h' : '${hours}h ago';
-    final days = (hours / 24).floor();
-    return future ? 'in ${days}d' : '${days}d ago';
-  }
 
   String _duration(int ms) =>
       ms < 1000 ? '${ms}ms' : '${(ms / 1000).toStringAsFixed(1)}s';

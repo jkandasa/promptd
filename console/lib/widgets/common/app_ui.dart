@@ -343,6 +343,96 @@ class AppFilterChip extends StatelessWidget {
   }
 }
 
+/// Search text field with a leading search icon and a trailing clear button.
+class AppSearchField extends StatelessWidget {
+  const AppSearchField({
+    super.key,
+    required this.controller,
+    this.hint = 'Search…',
+    this.onChanged,
+    this.style,
+    this.autofocus = false,
+  });
+
+  final TextEditingController controller;
+  final String hint;
+  final VoidCallback? onChanged;
+  final TextStyle? style;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        return TextField(
+          controller: controller,
+          autofocus: autofocus,
+          style: style,
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: hint,
+            prefixIcon: const Icon(Icons.search_rounded),
+            suffixIcon: value.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear',
+                    iconSize: 18,
+                    mouseCursor: SystemMouseCursors.click,
+                    onPressed: () {
+                      controller.clear();
+                      onChanged?.call();
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+          ),
+          onChanged: (_) => onChanged?.call(),
+        );
+      },
+    );
+  }
+}
+
+/// Icon button that shows a loading spinner while [loading] is true.
+class AppRefreshButton extends StatelessWidget {
+  const AppRefreshButton({
+    super.key,
+    required this.loading,
+    required this.onRefresh,
+    this.tooltip = 'Refresh',
+    this.filled = true,
+  });
+
+  final bool loading;
+  final VoidCallback? onRefresh;
+  final String tooltip;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = loading
+        ? const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.refresh_rounded);
+    if (filled) {
+      return IconButton.filledTonal(
+        tooltip: tooltip,
+        mouseCursor: SystemMouseCursors.click,
+        onPressed: loading ? null : onRefresh,
+        icon: icon,
+      );
+    }
+    return IconButton(
+      tooltip: tooltip,
+      mouseCursor: SystemMouseCursors.click,
+      onPressed: loading ? null : onRefresh,
+      icon: icon,
+    );
+  }
+}
+
 class AppNotice extends StatelessWidget {
   const AppNotice({
     super.key,
@@ -449,6 +539,67 @@ class AppButton extends StatelessWidget {
   }
 }
 
+// Shows a SnackBar with a plain text message.
+void showSnackBar(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+// Returns a human-readable relative time string for [date], supporting both
+// past ("3h ago") and future ("in 5m") values. Returns null for null input.
+String? appRelativeTime(DateTime? date) {
+  if (date == null) return null;
+  final now = DateTime.now();
+  final diffMs = date.difference(now).inMilliseconds;
+  final isFuture = diffMs > 0;
+  final seconds = (diffMs.abs() / 1000).floor();
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return isFuture ? 'in ${seconds}s' : '${seconds}s ago';
+  final minutes = (seconds / 60).floor();
+  if (minutes < 60) return isFuture ? 'in ${minutes}m' : '${minutes}m ago';
+  final hours = (minutes / 60).floor();
+  if (hours < 24) return isFuture ? 'in ${hours}h' : '${hours}h ago';
+  final days = (hours / 24).floor();
+  if (isFuture) return 'in ${days}d';
+  if (days == 1) return 'yesterday';
+  if (days < 7) return '${days}d ago';
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final local = date.toLocal();
+  return '${months[local.month - 1]} ${local.day}';
+}
+
+Future<bool> showConfirmDialog(
+  BuildContext context, {
+  required String title,
+  String? message,
+  String confirmLabel = 'Delete',
+  bool destructive = true,
+  IconData? confirmIcon,
+}) async {
+  return await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: message != null ? Text(message) : null,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            AppButton(
+              label: confirmLabel,
+              icon: confirmIcon,
+              onPressed: () => Navigator.of(context).pop(true),
+              destructive: destructive,
+            ),
+          ],
+        ),
+      ) ??
+      false;
+}
+
 Color appToneColor(ThemeData theme, AppTone tone) {
   return switch (tone) {
     AppTone.primary => theme.colorScheme.primary,
@@ -469,4 +620,10 @@ Color appToneFill(ThemeData theme, AppTone tone) {
   final color = appToneColor(theme, tone);
   final amount = theme.brightness == Brightness.dark ? 0.18 : 0.09;
   return Color.lerp(theme.colorScheme.surface, color, amount)!;
+}
+
+Color appToneBorderColor(ThemeData theme, AppTone tone) {
+  return appToneColor(theme, tone).withValues(
+    alpha: theme.brightness == Brightness.dark ? 0.34 : 0.22,
+  );
 }

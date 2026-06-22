@@ -558,13 +558,10 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
               height: 520,
               child: Column(
                 children: [
-                  TextField(
+                  AppSearchField(
                     controller: searchController,
-                    decoration: const InputDecoration(
-                      hintText: 'Search tools',
-                      prefixIcon: Icon(Icons.search_rounded),
-                    ),
-                    onChanged: (_) => setDialogState(() {}),
+                    hint: 'Search tools',
+                    onChanged: () => setDialogState(() {}),
                   ),
                   CheckboxListTile(
                     value: selected.isEmpty,
@@ -700,9 +697,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_type == 'once' && _runAt == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Run at is required')));
+      showSnackBar(context, 'Run at is required');
       return;
     }
 
@@ -741,9 +736,7 @@ class _ScheduleFormPanelState extends State<ScheduleFormPanel> {
       widget.onSaved(saved);
     } catch (err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Save failed: $err')));
+      showSnackBar(context, 'Save failed: $err');
     } finally {
       if (mounted) setState(() => _saving = false);
     }

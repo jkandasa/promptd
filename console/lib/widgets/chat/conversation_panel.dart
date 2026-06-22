@@ -51,30 +51,15 @@ class _ConversationPanelState extends State<ConversationPanel> {
     if (_selected.isEmpty) return;
     final ids = _selected.toList();
     final count = ids.length;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete $count conversation${count == 1 ? '' : 's'}?'),
-        content: Text(
-          count == 1
-              ? 'This conversation will be permanently deleted.'
-              : '$count conversations will be permanently deleted.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          AppButton(
-            label: 'Delete',
-            icon: Icons.delete_outline_rounded,
-            onPressed: () => Navigator.of(ctx).pop(true),
-            destructive: true,
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete $count conversation${count == 1 ? '' : 's'}?',
+      message: count == 1
+          ? 'This conversation will be permanently deleted.'
+          : '$count conversations will be permanently deleted.',
+      confirmIcon: Icons.delete_outline_rounded,
     );
-    if (confirmed == true && mounted) {
+    if (confirmed && mounted) {
       await widget.state.deleteConversations(ids);
       _exitSelectMode();
     }
@@ -399,30 +384,13 @@ class _ConversationTileState extends State<_ConversationTile> {
     BuildContext context,
     ConversationMeta conversation,
   ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete conversation?'),
-        content: Text(
-          '"${conversation.title}" will be permanently deleted.',
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          AppButton(
-            label: 'Delete',
-            icon: Icons.delete_outline_rounded,
-            onPressed: () => Navigator.of(ctx).pop(true),
-            destructive: true,
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Delete conversation?',
+      message: '"${conversation.title}" will be permanently deleted.',
+      confirmIcon: Icons.delete_outline_rounded,
     );
-    if (confirmed == true && mounted) {
+    if (confirmed && mounted) {
       widget.state.deleteConversation(conversation.id);
     }
   }
@@ -437,30 +405,7 @@ class _ConversationTileState extends State<_ConversationTile> {
 
   String _conversationTime(ConversationMeta conversation) {
     final date = conversation.updatedAt ?? conversation.createdAt;
-    if (date == null) return '';
-    return _relativeTime(date);
-  }
-
-  String _relativeTime(DateTime date) {
-    final diff = DateTime.now().difference(date);
-    final mins = diff.inMinutes;
-    if (mins < 1) return 'just now';
-    if (mins < 60) return '${mins}m ago';
-    final hours = diff.inHours;
-    if (hours < 24) return '${hours}h ago';
-    final days = diff.inDays;
-    if (days == 1) return 'yesterday';
-    if (days < 7) return '${days}d ago';
-    final local = date.toLocal();
-    return '${_monthName(local.month)} ${local.day}';
-  }
-
-  String _monthName(int month) {
-    const names = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    return names[month - 1];
+    return appRelativeTime(date) ?? '';
   }
 }
 
